@@ -39,7 +39,13 @@ export default [
       'dist-electron/**',
       'node_modules/**',
       '*.min.js',
-      'coverage/**'
+      'coverage/**',
+      // Electron 主进程文件，terser 会自动移除 console
+      'electron/main.ts',
+      'electron/preload.ts',
+      'electron/utils/ffmpeg.ts',
+      // 构建脚本
+      'scripts/**'
     ]
   },
 
