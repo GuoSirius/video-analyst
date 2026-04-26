@@ -1,5 +1,6 @@
 appId: com.videoanalyst.app
 productName: Video Analyst
+publish: never
 directories:
   output: dist
 files:
