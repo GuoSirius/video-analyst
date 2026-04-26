@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.0.2](https://gitee.com/siriussupreme/video-analyst/compare/v1.0.1...v1.0.2) (2026-04-26)
+
+
+### Bug Fixes
+
+* 添加 CI 环境系统依赖安装 ([f78aff7](https://gitee.com/siriussupreme/video-analyst/commit/f78aff756163f2775466fc376cc5b0240fe76c3c))
+* 添加 electron-builder 依赖 ([4836d58](https://gitee.com/siriussupreme/video-analyst/commit/4836d58c2157a28d0719ab8ec0001f2faa39b239))
+* 修复 macOS postinstall 脚本执行顺序 ([5fe06a0](https://gitee.com/siriussupreme/video-analyst/commit/5fe06a0ac7f2a4d7f6de069e134280fa20c8b1e7))
+* 修正 Ubuntu 依赖包名称 ([e88d50d](https://gitee.com/siriussupreme/video-analyst/commit/e88d50d14036164a7829494e83d86fdc6fdbe274))
+* add package-lock.json ([03a43cf](https://gitee.com/siriussupreme/video-analyst/commit/03a43cf83bba25102017abb9d42f87a7223ba52d))
+
 ### [1.0.1](https://gitee.com/siriussupreme/video-analyst/compare/v0.1.1...v1.0.1) (2026-04-26)
 
 
