@@ -70,7 +70,7 @@ jobs:
 
       - name: Build installers
         run: |
-          echo "=== Building with ${{ matrix.build_cmd }} ===" && npx electron-builder ${{ matrix.build_cmd }} --publish never
+          echo "=== Building with ${{ matrix.build_cmd }} ===" && npx electron-builder --publish never ${{ matrix.build_cmd }}
 
       - name: Debug - Artifacts (Unix)
         if: matrix.os != 'windows-latest'
