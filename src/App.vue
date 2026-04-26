@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import { useI18n } from 'vue-i18n'
 import { useAppStore } from './store/app'
 import AppHeader from './components/AppHeader.vue'
 import AppSidebar from './components/AppSidebar.vue'
 
-const { t } = useI18n()
 const appStore = useAppStore()
 
 // 初始化主题

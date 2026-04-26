@@ -40,13 +40,14 @@ export const useTaskStore = defineStore('tasks', () => {
       await window.electronAPI.updateTask(taskId, updates)
     }
     const index = tasks.value.findIndex(t => t.id === taskId)
-    if (index !== -1) {
-      tasks.value[index] = { ...tasks.value[index], ...updates, updatedAt: Date.now() }
+    const existingTask = tasks.value[index]
+    if (index !== -1 && existingTask) {
+      tasks.value[index] = { ...existingTask, ...updates, updatedAt: Date.now() }
     }
   }
 
   // 处理任务
-  async function processTask(taskId: string, method: TranscriptionMethod, llmConfigId: string) {
+  async function processTask(taskId: string, method: TranscriptionMethod, llmConfigId: string): Promise<string | undefined> {
     if (window.electronAPI) {
       try {
         await updateTask(taskId, { status: 'processing', progress: 0 })
@@ -58,6 +59,7 @@ export const useTaskStore = defineStore('tasks', () => {
         throw error
       }
     }
+    return undefined
   }
 
   // 按状态筛选任务

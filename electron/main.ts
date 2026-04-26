@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, Tray, Menu, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createTray, setTrayWindow } from './tray'
@@ -114,7 +114,7 @@ function setupWindowIPC(): void {
   })
 
   // 创建新窗口
-  ipcMain.handle('window-create', (event, options?: Electron.BrowserWindowConstructorOptions) => {
+  ipcMain.handle('window-create', (_event, options?: Electron.BrowserWindowConstructorOptions) => {
     const win = new BrowserWindow({
       width: 1000,
       height: 700,
@@ -180,14 +180,14 @@ function setupWindowIPC(): void {
     return getTasks()
   })
 
-  ipcMain.handle('task:addTask', (event, task) => {
+  ipcMain.handle('task:addTask', (_event, task) => {
     const tasks = getTasks()
     tasks.push(task)
     saveTasks(tasks)
     return tasks
   })
 
-  ipcMain.handle('task:updateTask', (event, taskId, updates) => {
+  ipcMain.handle('task:updateTask', (_event, taskId, updates) => {
     updateTask(taskId, updates)
     return true
   })
@@ -216,12 +216,12 @@ function setupWindowIPC(): void {
     return getLLMConfigs()
   })
 
-  ipcMain.handle('llm:saveConfig', (event, config) => {
+  ipcMain.handle('llm:saveConfig', (_event, config) => {
     saveLLMConfig(config)
     return true
   })
 
-  ipcMain.handle('llm:deleteConfig', (event, id) => {
+  ipcMain.handle('llm:deleteConfig', (_event, id) => {
     deleteLLMConfig(id)
     return true
   })

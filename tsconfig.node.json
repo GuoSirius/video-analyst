@@ -14,12 +14,15 @@
     "moduleDetection": "force",
     "noEmit": true,
 
-    /* Linting */
+    /* Linting - 严格模式 */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true
   },
-  "include": ["vite.config.ts", "electron.vite.config.ts", "electron/**/*.ts"]
+  "include": ["vite.config.ts", "electron.vite.config.ts", "electron/**/*.ts"],
+  "exclude": ["node_modules", "dist", "dist-electron"]
 }

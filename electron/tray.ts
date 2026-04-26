@@ -1,5 +1,5 @@
-import { Tray, Menu, BrowserWindow, app, shell, nativeImage } from 'electron'
-import { join, resolve } from 'path'
+import { Tray, Menu, BrowserWindow, app, nativeImage } from 'electron'
+import { resolve } from 'path'
 import { existsSync } from 'fs'
 
 let tray: Tray | null = null
@@ -20,7 +20,7 @@ export function createTray() {
     iconImage = nativeImage.createFromPath(trayIconPath)
   } else if (existsSync(fallbackIconPath)) {
     // 回退到主图标并调整尺寸
-    iconImage = nativeImage.createFromPath(fallbackIconPath).resize(16, 16)
+    iconImage = nativeImage.createFromPath(fallbackIconPath).resize({ width: 16, height: 16 })
   } else {
     // 创建一个简单的占位图标（16x16 透明 PNG）
     const placeholderBase64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABhSURBVDhP7c6xDQAgDASwQ6T9O2sBHvZCNkI2QjZCNkI2QjZCNkI2QjZCNkI2QjZCNkI2QjZCNkI2QjZCNkI2QjbCP0a9gB6G8BQMp6eHQAAAABJRU5ErkJggg=='

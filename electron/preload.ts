@@ -35,19 +35,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 任务管理
   getTasks: () => ipcRenderer.invoke('task:getTasks'),
-  addTask: (task) => ipcRenderer.invoke('task:addTask', task),
-  updateTask: (taskId, updates) => ipcRenderer.invoke('task:updateTask', taskId, updates),
-  processTask: (taskId, method, llmConfigId) => ipcRenderer.invoke('task:process', taskId, method, llmConfigId),
+  addTask: (task: any) => ipcRenderer.invoke('task:addTask', task),
+  updateTask: (taskId: string, updates: any) => ipcRenderer.invoke('task:updateTask', taskId, updates),
+  processTask: (taskId: string, method: string, llmConfigId: string) => ipcRenderer.invoke('task:process', taskId, method, llmConfigId),
 
   // LLM 配置管理
   getLLMConfigs: () => ipcRenderer.invoke('llm:getConfigs'),
-  saveLLMConfig: (config) => ipcRenderer.invoke('llm:saveConfig', config),
-  deleteLLMConfig: (id) => ipcRenderer.invoke('llm:deleteConfig', id),
+  saveLLMConfig: (config: any) => ipcRenderer.invoke('llm:saveConfig', config),
+  deleteLLMConfig: (id: string) => ipcRenderer.invoke('llm:deleteConfig', id),
 
   // 任务进度监听
   onTaskProgress: (callback: (taskId: string, progress: number) => void) => {
-    ipcRenderer.on('task:progress', (event, taskId, progress) => callback(taskId, progress))
-    return () => ipcRenderer.removeListener('task:progress', callback)
+    const handler = (_event: Electron.IpcRendererEvent, taskId: string, progress: number) => callback(taskId, progress)
+    ipcRenderer.on('task:progress', handler)
+    return () => ipcRenderer.removeListener('task:progress', handler)
   }
 })
 

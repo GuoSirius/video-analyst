@@ -8,71 +8,45 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "vue-tsc -b && electron-vite build",
+    "build": "NODE_ENV=production npm run lint && vue-tsc -b && electron-vite build",
     "preview": "electron-vite preview",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix",
+    "lint:check": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts",
+    "typecheck": "vue-tsc -b",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
-    "@element-plus/icons-vue": "^2.3.1",
-    "electron-store": "^8.1.0",
-    "element-plus": "^2.9.0",
+    "@element-plus/icons-vue": "^2.3.2",
+    "electron-store": "^8.2.0",
+    "element-plus": "^2.13.7",
     "fluent-ffmpeg": "^2.1.3",
-    "pinia": "^2.3.0",
-    "vue": "^3.5.32",
-    "vue-i18n": "^10.0.0",
-    "vue-router": "^4.5.0"
+    "pinia": "^2.3.1",
+    "vue": "^3.5.33",
+    "vue-i18n": "^11.4.0",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@unocss/reset": "^66.0.0",
-    "@vitejs/plugin-vue": "^5.2.0",
-    "electron": "^36.0.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.19.17",
+    "@unocss/reset": "^66.6.8",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "electron": "^36.9.5",
     "electron-vite": "^3.1.0",
+    "eslint": "^10.2.1",
+    "eslint-plugin-vue": "^10.9.0",
+    "globals": "^17.5.0",
     "sharp": "^0.34.5",
-    "typescript": "~5.7.0",
-    "unocss": "^66.0.0",
-    "unplugin-auto-import": "^19.1.0",
-    "unplugin-vue-components": "^28.4.0",
-    "vite": "^6.2.0",
-    "vue-tsc": "^2.2.0"
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.59.0",
+    "unocss": "^66.6.8",
+    "unplugin-auto-import": "^19.3.0",
+    "unplugin-vue-components": "^28.8.0",
+    "vite": "^6.4.2",
+    "vue-eslint-parser": "^10.4.0",
+    "vue-tsc": "^2.2.12"
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "build": {
-    "appId": "com.videoanalyst.app",
-    "productName": "Video Analyst",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "dist-electron/**/*",
-      "dist/**/*",
-      "resources/**/*"
-    ],
-    "mac": {
-      "icon": "resources/icons/icon.png",
-      "category": "public.app-category.productivity"
-    },
-    "win": {
-      "icon": "resources/icons/icon.png",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64",
-            "ia32"
-          ]
-        }
-      ]
-    },
-    "linux": {
-      "icon": "resources/icons/icon.png",
-      "target": [
-        "AppImage",
-        "deb"
-      ]
-    }
   }
 }

@@ -45,7 +45,7 @@ export async function extractAudio(
       outputPath
     ]
 
-    const proc = execFile(ffmpegPath, args, (error, stdout, stderr) => {
+    const proc = execFile(ffmpegPath, args, (error, _stdout, _stderr) => {
       if (error) {
         reject(error)
       } else {
@@ -94,7 +94,7 @@ export async function transcribeWithLocalWhisper(
       outputPath
     ]
 
-    const proc = execFile(ffmpegPath, args, (error, stdout, stderr) => {
+    const proc = execFile(ffmpegPath, args, (error, _stdout, _stderr) => {
       if (error) {
         reject(error)
       } else {

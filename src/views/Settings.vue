@@ -4,8 +4,12 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '../store/app'
 import type { LLMConfig, LLMProvider } from '../types'
 
-const { t, locale } = useI18n()
+const { locale } = useI18n()
 const appStore = useAppStore()
+
+// 折叠状态
+const generalCollapsed = ref(true)
+const llmCollapsed = ref(false)
 
 // 语言选项
 const languageOptions = [
@@ -104,7 +108,8 @@ function onThemeChange(value: string) {
 
 // 获取提供商信息
 function getProviderInfo(provider: string) {
-  return providerOptions.find(p => p.value === provider) || providerOptions[3]
+  const info = providerOptions.find(p => p.value === provider)
+  return info ?? providerOptions[3]!
 }
 
 // 挂载时加载配置
@@ -125,117 +130,127 @@ onMounted(() => {
 
     <!-- 设置卡片 -->
     <div class="settings-grid">
-      <!-- 常规设置 -->
-      <div class="settings-card">
-        <div class="card-header">
+      <!-- 常规设置 - 可折叠 -->
+      <div class="settings-card" :class="{ collapsed: generalCollapsed }">
+        <button class="card-header" @click="generalCollapsed = !generalCollapsed">
           <div class="card-icon">
             <i class="fa-solid fa-sliders"></i>
           </div>
           <h3 class="card-title">常规设置</h3>
-        </div>
+          <i class="fa-solid fa-chevron-down collapse-icon" :class="{ rotated: !generalCollapsed }"></i>
+        </button>
 
-        <div class="settings-list">
-          <!-- 语言设置 -->
-          <div class="setting-item">
-            <div class="setting-info">
-              <div class="setting-icon lang">
-                <i class="fa-solid fa-language"></i>
+        <Transition name="collapse">
+          <div class="card-content" v-show="!generalCollapsed">
+            <div class="settings-list">
+              <!-- 语言设置 -->
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-icon lang">
+                    <i class="fa-solid fa-language"></i>
+                  </div>
+                  <div class="setting-text">
+                    <span class="setting-label">语言</span>
+                    <span class="setting-desc">选择界面显示语言</span>
+                  </div>
+                </div>
+                <div class="setting-control">
+                  <div class="lang-selector">
+                    <button 
+                      v-for="option in languageOptions" 
+                      :key="option.value"
+                      class="lang-option"
+                      :class="{ active: locale === option.value }"
+                      @click="onLanguageChange(option.value)"
+                    >
+                      <i :class="option.icon"></i>
+                      <span class="lang-text">{{ option.label }}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div class="setting-text">
-                <span class="setting-label">语言</span>
-                <span class="setting-desc">选择界面显示语言</span>
-              </div>
-            </div>
-            <div class="setting-control">
-              <div class="lang-selector">
-                <button 
-                  v-for="option in languageOptions" 
-                  :key="option.value"
-                  class="lang-option"
-                  :class="{ active: locale === option.value }"
-                  @click="onLanguageChange(option.value)"
-                >
-                  <i :class="option.icon"></i>
-                  <span class="lang-text">{{ option.label }}</span>
-                </button>
+
+              <!-- 主题设置 -->
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-icon theme">
+                    <i class="fa-solid fa-moon" v-if="appStore.isDark"></i>
+                    <i class="fa-solid fa-sun" v-else></i>
+                  </div>
+                  <div class="setting-text">
+                    <span class="setting-label">主题</span>
+                    <span class="setting-desc">选择应用外观主题</span>
+                  </div>
+                </div>
+                <div class="setting-control">
+                  <div class="theme-selector">
+                    <button 
+                      v-for="option in themeOptions" 
+                      :key="option.value"
+                      class="theme-option"
+                      :class="{ active: appStore.theme === option.value }"
+                      @click="onThemeChange(option.value)"
+                    >
+                      <i :class="option.icon"></i>
+                      <span>{{ option.label }}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-
-          <!-- 主题设置 -->
-          <div class="setting-item">
-            <div class="setting-info">
-              <div class="setting-icon theme">
-                <i class="fa-solid fa-moon" v-if="appStore.isDark"></i>
-                <i class="fa-solid fa-sun" v-else></i>
-              </div>
-              <div class="setting-text">
-                <span class="setting-label">主题</span>
-                <span class="setting-desc">选择应用外观主题</span>
-              </div>
-            </div>
-            <div class="setting-control">
-              <div class="theme-selector">
-                <button 
-                  v-for="option in themeOptions" 
-                  :key="option.value"
-                  class="theme-option"
-                  :class="{ active: appStore.theme === option.value }"
-                  @click="onThemeChange(option.value)"
-                >
-                  <i :class="option.icon"></i>
-                  <span>{{ option.label }}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        </Transition>
       </div>
 
-      <!-- 大模型配置 -->
-      <div class="settings-card llm-card">
-        <div class="card-header">
+      <!-- 大模型配置 - 可折叠 -->
+      <div class="settings-card llm-card" :class="{ collapsed: llmCollapsed }">
+        <button class="card-header" @click="llmCollapsed = !llmCollapsed">
           <div class="card-icon">
             <i class="fa-solid fa-robot"></i>
           </div>
           <h3 class="card-title">大模型配置</h3>
-          <button class="add-btn" @click="openAddDialog">
+          <button class="add-btn" @click.stop="openAddDialog" v-if="!llmCollapsed">
             <i class="fa-solid fa-plus"></i>
             添加配置
           </button>
-        </div>
+          <i class="fa-solid fa-chevron-down collapse-icon" :class="{ rotated: !llmCollapsed }"></i>
+        </button>
 
-        <div class="llm-list" v-if="llmConfigs.length > 0">
-          <div v-for="config in llmConfigs" :key="config.id" class="llm-item">
-            <div class="llm-logo">
-              <i :class="getProviderInfo(config.provider).logo"></i>
+        <Transition name="collapse">
+          <div class="card-content" v-show="!llmCollapsed">
+            <div class="llm-list" v-if="llmConfigs.length > 0">
+              <div v-for="config in llmConfigs" :key="config.id" class="llm-item">
+                <div class="llm-logo">
+                  <i :class="getProviderInfo(config.provider).logo"></i>
+                </div>
+                <div class="llm-info">
+                  <span class="llm-name">{{ config.name }}</span>
+                  <span class="llm-provider">{{ getProviderInfo(config.provider).label }}</span>
+                </div>
+                <div class="llm-model">
+                  <span class="model-label">模型</span>
+                  <span class="model-value">{{ config.modelName || '未设置' }}</span>
+                </div>
+                <div class="llm-actions">
+                  <button class="action-btn edit-btn" @click="openEditDialog(config)">
+                    <i class="fa-solid fa-pen"></i>
+                  </button>
+                  <button class="action-btn delete-btn" @click="deleteConfig(config.id)">
+                    <i class="fa-solid fa-trash"></i>
+                  </button>
+                </div>
+              </div>
             </div>
-            <div class="llm-info">
-              <span class="llm-name">{{ config.name }}</span>
-              <span class="llm-provider">{{ getProviderInfo(config.provider).label }}</span>
-            </div>
-            <div class="llm-model">
-              <span class="model-label">模型</span>
-              <span class="model-value">{{ config.modelName || '未设置' }}</span>
-            </div>
-            <div class="llm-actions">
-              <button class="action-btn edit-btn" @click="openEditDialog(config)">
-                <i class="fa-solid fa-pen"></i>
-              </button>
-              <button class="action-btn delete-btn" @click="deleteConfig(config.id)">
-                <i class="fa-solid fa-trash"></i>
-              </button>
+
+            <div class="empty-state" v-else>
+              <div class="empty-icon">
+                <i class="fa-regular fa-circle-check"></i>
+              </div>
+              <p class="empty-text">暂无大模型配置</p>
+              <p class="empty-hint">点击上方按钮添加新的配置</p>
             </div>
           </div>
-        </div>
-
-        <div class="empty-state" v-else>
-          <div class="empty-icon">
-            <i class="fa-regular fa-circle-check"></i>
-          </div>
-          <p class="empty-text">暂无大模型配置</p>
-          <p class="empty-hint">点击上方按钮添加新的配置</p>
-        </div>
+        </Transition>
       </div>
     </div>
 
@@ -307,7 +322,7 @@ onMounted(() => {
 
 /* 页面标题区 */
 .page-header {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 
 .header-content {
@@ -333,23 +348,41 @@ onMounted(() => {
 .settings-grid {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 
 .settings-card {
   background: var(--el-bg-color);
   border-radius: 16px;
-  padding: 24px;
   border: 1px solid var(--el-border-color);
+  overflow: hidden;
+  transition: all 0.3s ease;
 }
 
+.settings-card.collapsed {
+  background: var(--el-fill-color-light);
+}
+
+/* 卡片头部 */
 .card-header {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--el-border-color-light);
+  padding: 14px 20px;
+  background: var(--el-fill-color-light);
+  border: none;
+  width: 100%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-bottom: 1px solid var(--el-border-color);
+}
+
+.card-header:hover {
+  background: var(--el-fill-color);
+}
+
+.settings-card:not(.collapsed) .card-header {
+  background: linear-gradient(135deg, var(--el-fill-color-lighter), var(--el-fill-color-light));
 }
 
 .card-icon {
@@ -361,6 +394,7 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   color: #3b82f6;
+  flex-shrink: 0;
 }
 
 .card-icon svg {
@@ -374,6 +408,7 @@ onMounted(() => {
   color: var(--el-text-color-primary);
   margin: 0;
   flex: 1;
+  text-align: left;
 }
 
 .add-btn {
@@ -384,22 +419,47 @@ onMounted(() => {
   border-radius: 8px;
   background: linear-gradient(135deg, #3b82f6, #0ea5e9);
   border: none;
+  color: white;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.add-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.collapse-icon {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  transition: transform 0.3s ease;
+  flex-shrink: 0;
+}
+
+.collapse-icon.rotated {
+  transform: rotate(180deg);
+}
+
+/* 卡片内容 */
+.card-content {
+  padding: 16px 20px;
 }
 
 /* 设置列表 */
 .settings-list {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
 }
 
 .setting-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px;
+  padding: 12px;
   background: var(--el-fill-color-light);
-  border-radius: 12px;
+  border-radius: 10px;
   transition: all 0.2s ease;
 }
 
@@ -410,16 +470,17 @@ onMounted(() => {
 .setting-info {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .setting-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 14px;
 }
 
 .setting-icon.lang {
@@ -457,14 +518,14 @@ onMounted(() => {
 .lang-option {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
+  gap: 4px;
+  padding: 6px 12px;
   border: 1px solid var(--el-border-color);
   background: var(--el-bg-color);
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s ease;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 
@@ -492,14 +553,14 @@ onMounted(() => {
 .theme-option {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
+  gap: 4px;
+  padding: 6px 12px;
   border: 1px solid var(--el-border-color);
   background: var(--el-bg-color);
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s ease;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 
@@ -518,16 +579,16 @@ onMounted(() => {
 .llm-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .llm-item {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 16px;
+  gap: 12px;
+  padding: 12px;
   background: var(--el-fill-color-light);
-  border-radius: 12px;
+  border-radius: 10px;
   transition: all 0.2s ease;
 }
 
@@ -536,14 +597,14 @@ onMounted(() => {
 }
 
 .llm-logo {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(14, 165, 233, 0.15));
-  border-radius: 12px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  font-size: 16px;
 }
 
 .llm-info {
@@ -695,12 +756,33 @@ onMounted(() => {
   border: none;
 }
 
+/* 折叠动画 */
+.collapse-enter-active,
+.collapse-leave-active {
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.collapse-enter-from,
+.collapse-leave-to {
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.collapse-enter-to,
+.collapse-leave-from {
+  opacity: 1;
+  max-height: 500px;
+}
+
 /* 响应式 */
 @media (max-width: 768px) {
   .setting-item {
     flex-direction: column;
     align-items: flex-start;
-    gap: 16px;
+    gap: 12px;
   }
   
   .setting-control {

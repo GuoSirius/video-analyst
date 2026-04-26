@@ -48,7 +48,10 @@ function toggleTheme() {
   const themes: string[] = ['dark', 'light', 'auto']
   const currentIndex = themes.indexOf(appStore.theme)
   const nextIndex = (currentIndex + 1) % themes.length
-  appStore.setTheme(themes[nextIndex])
+  const nextTheme = themes[nextIndex]
+  if (nextTheme) {
+    appStore.setTheme(nextTheme)
+  }
 }
 
 // 语言切换
@@ -56,8 +59,11 @@ function toggleLanguage() {
   const langs: string[] = ['zh-CN', 'en-US']
   const currentIndex = langs.indexOf(locale.value)
   const nextIndex = (currentIndex + 1) % langs.length
-  locale.value = langs[nextIndex]
-  appStore.setLanguage(langs[nextIndex])
+  const nextLang = langs[nextIndex]
+  if (nextLang) {
+    locale.value = nextLang
+    appStore.setLanguage(nextLang)
+  }
 }
 
 // 监听最大化状态变化
