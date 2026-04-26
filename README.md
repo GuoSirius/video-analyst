@@ -13,6 +13,17 @@
 - **Linux**: `.AppImage` 通用包
 - **macOS**: `.dmg` 磁盘镜像
 
+## 开发环境要求
+
+- Node.js 24+
+- npm 10+
+
+使用 nvm 安装：
+```bash
+nvm install 24
+nvm use 24
+```
+
 ## 开发
 
 ```bash
