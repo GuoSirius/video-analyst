@@ -6,7 +6,7 @@
 
 每个版本的安装包会在 GitHub Releases 页面发布：
 
-**[Releases 页面](https://github.com/<username>/video-analyst/releases/latest)**
+**[Releases 页面](https://github.com/GuoSirius/video-analyst/releases/latest)**
 
 支持平台：
 - **Windows**: `.exe` 安装包 (NSIS)
