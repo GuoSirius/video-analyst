@@ -1,12 +1,15 @@
 appId: com.videoanalyst.app
 productName: Video Analyst
-publish: never
 directories:
   output: dist
 files:
   - dist-electron/**/*
   - dist/**/*
   - resources/**/*
+publish:
+  provider: github
+  owner: GuoSirius
+  repo: video-analyst
 mac:
   icon: resources/icons/icon.png
   category: public.app-category.productivity

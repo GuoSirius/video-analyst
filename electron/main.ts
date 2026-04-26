@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createTray, setTrayWindow } from './tray'
 import { getTasks, saveTasks, updateTask, processFile, getLLMConfigs, saveLLMConfig, deleteLLMConfig } from './utils/transcription'
+import { initAutoUpdater, setupUpdateIPC, checkForUpdates } from './updater'
 
 // 窗口管理：存储所有窗口实例
 const windows = new Map<number, BrowserWindow>()
@@ -234,9 +235,14 @@ app.whenReady().then(() => {
   })
 
   setupWindowIPC()
+  setupUpdateIPC()
   const mainWindow = createWindow()
   setTrayWindow(mainWindow)
   createTray()
+
+  // 初始化自动更新
+  initAutoUpdater()
+  checkForUpdates()
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) {
