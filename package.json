@@ -20,6 +20,7 @@
     "push": "git push && git push --tags",
     "push:all": "git push origin main --tags && git push github main --tags",
     "release:push": "npm run release && npm run push:all",
+    "release:interactive": "node scripts/interactive-release.js",
     "postinstall": "electron-builder install-app-deps"
   },
   "standard-version": {
