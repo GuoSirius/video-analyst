@@ -71,10 +71,18 @@ jobs:
         run: |
           echo "=== Building ${{ matrix.target }} ===" && npx electron-builder --${{ matrix.target }} 2>&1 || true
 
-      - name: Debug - Artifacts
+      - name: Debug - Artifacts (Unix)
+        if: matrix.os != 'windows-latest'
         run: |
           echo "=== dist folder ===" && ls -la dist/ 2>&1 || echo "dist not found"
           echo "=== dist-electron folder ===" && ls -la dist-electron/ 2>&1 || echo "dist-electron not found"
+
+      - name: Debug - Artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          echo "=== dist folder ===" && Get-ChildItem dist/ -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+          echo "=== dist-electron folder ===" && Get-ChildItem dist-electron/ -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -100,6 +108,7 @@ jobs:
           path: artifacts
 
       - name: List artifacts
+        shell: bash
         run: ls -laR artifacts/
 
       - name: Create Release
