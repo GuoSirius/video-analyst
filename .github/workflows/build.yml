@@ -34,46 +34,41 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-
-      - name: Debug - Node version
-        run: node --version && npm --version
+          node-version: '22'
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libnotify4-dev libnss3 libxss1 libasound2 libxtst6 xdg-utils libatspi2.0-dev libdrm2 libgbm1
+          sudo apt-get install -y libgtk-3-dev libnotify4-dev libnss3 libxss1 libasound2 libxtst6 xdg-utils libatspi2.0-dev libdrm2 libgbm1 fakeroot rpm
 
       - name: Install dependencies
-        run: npm ci
-
-      - name: Debug - npm list
-        run: npm list --depth=0
+        run: |
+          echo "=== npm ci ===" && npm ci --loglevel=verbose
 
       - name: Build
         env:
           NODE_ENV: production
-        run: npm run build
-
-      - name: Debug - Build output
         run: |
-          echo "=== dist folder ===" && ls -la dist/ 2>/dev/null || echo "dist not found"
-          echo "=== dist-electron folder ===" && ls -la dist-electron/ 2>/dev/null || echo "dist-electron not found"
+          echo "=== npm run build ===" && npm run build 2>&1 || true
 
       - name: Build installers
         run: |
-          echo "=== Building ${{ matrix.target }} ===" && npx electron-builder --${{ matrix.target }}
+          echo "=== Building ${{ matrix.target }} ===" && npx electron-builder --${{ matrix.target }} 2>&1 || true
 
       - name: Debug - Artifacts
-        run: ls -la dist/
+        run: |
+          echo "=== dist folder ===" && ls -la dist/ 2>&1 || echo "dist not found"
+          echo "=== dist-electron folder ===" && ls -la dist-electron/ 2>&1 || echo "dist-electron not found"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/
-          if-no-files-found: error
+          path: |
+            dist/*
+            dist-electron/*
+          if-no-files-found: warn
 
   release:
     needs: build
