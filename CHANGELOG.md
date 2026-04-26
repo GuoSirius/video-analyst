@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.3.7](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.6...v1.3.7) (2026-04-26)
+
+
+### Features
+
+* 添加交互式发布脚本 ([b212603](https://gitee.com/siriussupreme/video-analyst/commit/b212603d2d71e7147e223d014cd8d32b1cd48f7d))
+
 ### [1.3.6](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.5...v1.3.6) (2026-04-26)
 
 ### [1.3.4](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.3...v1.3.4) (2026-04-26)
