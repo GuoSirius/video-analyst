@@ -1,7 +1,8 @@
 import pkg from 'electron-updater'
-const { autoUpdater } = pkg
 import { BrowserWindow, ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
+
+const { autoUpdater } = pkg
 
 // 更新状态
 let updateStatus: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' = 'idle'

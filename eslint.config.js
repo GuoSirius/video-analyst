@@ -3,6 +3,7 @@ import pluginVue from 'eslint-plugin-vue'
 import tseslint from 'typescript-eslint'
 import vueParser from 'vue-eslint-parser'
 import globals from 'globals'
+import importPlugin from 'eslint-plugin-import'
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -52,10 +53,14 @@ export default [
   // JavaScript 文件
   {
     files: ['**/*.js', '**/*.mjs'],
+    plugins: {
+      import: importPlugin
+    },
     rules: {
       ...js.configs.recommended.rules,
       ...consoleRules,
-      'no-unused-vars': 'off'
+      'no-unused-vars': 'off',
+      'import/imports-first': 'error'
     },
     languageOptions: {
       globals: {
@@ -101,7 +106,8 @@ export default [
   {
     files: ['**/*.ts', '**/*.tsx', 'electron/**/*.ts'],
     plugins: {
-      '@typescript-eslint': tseslint.plugin
+      '@typescript-eslint': tseslint.plugin,
+      import: importPlugin
     },
     languageOptions: {
       parser: tseslint.parser,
@@ -112,7 +118,8 @@ export default [
     },
     rules: {
       ...tsEslintRules,
-      ...consoleRules
+      ...consoleRules,
+      'import/imports-first': 'error'
     }
   }
 ]
