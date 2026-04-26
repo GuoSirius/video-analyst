@@ -17,13 +17,13 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            target: nsis
+            build_cmd: --win
             artifact_name: windows-installer
           - os: ubuntu-latest
-            target: AppImage
+            build_cmd: --linux AppImage
             artifact_name: linux-appimage
           - os: macos-latest
-            target: dmg
+            build_cmd: --mac
             artifact_name: macos-dmg
 
     runs-on: ${{ matrix.os }}
@@ -65,12 +65,11 @@ jobs:
       - name: Build
         env:
           NODE_ENV: production
-        run: |
-          echo "=== npm run build ===" && npm run build 2>&1 || true
+        run: npm run build
 
       - name: Build installers
         run: |
-          echo "=== Building ${{ matrix.target }} ===" && npx electron-builder --${{ matrix.target }} 2>&1 || true
+          echo "=== Building with ${{ matrix.build_cmd }} ===" && npx electron-builder ${{ matrix.build_cmd }}
 
       - name: Debug - Artifacts (Unix)
         if: matrix.os != 'windows-latest'
