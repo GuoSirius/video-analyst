@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.1.0](https://gitee.com/siriussupreme/video-analyst/compare/v1.0.2...v1.1.0) (2026-04-26)
+
+
+### Features
+
+* 优化 CI/CD 流程，自动化版本发布 ([a258aa0](https://gitee.com/siriussupreme/video-analyst/commit/a258aa0dd63d7ecfa286c737933d7bcff00dd70c))
+
+
+### Bug Fixes
+
+* 修复 Release tag 格式和 artifacts 路径 ([634b413](https://gitee.com/siriussupreme/video-analyst/commit/634b4135454fb6306645460921711638836f37bf))
+* 修复 Windows PowerShell 命令兼容性问题 ([5eeeed0](https://gitee.com/siriussupreme/video-analyst/commit/5eeeed0f5cdac3bfd15597234965c27a0f96d8e6))
+* github ([5ed9256](https://gitee.com/siriussupreme/video-analyst/commit/5ed9256df01ee95b0374f554d1bd1be841c938af))
+
 ### [1.0.2](https://gitee.com/siriussupreme/video-analyst/compare/v1.0.1...v1.0.2) (2026-04-26)
 
 
