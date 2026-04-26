@@ -1,0 +1,63 @@
+{
+  "app": {
+    "title": "Video Analysis Tool",
+    "home": "Home",
+    "settings": "Settings"
+  },
+  "window": {
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "close": "Close",
+    "alwaysOnTop": "Always on Top",
+    "alwaysOnBottom": "Always on Bottom",
+    "fullscreen": "Fullscreen"
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "theme": "Theme",
+    "dark": "Dark Mode",
+    "light": "Light Mode",
+    "auto": "Auto Mode",
+    "llm": "LLM Configuration",
+    "llmName": "Config Name",
+    "llmProvider": "Provider",
+    "llmApiKey": "API Key",
+    "llmApiUrl": "API URL",
+    "llmModel": "Model Name",
+    "llmTemperature": "Temperature",
+    "add": "Add",
+    "edit": "Edit",
+    "delete": "Delete",
+    "save": "Save",
+    "cancel": "Cancel"
+  },
+  "home": {
+    "title": "Video Analysis",
+    "selectFile": "Select File",
+    "selectFolder": "Select Folder",
+    "includeSubfolder": "Include Subfolder",
+    "recursionDepth": "Recursion Depth",
+    "transcriptionMethod": "Transcription Method",
+    "local": "Local FFmpeg",
+    "cloud": "Cloud API",
+    "selectModel": "Select Model",
+    "start": "Start",
+    "pause": "Pause",
+    "resume": "Resume",
+    "cancel": "Cancel",
+    "taskList": "Task List",
+    "status": {
+      "pending": "Pending",
+      "processing": "Processing",
+      "completed": "Completed",
+      "failed": "Failed"
+    }
+  },
+  "tray": {
+    "show": "Show Window",
+    "hide": "Hide Window",
+    "quit": "Quit App"
+  }
+}

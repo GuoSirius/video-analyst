@@ -1,0 +1,63 @@
+{
+  "app": {
+    "title": "视频分析工具",
+    "home": "首页",
+    "settings": "设置"
+  },
+  "window": {
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "restore": "还原",
+    "close": "关闭",
+    "alwaysOnTop": "窗口置顶",
+    "alwaysOnBottom": "窗口置底",
+    "fullscreen": "全屏"
+  },
+  "settings": {
+    "title": "设置",
+    "language": "语言",
+    "theme": "主题",
+    "dark": "暗黑模式",
+    "light": "亮色模式",
+    "auto": "自动模式",
+    "llm": "大模型配置",
+    "llmName": "配置名称",
+    "llmProvider": "提供商",
+    "llmApiKey": "API Key",
+    "llmApiUrl": "API URL",
+    "llmModel": "模型名称",
+    "llmTemperature": "温度参数",
+    "add": "添加",
+    "edit": "编辑",
+    "delete": "删除",
+    "save": "保存",
+    "cancel": "取消"
+  },
+  "home": {
+    "title": "视频分析",
+    "selectFile": "选择文件",
+    "selectFolder": "选择文件夹",
+    "includeSubfolder": "包含子目录",
+    "recursionDepth": "递归层数",
+    "transcriptionMethod": "转文字方式",
+    "local": "本地 FFmpeg",
+    "cloud": "云端 API",
+    "selectModel": "选择模型",
+    "start": "开始处理",
+    "pause": "暂停",
+    "resume": "继续",
+    "cancel": "取消",
+    "taskList": "任务列表",
+    "status": {
+      "pending": "待处理",
+      "processing": "处理中",
+      "completed": "已完成",
+      "failed": "失败"
+    }
+  },
+  "tray": {
+    "show": "显示窗口",
+    "hide": "隐藏窗口",
+    "quit": "退出应用"
+  }
+}

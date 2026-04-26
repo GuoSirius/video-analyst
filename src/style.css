@@ -1,0 +1,31 @@
+/* 全局样式 */
+@import '@unocss/reset/tailwind.css';
+
+:root {
+  --el-bg-color-page: #141414;
+  --el-bg-color: #1d1e1f;
+  --el-text-color-primary: #E5EAF3;
+  --el-text-color-regular: #CFD3DC;
+  --el-border-color: #414243;
+}
+
+html.light {
+  --el-bg-color-page: #FFFFFF;
+  --el-bg-color: #FFFFFF;
+  --el-text-color-primary: #303133;
+  --el-text-color-regular: #606266;
+  --el-border-color: #DCDFE6;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+}
