@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.1.5](https://gitee.com/siriussupreme/video-analyst/compare/v1.1.4...v1.1.5) (2026-04-26)
+
+
+### Bug Fixes
+
+* 避免 tag push 时重复执行构建 ([3eb5553](https://gitee.com/siriussupreme/video-analyst/commit/3eb55532d10e2aec1e5df2faae4f4341ecb8d56e))
+* 调整 --publish never 参数位置 ([3786b00](https://gitee.com/siriussupreme/video-analyst/commit/3786b000dc3cbc1a483aa64658a9654a57727d4b))
+* 禁用 electron-builder 自动发布 ([26352a5](https://gitee.com/siriussupreme/video-analyst/commit/26352a512dba84c4d833ffcc62d33d8e8b7be133))
+* 在 electron-builder.yml 中配置 publish: never ([06f1425](https://gitee.com/siriussupreme/video-analyst/commit/06f14257e2c3114b9f961ad4aa2bb7f408a217d1))
+
 ### [1.1.4](https://gitee.com/siriussupreme/video-analyst/compare/v1.1.3...v1.1.4) (2026-04-26)
 
 
