@@ -22,6 +22,10 @@
     "release:push": "npm run release && npm run push:all",
     "postinstall": "electron-builder install-app-deps"
   },
+  "standard-version": {
+    "tagPrefix": "v",
+    "releaseAs": "patch"
+  },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
     "@element-plus/icons-vue": "^2.3.2",
