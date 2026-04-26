@@ -1,11 +1,11 @@
 name: Build
 
 on:
-  workflow_dispatch:
-  workflow_run:
-    workflows: ['Version Release']
-    types: [completed]
+  push:
     branches: [main]
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 concurrency:
   group: build-${{ github.ref }}
@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow.conclusion == 'success')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
     strategy:
       fail-fast: false
       matrix:
@@ -127,9 +127,6 @@ jobs:
             ## 自动构建
 
             Commit: `${{ github.sha }}`
-
-            ### 变更说明
-            ${{ github.event.head_commit.message }}
 
             ### 平台
             - Windows (NSIS)

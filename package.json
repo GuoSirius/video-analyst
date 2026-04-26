@@ -17,6 +17,9 @@
     "release:major": "standard-version --release-as major",
     "release:minor": "standard-version --release-as minor",
     "release:patch": "standard-version --release-as patch",
+    "push": "git push && git push --tags",
+    "push:all": "git push origin main --tags && git push github main --tags",
+    "release:push": "npm run release && npm run push:all",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
