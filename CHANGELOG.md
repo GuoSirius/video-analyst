@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.2.0](https://gitee.com/siriussupreme/video-analyst/compare/v1.1.5...v1.2.0) (2026-04-26)
+
+
+### Features
+
+* 添加自动更新功能 (electron-updater) ([1c53b35](https://gitee.com/siriussupreme/video-analyst/commit/1c53b35ad873eca27731c632a394a7dd2172557c))
+
 ### [1.1.5](https://gitee.com/siriussupreme/video-analyst/compare/v1.1.4...v1.1.5) (2026-04-26)
 
 
