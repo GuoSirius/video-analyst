@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.1.3](https://gitee.com/siriussupreme/video-analyst/compare/v1.1.2...v1.1.3) (2026-04-26)
+
+
+### Bug Fixes
+
+* 修复 electron-builder 多平台构建命令 ([31eea4f](https://gitee.com/siriussupreme/video-analyst/commit/31eea4f791886462bf11aae5f8e1e1161b47f197))
+* 优化 CI/CD 触发条件，仅 tag push 时创建 Release ([74fd0c7](https://gitee.com/siriussupreme/video-analyst/commit/74fd0c7d15ccc1e339622dcb43eb1ef9f629a883))
+
 ### [1.1.2](https://gitee.com/siriussupreme/video-analyst/compare/v1.1.1...v1.1.2) (2026-04-26)
 
 ### [1.1.1](https://gitee.com/siriussupreme/video-analyst/compare/v1.1.0...v1.1.1) (2026-04-26)
