@@ -2,6 +2,7 @@
 import { useAppStore } from './store/app'
 import AppHeader from './components/AppHeader.vue'
 import AppSidebar from './components/AppSidebar.vue'
+import AppUpdater from './components/AppUpdater.vue'
 
 const appStore = useAppStore()
 
@@ -18,6 +19,7 @@ appStore.initTheme()
         <router-view />
       </main>
     </div>
+    <AppUpdater />
   </div>
 </template>
 

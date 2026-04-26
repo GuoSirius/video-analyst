@@ -49,6 +49,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: Electron.IpcRendererEvent, taskId: string, progress: number) => callback(taskId, progress)
     ipcRenderer.on('task:progress', handler)
     return () => ipcRenderer.removeListener('task:progress', handler)
+  },
+
+  // 自动更新
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  onUpdateStatus: (callback: (status: string, data?: Record<string, unknown>) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: string, data?: Record<string, unknown>) => callback(status, data)
+    ipcRenderer.on('update:status', handler)
+    return () => ipcRenderer.removeListener('update:status', handler)
   }
 })
 
@@ -75,6 +86,11 @@ declare global {
       saveLLMConfig: (config: any) => Promise<boolean>
       deleteLLMConfig: (id: string) => Promise<boolean>
       onTaskProgress: (callback: (taskId: string, progress: number) => void) => () => void
+      updateCheck: () => Promise<{ status: string; version?: string; message?: string }>
+      updateDownload: () => Promise<{ status: string; message?: string }>
+      updateInstall: () => Promise<{ status: string }>
+      updateStatus: () => Promise<{ status: string; version?: string; progress?: number }>
+      onUpdateStatus: (callback: (status: string, data?: Record<string, unknown>) => void) => () => void
     }
   }
 }
