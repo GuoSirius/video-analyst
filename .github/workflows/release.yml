@@ -28,14 +28,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Calculate next version
-        id: version
-        run: |
-          echo "version=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
-          echo "tag=v$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
-
       - name: Generate changelog and bump version
         run: npm run release
+
+      - name: Get new version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "::set-output name=version::$VERSION"
+          echo "::set-output name=tag::v$VERSION"
 
       - name: Push version changes
         uses: ad-m/github-push-action@master
