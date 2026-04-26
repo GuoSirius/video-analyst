@@ -32,6 +32,49 @@ npm run lint
 npm run typecheck
 ```
 
+## 发布版本
+
+使用 Conventional Commits 规范提交代码，运行以下命令发布新版本：
+
+```bash
+# 自动根据 commit 类型更新版本号
+npm run release
+
+# 指定主版本号 (x.0.0)
+npm run release:major
+
+# 指定次版本号 (0.x.0)
+npm run release:minor
+
+# 指定补丁版本号 (0.0.x)
+npm run release:patch
+```
+
+### 提交规范
+
+commit message 格式：`<type>: <description>`
+
+| 类型 | 说明 |
+|------|------|
+| `feat` | 新功能 |
+| `fix` | Bug 修复 |
+| `refactor` | 代码重构 |
+| `perf` | 性能优化 |
+| `docs` | 文档更新 |
+| `style` | 代码格式 |
+| `test` | 测试 |
+| `build` | 构建相关 |
+| `ci` | CI 相关 |
+| `chore` | 其他 |
+
+示例：
+```bash
+git add .
+git commit -m "feat: 添加视频截图功能"
+git push
+npm run release
+```
+
 ## 技术栈
 
 - Electron 36

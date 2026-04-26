@@ -13,6 +13,10 @@
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix",
     "lint:check": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts",
     "typecheck": "vue-tsc -b",
+    "release": "standard-version",
+    "release:major": "standard-version --release-as major",
+    "release:minor": "standard-version --release-as minor",
+    "release:patch": "standard-version --release-as patch",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
@@ -37,6 +41,7 @@
     "eslint-plugin-vue": "^10.9.0",
     "globals": "^17.5.0",
     "sharp": "^0.34.5",
+    "standard-version": "^9.5.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.59.0",
     "unocss": "^66.6.8",
