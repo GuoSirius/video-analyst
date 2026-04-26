@@ -69,7 +69,7 @@ jobs:
         run: npm run build
 
       - name: Build installers
-        run: npx electron-builder ${{ matrix.build_cmd }}
+        run: npx electron-builder ${{ matrix.build_cmd }} --publish never
 
       - name: Debug - Artifacts (Unix)
         if: matrix.os != 'windows-latest'
