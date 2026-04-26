@@ -1,9 +1,11 @@
-name: Build and Release
+name: Build
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+  workflow_run:
+    workflows: ['Version Release']
+    types: [completed]
+    branches: [main]
 
 concurrency:
   group: build-${{ github.ref }}
@@ -11,6 +13,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow.conclusion == 'success')
     strategy:
       fail-fast: false
       matrix:
@@ -55,8 +58,7 @@ jobs:
             rpm
 
       - name: Install dependencies
-        run: |
-          echo "=== npm install (skip postinstall) ===" && npm install --ignore-scripts
+        run: npm install --ignore-scripts
 
       - name: Install native deps
         run: npx electron-builder install-app-deps
@@ -64,12 +66,10 @@ jobs:
       - name: Build
         env:
           NODE_ENV: production
-        run: |
-          echo "=== npm run build ===" && npm run build 2>&1 || true
+        run: npm run build
 
       - name: Build installers
-        run: |
-          echo "=== Building ${{ matrix.target }} ===" && npx electron-builder --${{ matrix.target }} 2>&1 || true
+        run: npx electron-builder --${{ matrix.target }}
 
       - name: Debug - Artifacts (Unix)
         if: matrix.os != 'windows-latest'
@@ -96,7 +96,6 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     permissions:
       contents: write
@@ -127,3 +126,12 @@ jobs:
             artifacts/**/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Build & Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Build completed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts:" >> $GITHUB_STEP_SUMMARY
+          ls -laR artifacts/ >> $GITHUB_STEP_SUMMARY

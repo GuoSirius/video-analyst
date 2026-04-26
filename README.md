@@ -33,57 +33,54 @@ npm install
 # 开发模式
 npm run dev
 
-# 构建（生产环境检查 console/debugger）
+# 代码检查 + 类型检查 + 构建
 npm run build
-
-# 代码检查
-npm run lint
-
-# 类型检查
-npm run typecheck
 ```
 
-## 发布版本
+## 代码提交流程
 
-使用 Conventional Commits 规范提交代码，运行以下命令发布新版本：
-
-```bash
-# 自动根据 commit 类型更新版本号
-npm run release
-
-# 指定主版本号 (x.0.0)
-npm run release:major
-
-# 指定次版本号 (0.x.0)
-npm run release:minor
-
-# 指定补丁版本号 (0.0.x)
-npm run release:patch
-```
+**推送代码到 main 分支后，CI/CD 自动完成：**
+1. 自动生成 CHANGELOG
+2. 自动更新版本号
+3. 自动构建安装包
+4. 自动发布 Release
 
 ### 提交规范
 
 commit message 格式：`<type>: <description>`
 
-| 类型 | 说明 |
-|------|------|
-| `feat` | 新功能 |
-| `fix` | Bug 修复 |
-| `refactor` | 代码重构 |
-| `perf` | 性能优化 |
-| `docs` | 文档更新 |
-| `style` | 代码格式 |
-| `test` | 测试 |
-| `build` | 构建相关 |
-| `ci` | CI 相关 |
-| `chore` | 其他 |
+| 类型 | 版本更新 | 说明 |
+|------|---------|------|
+| `feat` | 次版本号 +1 | 新功能 |
+| `fix` | 补丁版本号 +1 | Bug 修复 |
+| `refactor` | 补丁版本号 +1 | 代码重构 |
+| `perf` | 补丁版本号 +1 | 性能优化 |
+| `docs` | 无更新 | 文档更新 |
+| `chore` | 无更新 | 其他 |
 
-示例：
+### 提交流程
+
 ```bash
+# 1. 提交代码（使用规范格式）
 git add .
 git commit -m "feat: 添加视频截图功能"
 git push
-npm run release
+
+# 2. CI/CD 自动完成后续流程
+# - Version Release: 生成 CHANGELOG + 更新版本号 + 推送 tag
+# - Build: 编译代码 + 构建安装包
+# - Release: 发布到 GitHub Releases
+```
+
+### 本地发布（可选）
+
+如果需要手动发布：
+
+```bash
+npm run release          # 自动根据 commit 类型更新版本号
+npm run release:major    # 主版本号 +1 (x.0.0)
+npm run release:minor    # 次版本号 +1 (0.x.0)
+npm run release:patch    # 补丁版本号 +1 (0.0.x)
 ```
 
 ## 技术栈
