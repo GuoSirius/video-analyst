@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.0.1](https://gitee.com/siriussupreme/video-analyst/compare/v0.1.1...v1.0.1) (2026-04-26)
+
+
+### Bug Fixes
+
+* 排除 Electron 主进程和脚本文件的 console 检查 ([933d902](https://gitee.com/siriussupreme/video-analyst/commit/933d9025492a7628ed122e4d1ce015e3326e644e))
+
 ### 0.1.1 (2026-04-26)
 
 
