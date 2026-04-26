@@ -25,7 +25,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onWindowUnmaximize: (callback: () => void) => {
     ipcRenderer.on('window-unmaximize', callback)
     return () => ipcRenderer.removeListener('window-unmaximize', callback)
-  }
+  },
+
+  // 文件选择
+  selectFiles: () => ipcRenderer.invoke('dialog:selectFiles'),
+  selectFolder: () => ipcRenderer.invoke('dialog:selectFolder')
 })
 
 // 类型声明
@@ -41,6 +45,8 @@ declare global {
       windowCreate: (options?: Electron.BrowserWindowConstructorOptions) => Promise<{ id: number }>
       onWindowMaximize: (callback: () => void) => () => void
       onWindowUnmaximize: (callback: () => void) => () => void
+      selectFiles: () => Promise<string[]>
+      selectFolder: () => Promise<string>
     }
   }
 }

@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, Tray, Menu } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Tray, Menu, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createTray, setTrayWindow } from './tray'
@@ -128,6 +128,27 @@ function setupWindowIPC(): void {
     win.on('closed', () => windows.delete(id))
 
     return { id: win.id }
+  })
+
+  // 文件选择对话框
+  ipcMain.handle('dialog:selectFiles', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(window!, {
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Video/Audio', extensions: ['mp4', 'avi', 'mov', 'mkv', 'mp3', 'wav', 'flac', 'm4a'] }
+      ]
+    })
+    return result.filePaths
+  })
+
+  // 文件夹选择对话框
+  ipcMain.handle('dialog:selectFolder', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(window!, {
+      properties: ['openDirectory']
+    })
+    return result.filePaths[0] || null
   })
 }
 

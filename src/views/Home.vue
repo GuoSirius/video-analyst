@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Upload, Folder, VideoCamera } from '@element-plus/icons-vue'
 import type { UploadFile } from 'element-plus'
+import type { Task } from '../types'
 
 const { t } = useI18n()
 
@@ -15,12 +16,8 @@ const recursionDepth = ref(3)
 const transcriptionMethod = ref('local')
 const selectedModel = ref('')
 
-// 任务列表（模拟数据）
-const tasks = ref([
-  { id: '1', fileName: 'video1.mp4', filePath: '/path/to/video1.mp4', fileSize: 1024000, status: 'completed', progress: 100, createdAt: Date.now(), updatedAt: Date.now() },
-  { id: '2', fileName: 'video2.mp4', filePath: '/path/to/video2.mp4', fileSize: 2048000, status: 'processing', progress: 45, createdAt: Date.now(), updatedAt: Date.now() },
-  { id: '3', fileName: 'audio1.mp3', filePath: '/path/to/audio1.mp3', fileSize: 512000, status: 'pending', progress: 0, createdAt: Date.now(), updatedAt: Date.now() }
-])
+// 任务列表
+const tasks = ref<Task[]>([])
 
 // 状态颜色映射
 const statusColorMap: Record<string, string> = {
@@ -30,15 +27,28 @@ const statusColorMap: Record<string, string> = {
   failed: 'danger'
 }
 
+// 选择文件
+async function selectFiles() {
+  if (window.electronAPI) {
+    const filePaths = await window.electronAPI.selectFiles()
+    console.log('Selected files:', filePaths)
+    // TODO: 将选择的文件添加到任务列表
+  }
+}
+
 // 选择文件夹
 async function selectFolder() {
-  // TODO: 调用 Electron API 选择文件夹
-  console.log('Select folder')
+  if (window.electronAPI) {
+    const folderPath = await window.electronAPI.selectFolder()
+    console.log('Selected folder:', folderPath)
+    // TODO: 遍历文件夹，添加文件到任务列表
+  }
 }
 
 // 开始处理
 function startProcessing() {
-  console.log('Start processing')
+  console.log('Start processing', fileList.value, includeSubfolder.value, recursionDepth.value)
+  // TODO: 实现文件处理
 }
 </script>
 
