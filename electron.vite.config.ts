@@ -6,6 +6,7 @@ import unoCSS from 'unocss/vite'
 export default defineConfig({
   main: {
     build: {
+      outDir: 'dist-electron/main',
       lib: {
         entry: resolve(__dirname, 'electron/main.ts')
       }
@@ -13,12 +14,20 @@ export default defineConfig({
   },
   preload: {
     build: {
+      outDir: 'dist-electron/preload',
       lib: {
         entry: resolve(__dirname, 'electron/preload.ts')
       }
     }
   },
   renderer: {
+    root: '.',
+    build: {
+      outDir: 'dist-electron/renderer',
+      rollupOptions: {
+        input: resolve(__dirname, 'index.html')
+      }
+    },
     resolve: {
       alias: {
         '@renderer': resolve(__dirname, 'src')
@@ -27,6 +36,10 @@ export default defineConfig({
     plugins: [
       vue(),
       unoCSS()
-    ]
+    ],
+    server: {
+      host: '127.0.0.1',
+      port: 5173
+    }
   }
 })

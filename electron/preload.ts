@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+console.log('[Preload] Preload script loaded')
+
 // 窗口管理 API
 contextBridge.exposeInMainWorld('electronAPI', {
   // 窗口操作

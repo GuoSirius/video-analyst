@@ -2,6 +2,7 @@
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from './store/app'
 import AppHeader from './components/AppHeader.vue'
+import AppSidebar from './components/AppSidebar.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -11,11 +12,14 @@ appStore.initTheme()
 </script>
 
 <template>
-  <div class="w-full h-screen overflow-hidden" :class="{ dark: appStore.isDark }">
+  <div class="app-container" :class="{ dark: appStore.isDark }">
     <AppHeader />
-    <main class="w-full" style="height: calc(100vh - 40px)">
-      <router-view />
-    </main>
+    <div class="app-body">
+      <AppSidebar />
+      <main class="main-content">
+        <router-view />
+      </main>
+    </div>
   </div>
 </template>
 
@@ -29,5 +33,25 @@ html, body {
 #app {
   width: 100%;
   height: 100%;
+}
+
+.app-container {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--el-bg-color-page);
+}
+
+.app-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 </style>

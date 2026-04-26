@@ -16,16 +16,26 @@ function createWindow(): BrowserWindow {
     show: false,
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
-    vibrancy: 'under-window',
-    visualEffectState: 'active',
+    frame: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false
     }
   })
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+  })
+
+  // 监听最大化状态变化并通知渲染进程
+  mainWindow.on('maximize', () => {
+    mainWindow.webContents.send('window-maximize')
+  })
+
+  mainWindow.on('unmaximize', () => {
+    mainWindow.webContents.send('window-unmaximize')
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -56,12 +66,15 @@ function createWindow(): BrowserWindow {
 function setupWindowIPC(): void {
   // 窗口最小化
   ipcMain.on('window-minimize', (event) => {
+    console.log('[Main] window-minimize received')
     const window = BrowserWindow.fromWebContents(event.sender)
+    console.log('[Main] window object:', window)
     window?.minimize()
   })
 
   // 窗口最大化/还原
   ipcMain.on('window-toggle-maximize', (event) => {
+    console.log('[Main] window-toggle-maximize received')
     const window = BrowserWindow.fromWebContents(event.sender)
     if (window?.isMaximized()) {
       window.unmaximize()
@@ -72,6 +85,7 @@ function setupWindowIPC(): void {
 
   // 窗口关闭
   ipcMain.on('window-close', (event) => {
+    console.log('[Main] window-close received')
     const window = BrowserWindow.fromWebContents(event.sender)
     window?.close()
   })
@@ -117,6 +131,15 @@ function setupWindowIPC(): void {
     })
 
     win.on('ready-to-show', () => win.show())
+
+    // 监听最大化状态变化并通知渲染进程
+    win.on('maximize', () => {
+      win.webContents.send('window-maximize')
+    })
+
+    win.on('unmaximize', () => {
+      win.webContents.send('window-unmaximize')
+    })
 
     if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
       win.loadURL(process.env['ELECTRON_RENDERER_URL'])

@@ -10,16 +10,23 @@ export function setTrayWindow(win: BrowserWindow) {
 }
 
 export function createTray() {
-  // 尝试加载图标，如果不存在则使用空图标
+  // 加载专用托盘图标（优先使用 16x16 的 tray.png）
   let iconImage
-  const iconPath = resolve(__dirname, '../../resources/icons/icon.png')
-  if (existsSync(iconPath)) {
-    iconImage = nativeImage.createFromPath(iconPath)
+  const trayIconPath = resolve(__dirname, '../../resources/icons/tray.png')
+  const fallbackIconPath = resolve(__dirname, '../../resources/icons/icon.png')
+  
+  if (existsSync(trayIconPath)) {
+    // 使用专用托盘图标
+    iconImage = nativeImage.createFromPath(trayIconPath)
+  } else if (existsSync(fallbackIconPath)) {
+    // 回退到主图标并调整尺寸
+    iconImage = nativeImage.createFromPath(fallbackIconPath).resize(16, 16)
   } else {
     // 创建一个简单的占位图标（16x16 透明 PNG）
-    iconImage = nativeImage.createFromBuffer(Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH5godDQkIqZZnZQAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAABJUlEQVQ4y6WSoW7CQBRF312K0BW0tIRgYWkLidoIG4M2IgbVoEhsItiJGyE2toag2Fj atrial ZSx2gTZCwE7S0hYKVqK1rQoHw5z/AP/9gVIjNN7Jycz7Myd8cBY8xv1tp7a+3WWhdw3JoC3nPuJ6WU">
+    const placeholderBase64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABhSURBVDhP7c6xDQAgDASwQ6T9O2sBHvZCNkI2QjZCNkI2QjZCNkI2QjZCNkI2QjZCNkI2QjZCNkI2QjZCNkI2QjbCP0a9gB6G8BQMp6eHQAAAABJRU5ErkJggg=='
+    iconImage = nativeImage.createFromBuffer(Buffer.from(placeholderBase64, 'base64'))
   }
+  
   tray = new Tray(iconImage)
 
   // 更新托盘菜单
