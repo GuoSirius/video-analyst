@@ -1,6 +1,7 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Tray, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { createTray, setTrayWindow } from './tray'
 
 // 窗口管理：存储所有窗口实例
 const windows = new Map<number, BrowserWindow>()
@@ -41,6 +42,7 @@ function createWindow(): BrowserWindow {
   // 存储窗口引用
   const id = mainWindow.id
   windows.set(id, mainWindow)
+  setTrayWindow(mainWindow)
 
   mainWindow.on('closed', () => {
     windows.delete(id)
@@ -136,10 +138,15 @@ app.whenReady().then(() => {
   })
 
   setupWindowIPC()
-  createWindow()
+  const mainWindow = createWindow()
+  setTrayWindow(mainWindow)
+  createTray()
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      const win = createWindow()
+      setTrayWindow(win)
+    }
   })
 })
 
