@@ -63,9 +63,26 @@ async function startProcessing() {
   }
 }
 
-// 挂载时加载任务
+// 挂载时加载任务并检查异常恢复
 onMounted(async () => {
   await taskStore.loadTasks()
+
+  // 检查是否有未完成的任务（状态为 processing）
+  const unfinishedTasks = taskStore.tasks.filter(t => t.status === 'processing')
+  if (unfinishedTasks.length > 0) {
+    // 提示用户是否继续处理
+    const shouldContinue = confirm(`发现 ${unfinishedTasks.length} 个未完成的任务，是否继续处理？`)
+    if (shouldContinue) {
+      for (const task of unfinishedTasks) {
+        await startProcessingTask(task)
+      }
+    } else {
+      // 将未完成的任务状态改为 pending
+      for (const task of unfinishedTasks) {
+        await taskStore.updateTask(task.id, { status: 'pending', progress: 0 })
+      }
+    }
+  }
 })
 </script>
 
