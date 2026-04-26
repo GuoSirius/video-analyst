@@ -7,11 +7,11 @@ import importPlugin from 'eslint-plugin-import'
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-// TypeScript ESLint 插件规则
+// TypeScript ESLint 插件规则（开发环境和构建环境保持一致）
 const tsEslintRules = {
   '@typescript-eslint/ban-ts-comment': 'off',
   '@typescript-eslint/no-explicit-any': 'off',
-  '@typescript-eslint/no-unused-vars': ['off', {
+  '@typescript-eslint/no-unused-vars': ['error', {
     argsIgnorePattern: '^_',
     varsIgnorePattern: '^_'
   }],
@@ -44,6 +44,7 @@ export default [
       // Electron 主进程文件，terser 会自动移除 console
       'electron/main.ts',
       'electron/preload.ts',
+      'electron/updater.ts',
       'electron/utils/ffmpeg.ts',
       // 构建脚本
       'scripts/**'
@@ -59,7 +60,10 @@ export default [
     rules: {
       ...js.configs.recommended.rules,
       ...consoleRules,
-      'no-unused-vars': 'off',
+      'no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_'
+      }],
       'import/imports-first': 'error'
     },
     languageOptions: {
@@ -74,7 +78,8 @@ export default [
   {
     files: ['**/*.vue'],
     plugins: {
-      vue: pluginVue
+      vue: pluginVue,
+      '@typescript-eslint': tseslint.plugin
     },
     languageOptions: {
       parser: vueParser,
@@ -97,7 +102,10 @@ export default [
       'vue/require-explicit-emits': 'off',
       'vue/no-unused-vars': 'off',
       'vue/no-unused-components': 'off',
-      '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_'
+      }],
       '@typescript-eslint/no-explicit-any': 'off'
     }
   },

@@ -35,6 +35,13 @@ export interface ElectronAPI {
 
   // 任务进度监听
   onTaskProgress: (callback: (taskId: string, progress: number) => void) => () => void
+
+  // 自动更新
+  updateCheck: () => Promise<{ status: string; version?: string; message?: string }>
+  updateDownload: () => Promise<{ status: string; message?: string }>
+  updateInstall: () => Promise<{ status: string }>
+  updateStatus: () => Promise<{ status: string; version?: string; progress?: number }>
+  onUpdateStatus: (callback: (status: string, data?: Record<string, unknown>) => void) => () => void
 }
 
 declare global {
@@ -42,3 +49,5 @@ declare global {
     electronAPI: ElectronAPI
   }
 }
+
+export {}

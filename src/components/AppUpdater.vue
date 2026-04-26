@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 
 interface UpdateInfo {
   version?: string
@@ -70,8 +70,8 @@ async function checkUpdateStatus() {
         updateInfo.value.version = result.version
       }
     }
-  } catch (error) {
-    console.error('[Updater] Failed to get status:', error)
+  } catch (_error) {
+    console.error('[Updater] Failed to get status:', _error)
   }
 }
 
@@ -79,7 +79,8 @@ async function handleDownload() {
   isDialogVisible.value = false
   try {
     await window.electronAPI.updateDownload()
-  } catch (error) {
+  } catch (_error) {
+    console.error(_error)
     ElMessage.error('下载失败')
   }
 }
@@ -87,16 +88,9 @@ async function handleDownload() {
 async function handleInstall() {
   try {
     await window.electronAPI.updateInstall()
-  } catch (error) {
+  } catch (_error) {
+    console.error(_error)
     ElMessage.error('安装失败')
-  }
-}
-
-async function handleCheckUpdate() {
-  try {
-    await window.electronAPI.updateCheck()
-  } catch (error) {
-    ElMessage.error('检查更新失败')
   }
 }
 
