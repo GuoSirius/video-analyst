@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.3.0](https://gitee.com/siriussupreme/video-analyst/compare/v1.2.0...v1.3.0) (2026-04-26)
+
+
+### Features
+
+* 添加 ESLint 规则确保 import 在文件顶部 ([49cf67c](https://gitee.com/siriussupreme/video-analyst/commit/49cf67ca8b3b04ef60afc4d17706fc32fbb7bd07))
+* 添加前端更新提示组件 ([0568895](https://gitee.com/siriussupreme/video-analyst/commit/0568895e3e2dc9b11e040ece9d3976de4bfa9c55))
+
+
+### Bug Fixes
+
+* 完善 ESLint 配置并修复自动更新组件类型问题 ([9bbee00](https://gitee.com/siriussupreme/video-analyst/commit/9bbee009ac24d2a07ae518bfc4b7ae30dee4edb9))
+* 修复 electron-updater ESM 导入问题 ([eb288eb](https://gitee.com/siriussupreme/video-analyst/commit/eb288eb61df41cfa5e15416a99c0db83cec367b1))
+
 ## [1.2.0](https://gitee.com/siriussupreme/video-analyst/compare/v1.1.5...v1.2.0) (2026-04-26)
 
 
