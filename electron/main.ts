@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow, ipcMain, Tray, Menu, dialog } from 'electron
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createTray, setTrayWindow } from './tray'
+import { getTasks, saveTasks, updateTask, processFile, getLLMConfigs, saveLLMConfig, deleteLLMConfig } from './utils/transcription'
 
 // 窗口管理：存储所有窗口实例
 const windows = new Map<number, BrowserWindow>()
@@ -149,6 +150,57 @@ function setupWindowIPC(): void {
       properties: ['openDirectory']
     })
     return result.filePaths[0] || null
+  })
+
+  // 任务管理
+  ipcMain.handle('task:getTasks', () => {
+    return getTasks()
+  })
+
+  ipcMain.handle('task:addTask', (event, task) => {
+    const tasks = getTasks()
+    tasks.push(task)
+    saveTasks(tasks)
+    return tasks
+  })
+
+  ipcMain.handle('task:updateTask', (event, taskId, updates) => {
+    updateTask(taskId, updates)
+    return true
+  })
+
+  ipcMain.handle('task:process', async (event, taskId, method, llmConfigId) => {
+    const tasks = getTasks()
+    const task = tasks.find(t => t.id === taskId)
+    if (!task) {
+      throw new Error('Task not found')
+    }
+
+    const window = BrowserWindow.fromWebContents(event.sender)
+    try {
+      const result = await processFile(task, method, llmConfigId, (progress) => {
+        // 发送进度更新到渲染进程
+        window?.webContents.send('task:progress', taskId, progress)
+      })
+      return result
+    } catch (error) {
+      throw error
+    }
+  })
+
+  // LLM 配置管理
+  ipcMain.handle('llm:getConfigs', () => {
+    return getLLMConfigs()
+  })
+
+  ipcMain.handle('llm:saveConfig', (event, config) => {
+    saveLLMConfig(config)
+    return true
+  })
+
+  ipcMain.handle('llm:deleteConfig', (event, id) => {
+    deleteLLMConfig(id)
+    return true
   })
 }
 

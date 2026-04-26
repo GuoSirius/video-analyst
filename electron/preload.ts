@@ -29,7 +29,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 文件选择
   selectFiles: () => ipcRenderer.invoke('dialog:selectFiles'),
-  selectFolder: () => ipcRenderer.invoke('dialog:selectFolder')
+  selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
+
+  // 任务管理
+  getTasks: () => ipcRenderer.invoke('task:getTasks'),
+  addTask: (task) => ipcRenderer.invoke('task:addTask', task),
+  updateTask: (taskId, updates) => ipcRenderer.invoke('task:updateTask', taskId, updates),
+  processTask: (taskId, method, llmConfigId) => ipcRenderer.invoke('task:process', taskId, method, llmConfigId),
+
+  // LLM 配置管理
+  getLLMConfigs: () => ipcRenderer.invoke('llm:getConfigs'),
+  saveLLMConfig: (config) => ipcRenderer.invoke('llm:saveConfig', config),
+  deleteLLMConfig: (id) => ipcRenderer.invoke('llm:deleteConfig', id),
+
+  // 任务进度监听
+  onTaskProgress: (callback: (taskId: string, progress: number) => void) => {
+    ipcRenderer.on('task:progress', (event, taskId, progress) => callback(taskId, progress))
+    return () => ipcRenderer.removeListener('task:progress', callback)
+  }
 })
 
 // 类型声明
@@ -47,6 +64,14 @@ declare global {
       onWindowUnmaximize: (callback: () => void) => () => void
       selectFiles: () => Promise<string[]>
       selectFolder: () => Promise<string>
+      getTasks: () => Promise<any[]>
+      addTask: (task: any) => Promise<any[]>
+      updateTask: (taskId: string, updates: any) => Promise<boolean>
+      processTask: (taskId: string, method: string, llmConfigId: string) => Promise<string>
+      getLLMConfigs: () => Promise<any[]>
+      saveLLMConfig: (config: any) => Promise<boolean>
+      deleteLLMConfig: (id: string) => Promise<boolean>
+      onTaskProgress: (callback: (taskId: string, progress: number) => void) => () => void
     }
   }
 }

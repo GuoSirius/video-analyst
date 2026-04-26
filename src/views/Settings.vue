@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '../store/app'
 import type { LLMConfig, LLMProvider } from '../types'
@@ -28,18 +28,8 @@ const providerOptions = [
   { value: 'custom', label: 'Custom' }
 ]
 
-// 大模型配置列表（模拟数据）
-const llmConfigs = ref<LLMConfig[]>([
-  {
-    id: '1',
-    name: 'OpenAI Whisper',
-    provider: 'openai',
-    apiKey: '',
-    apiUrl: 'https://api.openai.com/v1/audio/transcriptions',
-    modelName: 'whisper-1',
-    temperature: 0.3
-  }
-])
+// 大模型配置列表
+const llmConfigs = ref<LLMConfig[]>([])
 
 // 对话框控制
 const dialogVisible = ref(false)
@@ -60,7 +50,7 @@ function openAddDialog() {
   Object.assign(currentConfig, {
     id: Date.now().toString(),
     name: '',
-    provider: 'openai',
+    provider: 'openai' as LLMProvider,
     apiKey: '',
     apiUrl: '',
     modelName: '',
@@ -77,21 +67,28 @@ function openEditDialog(config: LLMConfig) {
 }
 
 // 保存配置
-function saveConfig() {
-  if (isEditing.value) {
-    const index = llmConfigs.value.findIndex(c => c.id === currentConfig.id)
-    if (index !== -1) {
-      llmConfigs.value[index] = { ...currentConfig }
-    }
-  } else {
-    llmConfigs.value.push({ ...currentConfig })
+async function saveConfig() {
+  if (window.electronAPI) {
+    await window.electronAPI.saveLLMConfig({ ...currentConfig })
+    await loadConfigs()
   }
   dialogVisible.value = false
 }
 
 // 删除配置
-function deleteConfig(id: string) {
-  llmConfigs.value = llmConfigs.value.filter(c => c.id !== id)
+async function deleteConfig(id: string) {
+  if (window.electronAPI) {
+    await window.electronAPI.deleteLLMConfig(id)
+    await loadConfigs()
+  }
+}
+
+// 加载配置
+async function loadConfigs() {
+  if (window.electronAPI) {
+    const configs = await window.electronAPI.getLLMConfigs()
+    llmConfigs.value = configs || []
+  }
 }
 
 // 语言切换
@@ -103,6 +100,11 @@ function onLanguageChange(value: string) {
 function onThemeChange(value: string) {
   appStore.setTheme(value)
 }
+
+// 挂载时加载配置
+onMounted(() => {
+  loadConfigs()
+})
 </script>
 
 <template>

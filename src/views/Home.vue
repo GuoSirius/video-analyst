@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Upload, Folder, VideoCamera } from '@element-plus/icons-vue'
 import type { UploadFile } from 'element-plus'
-import type { Task } from '../types'
+import type { Task, TranscriptionMethod } from '../types'
+import { useTaskStore } from '../store/tasks'
 
 const { t } = useI18n()
+const taskStore = useTaskStore()
 
 // 文件列表
 const fileList = ref<UploadFile[]>([])
@@ -13,11 +15,8 @@ const fileList = ref<UploadFile[]>([])
 // 配置
 const includeSubfolder = ref(false)
 const recursionDepth = ref(3)
-const transcriptionMethod = ref('local')
+const transcriptionMethod = ref<TranscriptionMethod>('local')
 const selectedModel = ref('')
-
-// 任务列表
-const tasks = ref<Task[]>([])
 
 // 状态颜色映射
 const statusColorMap: Record<string, string> = {
@@ -33,6 +32,8 @@ async function selectFiles() {
     const filePaths = await window.electronAPI.selectFiles()
     console.log('Selected files:', filePaths)
     // TODO: 将选择的文件添加到任务列表
+    // 这里需要根据文件路径获取文件信息（名称、大小）
+    // 可以调用 taskStore.addTask()
   }
 }
 
@@ -45,11 +46,27 @@ async function selectFolder() {
   }
 }
 
-// 开始处理
-function startProcessing() {
-  console.log('Start processing', fileList.value, includeSubfolder.value, recursionDepth.value)
-  // TODO: 实现文件处理
+// 开始处理单个任务
+async function startProcessingTask(task: Task) {
+  try {
+    await taskStore.processTask(task.id, transcriptionMethod.value, selectedModel.value)
+  } catch (error) {
+    console.error('Processing failed:', error)
+  }
 }
+
+// 开始处理所有待处理任务
+async function startProcessing() {
+  const pendingTasks = taskStore.tasks.filter(t => t.status === 'pending')
+  for (const task of pendingTasks) {
+    await startProcessingTask(task)
+  }
+}
+
+// 挂载时加载任务
+onMounted(async () => {
+  await taskStore.loadTasks()
+})
 </script>
 
 <template>
@@ -126,7 +143,7 @@ function startProcessing() {
     <el-card>
       <template #header>{{ t('home.taskList') }}</template>
 
-      <el-table :data="tasks" style="width: 100%">
+      <el-table :data="taskStore.tasks" style="width: 100%">
         <el-table-column prop="fileName" :label="t('home.selectFile')" />
         <el-table-column prop="fileSize" :label="'大小'" width="120" />
         <el-table-column :label="'状态'" width="120">
@@ -143,13 +160,26 @@ function startProcessing() {
         </el-table-column>
         <el-table-column :label="'操作'" width="200">
           <template #default="{ row }">
-            <el-button v-if="row.status === 'pending'" size="small" type="primary">
+            <el-button
+              v-if="row.status === 'pending'"
+              size="small"
+              type="primary"
+              @click="startProcessingTask(row)"
+            >
               {{ t('home.start') }}
             </el-button>
-            <el-button v-if="row.status === 'processing'" size="small" type="warning">
+            <el-button
+              v-if="row.status === 'processing'"
+              size="small"
+              type="warning"
+            >
               {{ t('home.pause') }}
             </el-button>
-            <el-button size="small" type="danger">
+            <el-button
+              size="small"
+              type="danger"
+              @click="taskStore.updateTask(row.id, { status: 'pending', progress: 0 })"
+            >
               {{ t('home.cancel') }}
             </el-button>
           </template>
