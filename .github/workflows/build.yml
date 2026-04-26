@@ -56,7 +56,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          echo "=== npm ci ===" && npm ci --loglevel=verbose
+          echo "=== npm install (skip postinstall) ===" && npm install --ignore-scripts
+
+      - name: Install native deps
+        run: npx electron-builder install-app-deps
 
       - name: Build
         env:
