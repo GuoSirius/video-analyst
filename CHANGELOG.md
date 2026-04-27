@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.3.12](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.11...v1.3.12) (2026-04-27)
+
+
+### Bug Fixes
+
+* 修复 Home.vue 模板结构并完善功能 ([7ae083b](https://gitee.com/siriussupreme/video-analyst/commit/7ae083b72a94f73dacb44335137c9230f6759ec6))
+
 ### [1.3.10](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.9...v1.3.10) (2026-04-27)
 
 
