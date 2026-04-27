@@ -29,16 +29,13 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       outDir: 'dist-electron/preload',
-      lib: {
-        entry: resolve(__dirname, 'electron/preload.ts')
-      },
-      minify: 'terser',
-      terserOptions: {
-        compress: {
-          drop_console: true,
-          drop_debugger: true
+      rollupOptions: {
+        input: resolve(__dirname, 'electron/preload.ts'),
+        output: {
+          entryFileNames: 'index.js'
         }
-      }
+      },
+      minify: false
     }
   },
   renderer: {
