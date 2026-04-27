@@ -9,7 +9,10 @@ export interface Task {
   fileSize: number
   status: TaskStatus
   progress: number
-  outputPath?: string
+  outputPath?: string      // 转录结果文件路径
+  transcriptionText?: string  // 转录文字内容
+  summaryText?: string     // 分析总结结果
+  summaryStatus?: 'pending' | 'processing' | 'completed' | 'failed'
   error?: string
   createdAt: number
   updatedAt: number

@@ -21,6 +21,7 @@ export interface ElectronAPI {
   // 文件选择
   selectFiles: () => Promise<string[]>
   selectFolder: () => Promise<string>
+  scanFolder: (folderPath: string, maxDepth: number) => Promise<string[]>
 
   // 任务管理
   getTasks: () => Promise<any[]>

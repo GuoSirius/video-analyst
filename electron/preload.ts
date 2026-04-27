@@ -32,12 +32,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 文件选择
   selectFiles: () => ipcRenderer.invoke('dialog:selectFiles'),
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
+  scanFolder: (folderPath: string, maxDepth: number) => ipcRenderer.invoke('folder:scan', folderPath, maxDepth),
 
   // 任务管理
   getTasks: () => ipcRenderer.invoke('task:getTasks'),
   addTask: (task: any) => ipcRenderer.invoke('task:addTask', task),
   updateTask: (taskId: string, updates: any) => ipcRenderer.invoke('task:updateTask', taskId, updates),
+  clearTasks: () => ipcRenderer.invoke('task:clear'),
   processTask: (taskId: string, method: string, llmConfigId: string) => ipcRenderer.invoke('task:process', taskId, method, llmConfigId),
+  summarizeTask: (taskId: string, llmConfigId: string) => ipcRenderer.invoke('task:summarize', taskId, llmConfigId),
 
   // LLM 配置管理
   getLLMConfigs: () => ipcRenderer.invoke('llm:getConfigs'),
@@ -49,6 +52,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: Electron.IpcRendererEvent, taskId: string, progress: number) => callback(taskId, progress)
     ipcRenderer.on('task:progress', handler)
     return () => ipcRenderer.removeListener('task:progress', handler)
+  },
+  onSummaryProgress: (callback: (taskId: string, progress: number) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, taskId: string, progress: number) => callback(taskId, progress)
+    ipcRenderer.on('task:summaryProgress', handler)
+    return () => ipcRenderer.removeListener('task:summaryProgress', handler)
   },
 
   // 自动更新
@@ -81,11 +89,14 @@ declare global {
       getTasks: () => Promise<any[]>
       addTask: (task: any) => Promise<any[]>
       updateTask: (taskId: string, updates: any) => Promise<boolean>
-      processTask: (taskId: string, method: string, llmConfigId: string) => Promise<string>
+      clearTasks: () => Promise<boolean>
+      processTask: (taskId: string, method: string, llmConfigId: string) => Promise<{ outputPath: string; transcriptionText: string }>
+      summarizeTask: (taskId: string, llmConfigId: string) => Promise<string>
       getLLMConfigs: () => Promise<any[]>
       saveLLMConfig: (config: any) => Promise<boolean>
       deleteLLMConfig: (id: string) => Promise<boolean>
       onTaskProgress: (callback: (taskId: string, progress: number) => void) => () => void
+      onSummaryProgress: (callback: (taskId: string, progress: number) => void) => () => void
       updateCheck: () => Promise<{ status: string; version?: string; message?: string }>
       updateDownload: () => Promise<{ status: string; message?: string }>
       updateInstall: () => Promise<{ status: string }>

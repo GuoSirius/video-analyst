@@ -1,9 +1,44 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
+import { readdir } from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createTray, setTrayWindow } from './tray'
-import { getTasks, saveTasks, updateTask, processFile, getLLMConfigs, saveLLMConfig, deleteLLMConfig } from './utils/transcription'
+import { getTasks, saveTasks, updateTask, processFile, summarizeTask, getLLMConfigs, saveLLMConfig, deleteLLMConfig } from './utils/transcription'
 import { initAutoUpdater, setupUpdateIPC, checkForUpdates } from './updater'
+
+// 支持的视频格式
+const VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.mkv', '.mp3', '.wav', '.flac', '.m4a']
+
+// 递归扫描文件夹中的视频文件
+async function scanFolder(folderPath: string, maxDepth: number = 3, currentDepth: number = 0): Promise<string[]> {
+  if (currentDepth >= maxDepth) {
+    return []
+  }
+
+  const files: string[] = []
+  
+  try {
+    const entries = await readdir(folderPath, { withFileTypes: true })
+    
+    for (const entry of entries) {
+      const fullPath = join(folderPath, entry.name)
+      
+      if (entry.isFile()) {
+        const ext = entry.name.toLowerCase().substring(entry.name.lastIndexOf('.'))
+        if (VIDEO_EXTENSIONS.includes(ext)) {
+          files.push(fullPath)
+        }
+      } else if (entry.isDirectory()) {
+        const subFiles = await scanFolder(fullPath, maxDepth, currentDepth + 1)
+        files.push(...subFiles)
+      }
+    }
+  } catch (error) {
+    console.error(`Error scanning folder ${folderPath}:`, error)
+  }
+  
+  return files
+}
 
 // 窗口管理：存储所有窗口实例
 const windows = new Map<number, BrowserWindow>()
@@ -176,6 +211,14 @@ function setupWindowIPC(): void {
     return result.filePaths[0] || null
   })
 
+  // 扫描文件夹中的视频文件
+  ipcMain.handle('folder:scan', async (_event, folderPath: string, maxDepth: number) => {
+    console.log(`[Main] Scanning folder: ${folderPath}, maxDepth: ${maxDepth}`)
+    const files = await scanFolder(folderPath, maxDepth)
+    console.log(`[Main] Found ${files.length} video files`)
+    return files
+  })
+
   // 任务管理
   ipcMain.handle('task:getTasks', () => {
     return getTasks()
@@ -193,6 +236,11 @@ function setupWindowIPC(): void {
     return true
   })
 
+  ipcMain.handle('task:clear', () => {
+    saveTasks([])
+    return true
+  })
+
   ipcMain.handle('task:process', async (event, taskId, method, llmConfigId) => {
     const tasks = getTasks()
     const task = tasks.find(t => t.id === taskId)
@@ -205,6 +253,19 @@ function setupWindowIPC(): void {
       const result = await processFile(task, method, llmConfigId, (progress) => {
         // 发送进度更新到渲染进程
         window?.webContents.send('task:progress', taskId, progress)
+      })
+      return result
+    } catch (error) {
+      throw error
+    }
+  })
+
+  // 分析总结任务
+  ipcMain.handle('task:summarize', async (event, taskId, llmConfigId) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    try {
+      const result = await summarizeTask(taskId, llmConfigId, (progress) => {
+        window?.webContents.send('task:summaryProgress', taskId, progress)
       })
       return result
     } catch (error) {
