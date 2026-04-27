@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.3.10](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.9...v1.3.10) (2026-04-27)
+
+
+### Bug Fixes
+
+* 修复构建产物文件匹配 pattern ([6babd6c](https://gitee.com/siriussupreme/video-analyst/commit/6babd6c01907f1c6692f8c224a2729e6076d49bf))
+
 ### [1.3.9](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.8...v1.3.9) (2026-04-26)
 
 
