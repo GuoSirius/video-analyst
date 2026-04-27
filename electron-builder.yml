@@ -19,7 +19,9 @@ win:
     - target: nsis
       arch:
         - x64
-        - ia32
+    - target: portable
+      arch:
+        - x64
 linux:
   icon: resources/icons/icon.png
   target:
