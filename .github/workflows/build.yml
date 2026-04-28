@@ -132,9 +132,9 @@ jobs:
 
           # Generate changelog using git log
           if [ -n "$PREV_TAG" ]; then
-            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s ([%h](https://gitee.com/siriussupreme/video-analyst/commit/%H))" 2>/dev/null | head -50)
+            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s ([%h](https://github.com/GuoSirius/video-analyst/commit/%H))" 2>/dev/null | head -50)
           else
-            CHANGELOG=$(git log --pretty=format:"- %s ([%h](https://gitee.com/siriussupreme/video-analyst/commit/%H))" | head -50)
+            CHANGELOG=$(git log --pretty=format:"- %s ([%h](https://github.com/GuoSirius/video-analyst/commit/%H))" | head -50)
           fi
 
           # Output as multiline string for GitHub Actions
@@ -143,7 +143,7 @@ jobs:
           echo "" >> $GITHUB_OUTPUT
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
-          echo "[Full Changelog](https://gitee.com/siriussupreme/video-analyst/compare/${PREV_TAG:-0.0.0}...${GITHUB_REF_NAME#v})" >> $GITHUB_OUTPUT
+          echo "[Full Changelog](https://github.com/GuoSirius/video-analyst/compare/${PREV_TAG:-0.0.0}...${GITHUB_REF_NAME#v})" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create Release
