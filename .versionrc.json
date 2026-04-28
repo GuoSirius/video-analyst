@@ -1,0 +1,26 @@
+{
+  "packageFiles": [
+    {
+      "filename": "package.json",
+      "type": "json",
+      "updater": "scripts/updater.js"
+    }
+  ],
+  "bumpFiles": [
+    {
+      "filename": "package.json",
+      "type": "json"
+    }
+  ],
+  "releaseAs": "minor",
+  "releaseCommitMessageFormat": "chore(release): {{currentTag}}",
+  "skip": {
+    "changelog": false,
+    "commitMessage": false,
+    "tag": false
+  },
+  "header": "",
+  "commitAll": false,
+  "gitTagFallback": false,
+  "tagPrefix": "v"
+}

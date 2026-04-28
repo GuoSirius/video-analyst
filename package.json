@@ -14,7 +14,6 @@
     "typecheck": "vue-tsc -b",
     "precommit": "npm run lint && npm run typecheck && npx commitlint --edit",
     "release": "node scripts/release.js",
-    "generate-changelog": "node scripts/generate-changelog.js",
     "prepare": "husky",
     "postinstall": "electron-builder install-app-deps"
   },
@@ -60,10 +59,5 @@
   },
   "engines": {
     "node": ">=24.0.0"
-  },
-  "release": {
-    "infile": "CHANGELOG.md",
-    "commitAll": false,
-    "gitTagFallback": false
   }
 }

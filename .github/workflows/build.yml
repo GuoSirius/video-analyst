@@ -12,12 +12,8 @@ concurrency:
 
 env:
   NODE_VERSION: '24'
-  REPO_URL: https://github.com/GuoSirius/video-analyst
 
 jobs:
-  # ============================================================
-  # 构建任务 - 多平台并行构建
-  # ============================================================
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -27,16 +23,16 @@ jobs:
         include:
           - os: windows-latest
             target: --win
-            artifact: windows-installer
+            artifact: windows
           - os: ubuntu-latest
             target: --linux AppImage
-            artifact: linux-appimage
+            artifact: linux
           - os: macos-latest
             target: --mac
-            artifact: macos-dmg
+            artifact: macos
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -44,34 +40,22 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # Linux 系统依赖
-      - name: Install Linux dependencies
+      - name: Install Linux deps
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get update && sudo apt-get install -y \
             libgtk-3-dev libnotify-dev libnss3 libxss1 \
             libasound2t64 libxtst6 libayatana-appindicator3-dev \
             libdrm2 libgbm1 libxshmfence1 fakeroot rpm
 
-      # 安装依赖
       - name: Install dependencies
         run: npm install --ignore-scripts
 
-      - name: Install native dependencies
-        run: npx electron-builder install-app-deps
+      - name: Build
+        run: |
+          npm run build
+          npx electron-builder ${{ matrix.target }} --publish never
 
-      # 构建
-      - name: Build application
-        env:
-          NODE_ENV: production
-        run: npm run build
-
-      # 打包
-      - name: Package installers
-        run: npx electron-builder ${{ matrix.target }} --publish never
-
-      # 上传构建产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -81,108 +65,112 @@ jobs:
             dist/**/*.AppImage
             dist/**/*.dmg
             dist/*-mac.zip
-            dist/*.tar.gz
           if-no-files-found: warn
 
-  # ============================================================
-  # 发布任务 - 仅在 tag 推送时执行
-  # ============================================================
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-
     permissions:
       contents: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      # ============================================================
-      # 生成 Release Notes - 仅包含当前版本的所有提交
-      # ============================================================
       - name: Generate Release Notes
         id: release-notes
         run: |
-          set -e
+          set -euo pipefail
+          shopt -s lastpipe
 
-          # 当前版本号（去除 v 前缀）
           CURRENT_TAG="${GITHUB_REF#refs/tags/v}"
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
 
-          echo "Current: $CURRENT_TAG"
-          echo "Previous: $PREV_TAG"
-
-          # 获取当前版本的所有提交（排除 chore(release): X.X.X 格式的版本发布提交）
+          # 获取当前版本所有提交（排除版本发布提交）
           if [ -n "$PREV_TAG" ]; then
-            ALL_COMMITS=$(git log ${PREV_TAG}..HEAD^ --pretty=format:"%s|%h")
+            RANGE="${PREV_TAG}..HEAD^"
           else
-            ALL_COMMITS=$(git log --pretty=format:"%s|%h")
+            RANGE="HEAD"
           fi
 
-          # 过滤掉版本发布提交，只保留功能改动
-          COMMITS=""
-          while IFS='|' read -r subject hash; do
-            [ -z "$subject" ] && continue
-            # 排除 chore(release): X.X.X 格式的提交
-            if [[ "$subject" =~ ^chore\(release\):\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              continue
-            fi
-            COMMITS+="${subject}|${hash}"$'\n'
-          done <<< "$ALL_COMMITS"
+          git log $RANGE --format="%s|%h" 2>/dev/null | \
+            grep -v "^chore(release):" | \
+            while IFS='|' read -r subject hash; do
+              [ -z "$subject" ] && continue
+              echo "${subject}|${hash}"
+            done | \
+          {
+            IFS= read -rd '' COMMITS || true
+            echo "COMMITS<<EOF"
+            echo "${COMMITS:-}"
+            echo "EOF"
+          }
+
+          # 输出版本信息
+          echo "CURRENT_TAG=$CURRENT_TAG"
+          echo "PREV_TAG=${PREV_TAG:-0.0.0}"
+
+      - name: Generate Release Notes (Categorized)
+        id: release-body
+        run: |
+          set -euo pipefail
+
+          CURRENT_TAG="${{ steps.release-notes.outputs.CURRENT_TAG }}"
+          PREV_TAG="${{ steps.release-notes.outputs.PREV_TAG }}"
+          COMMITS="${{ steps.release-notes.outputs.COMMITS }}"
+
+          REPO_URL="https://github.com/GuoSirius/video-analyst"
 
           # 初始化分组
           declare -A groups
           groups[feat]=""; groups[fix]=""; groups[perf]=""
-          groups[refactor]=""; groups[docs]=""; groups[build]=""
-          groups[ci]=""; groups[chore]=""; groups[other]=""
+          groups[refactor]=""; groups[docs]=""; groups[style]=""
+          groups[test]=""; groups[build]=""; groups[ci]=""
+          groups[chore]=""; groups[other]=""
 
           # 按类型分类提交
           while IFS='|' read -r subject hash; do
             [ -z "$subject" ] && continue
-            commit_url="[${hash}](${REPO_URL}/commit/${hash})"
+            commit_url="[\`${hash}\`](${REPO_URL}/commit/${hash})"
+            desc="${subject#*:* }"
 
             if [[ "$subject" =~ ^feat(\(.+\))?: ]]; then
-              desc="${subject#feat*:* }"
               groups[feat]+="- ${desc} ${commit_url}\n"
             elif [[ "$subject" =~ ^fix(\(.+\))?: ]]; then
-              desc="${subject#fix*:* }"
               groups[fix]+="- ${desc} ${commit_url}\n"
             elif [[ "$subject" =~ ^perf(\(.+\))?: ]]; then
-              desc="${subject#perf*:* }"
               groups[perf]+="- ${desc} ${commit_url}\n"
             elif [[ "$subject" =~ ^refactor(\(.+\))?: ]]; then
-              desc="${subject#refactor*:* }"
               groups[refactor]+="- ${desc} ${commit_url}\n"
             elif [[ "$subject" =~ ^docs(\(.+\))?: ]]; then
-              desc="${subject#docs*:* }"
               groups[docs]+="- ${desc} ${commit_url}\n"
+            elif [[ "$subject" =~ ^style(\(.+\))?: ]]; then
+              groups[style]+="- ${desc} ${commit_url}\n"
+            elif [[ "$subject" =~ ^test(\(.+\))?: ]]; then
+              groups[test]+="- ${desc} ${commit_url}\n"
             elif [[ "$subject" =~ ^build(\(.+\))?: ]]; then
-              desc="${subject#build*:* }"
               groups[build]+="- ${desc} ${commit_url}\n"
             elif [[ "$subject" =~ ^ci(\(.+\))?: ]]; then
-              desc="${subject#ci*:* }"
               groups[ci]+="- ${desc} ${commit_url}\n"
             elif [[ "$subject" =~ ^chore(\(.+\))?: ]]; then
-              desc="${subject#chore*:* }"
               groups[chore]+="- ${desc} ${commit_url}\n"
             else
               groups[other]+="- ${subject} ${commit_url}\n"
             fi
-          done <<< "$COMMITS"
+          done <<< "${COMMITS:-}"
 
           # 构建 Release Notes
           CHANGELOG="## What's Changed\n\n"
 
           add_section() {
-            local key=$1; local title=$2
+            local key="$1"; local title="$2"
             [ -n "${groups[$key]}" ] && CHANGELOG+="### ${title}\n\n${groups[$key]}\n"
           }
 
@@ -191,20 +179,26 @@ jobs:
           add_section "perf" "⚡ Performance"
           add_section "refactor" "🔄 Refactoring"
           add_section "docs" "📝 Documentation"
+          add_section "style" "💄 Styles"
+          add_section "test" "🧪 Tests"
           add_section "build" "📦 Build System"
           add_section "ci" "🔧 CI/CD"
           add_section "chore" "🔧 Chores"
-          add_section "other" "📋 Other"
+          add_section "other" "📋 Other Changes"
 
-          # 无内容时提示
-          if [ "${groups[feat]}${groups[fix]}${groups[perf]}${groups[refactor]}${groups[docs]}${groups[build]}${groups[ci]}${groups[chore]}${groups[other]}" == "" ]; then
+          # 检查是否有内容
+          all_content=""
+          for key in feat fix perf refactor docs style test build ci chore other; do
+            all_content+="${groups[$key]}"
+          done
+
+          if [ -z "$all_content" ]; then
             CHANGELOG+="- No functional changes in this release\n"
           fi
 
-          CHANGELOG+="\n---\n\n**Full Changelog**: ${REPO_URL}/compare/${PREV_TAG:-0.0.0}...${CURRENT_TAG}"
+          CHANGELOG+="\n---\n\n**Full Changelog**: ${REPO_URL}/compare/${PREV_TAG}...v${CURRENT_TAG}"
 
-          # 输出到 GitHub Actions
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "body<<EOF" >> $GITHUB_OUTPUT
           echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
@@ -212,14 +206,12 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-          body: ${{ steps.release-notes.outputs.changelog }}
+          name: Release ${{ github.ref_name }}
+          body: ${{ steps.release-body.outputs.body }}
           files: |
-            artifacts/windows-installer/**/*.exe
-            artifacts/linux-appimage/*.AppImage
-            artifacts/macos-dmg/*.dmg
-            artifacts/macos-dmg/*-mac.zip
+            artifacts/windows/**/*.exe
+            artifacts/linux/*.AppImage
+            artifacts/macos/*.dmg
+            artifacts/macos/*-mac.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

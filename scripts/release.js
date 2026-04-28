@@ -11,6 +11,8 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const REPO_URL = 'https://github.com/GuoSirius/video-analyst';
+
 const run = (cmd, options = {}) => {
   console.log(`\n▶ ${cmd}`);
   try {
@@ -29,6 +31,22 @@ const RELEASE_TYPES = [
   { value: 'minor', label: 'minor', desc: '次版本 (新功能)' },
   { value: 'major', label: 'major', desc: '主版本 (破坏性变更)' },
 ];
+
+const SECTION_TITLES = {
+  feat: 'Features',
+  fix: 'Bug Fixes',
+  perf: 'Performance Improvements',
+  refactor: 'Code Refactoring',
+  docs: 'Documentation',
+  style: 'Styles',
+  test: 'Tests',
+  build: 'Build System',
+  ci: 'Continuous Integration',
+  chore: 'Other Changes',
+  other: 'Other Changes'
+};
+
+const SECTION_ORDER = ['feat', 'fix', 'perf', 'refactor', 'docs', 'style', 'test', 'build', 'ci', 'chore', 'other'];
 
 function selectReleaseType() {
   console.log('\n请选择发布类型:');
@@ -64,6 +82,142 @@ function askQuestion(question) {
       });
     });
   });
+}
+
+/**
+ * 按类型分类提交
+ */
+function categorizeCommits(commits) {
+  const groups = {
+    feat: [], fix: [], perf: [], refactor: [],
+    docs: [], style: [], test: [], build: [],
+    ci: [], chore: [], other: []
+  };
+
+  for (const c of commits) {
+    const [msg, hash] = c.split('|');
+    const url = `[${hash}](${REPO_URL}/commit/${hash})`;
+
+    let type, desc;
+    if (/^feat(\(.+\))?:/.test(msg)) {
+      type = 'feat'; desc = msg.replace(/^feat(\(.+\))?:\s*/, '');
+    } else if (/^fix(\(.+\))?:/.test(msg)) {
+      type = 'fix'; desc = msg.replace(/^fix(\(.+\))?:\s*/, '');
+    } else if (/^perf(\(.+\))?:/.test(msg)) {
+      type = 'perf'; desc = msg.replace(/^perf(\(.+\))?:\s*/, '');
+    } else if (/^refactor(\(.+\))?:/.test(msg)) {
+      type = 'refactor'; desc = msg.replace(/^refactor(\(.+\))?:\s*/, '');
+    } else if (/^docs(\(.+\))?:/.test(msg)) {
+      type = 'docs'; desc = msg.replace(/^docs(\(.+\))?:\s*/, '');
+    } else if (/^style(\(.+\))?:/.test(msg)) {
+      type = 'style'; desc = msg.replace(/^style(\(.+\))?:\s*/, '');
+    } else if (/^test(\(.+\))?:/.test(msg)) {
+      type = 'test'; desc = msg.replace(/^test(\(.+\))?:\s*/, '');
+    } else if (/^build(\(.+\))?:/.test(msg)) {
+      type = 'build'; desc = msg.replace(/^build(\(.+\))?:\s*/, '');
+    } else if (/^ci(\(.+\))?:/.test(msg)) {
+      type = 'ci'; desc = msg.replace(/^ci(\(.+\))?:\s*/, '');
+    } else if (/^chore(\(.+\))?:/.test(msg)) {
+      type = 'chore'; desc = msg.replace(/^chore(\(.+\))?:\s*/, '');
+    } else {
+      type = 'other'; desc = msg;
+    }
+
+    groups[type].push(`- ${desc} ${url}`);
+  }
+
+  return groups;
+}
+
+/**
+ * 生成版本块
+ */
+function generateVersionBlock(version, prevVersion, commits) {
+  const groups = categorizeCommits(commits);
+
+  let block = `### [${version}](${REPO_URL}/compare/v${prevVersion}...v${version})\n\n`;
+
+  let hasContent = false;
+  for (const type of SECTION_ORDER) {
+    if (groups[type] && groups[type].length > 0) {
+      block += `\n### ${SECTION_TITLES[type]}\n\n`;
+      block += groups[type].join('\n') + '\n';
+      hasContent = true;
+    }
+  }
+
+  if (!hasContent) {
+    block += '- No functional changes in this release\n';
+  }
+
+  return block + '\n';
+}
+
+/**
+ * 获取所有标签
+ */
+function getTags() {
+  try {
+    const tags = execSync('git tag -l "v*" --sort=-v:refname', { encoding: 'utf-8' })
+      .trim()
+      .split('\n')
+      .filter(t => t);
+    return tags.map(t => t.replace('v', ''));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 获取版本间的所有提交
+ */
+function getCommits(fromTag, toTag) {
+  const range = fromTag ? `v${fromTag}..v${toTag}` : `v${toTag}`;
+  try {
+    const commits = execSync(`git log ${range} --format="%s|%h"`, { encoding: 'utf-8' })
+      .trim()
+      .split('\n')
+      .filter(c => c);
+
+    // 过滤掉版本发布提交
+    return commits.filter(c => {
+      const [msg] = c.split('|');
+      return !/^chore\(release\):\s*\d+\.\d+\.\d+$/.test(msg);
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 生成完整的 CHANGELOG
+ */
+function generateFullChangelog() {
+  const tags = getTags();
+  if (tags.length === 0) {
+    console.log('No tags found');
+    return;
+  }
+
+  let changelog = `# Changelog
+
+All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
+
+`;
+
+  for (let i = 0; i < tags.length; i++) {
+    const version = tags[i];
+    const prevVersion = i < tags.length - 1 ? tags[i + 1] : null;
+    const commits = getCommits(prevVersion, version);
+
+    changelog += generateVersionBlock(version, prevVersion || '0.0.0', commits);
+  }
+
+  const changelogPath = path.join(__dirname, '..', 'CHANGELOG.md');
+  writeFileSync(changelogPath, changelog, 'utf-8');
+  console.log(`✓ CHANGELOG generated successfully with ${tags.length} versions`);
+
+  return changelog;
 }
 
 async function main() {
@@ -144,10 +298,11 @@ async function main() {
     process.exit(0);
   }
 
-  // 9. 生成当前版本的发布说明
-  const releaseNotes = generateReleaseNotes(currentVersion, newVersion);
+  // 9. 生成完整的 CHANGELOG（所有版本）
+  console.log('\n📝 生成完整 CHANGELOG...');
+  generateFullChangelog();
 
-  // 10. 运行 standard-version（更新版本、CHANGELOG、打 tag）
+  // 10. 运行 standard-version（更新版本、打 tag）
   console.log('\n🔄 更新版本和 CHANGELOG...');
   if (!run(`npx standard-version --release-as ${releaseType.value}`)) {
     process.exit(1);
@@ -157,10 +312,10 @@ async function main() {
   const newTag = `v${newVersion}`;
   console.log(`\n🏷️  新标签: ${newTag}`);
 
-  // 12. 写入 GitHub Release 说明
-  const releaseNotesPath = path.join(__dirname, '..', 'RELEASE_NOTES.md');
-  writeFileSync(releaseNotesPath, releaseNotes, 'utf-8');
-  run('git add RELEASE_NOTES.md');
+  // 12. 重新生成 CHANGELOG（确保包含最新版本）
+  console.log('\n📝 重新生成 CHANGELOG...');
+  generateFullChangelog();
+  run('git add CHANGELOG.md');
   run(`git commit --amend --no-edit`);
   run(`git tag -d ${newTag}`);
   run(`git tag ${newTag}`);
@@ -175,12 +330,6 @@ async function main() {
   if (!run('git push github main')) process.exit(1);
   if (!run('git push github --tags')) process.exit(1);
 
-  // 15. 清理临时文件
-  if (existsSync(releaseNotesPath)) {
-    const { unlinkSync } = await import('fs');
-    unlinkSync(releaseNotesPath);
-  }
-
   console.log('\n╔════════════════════════════════════════════════════════════╗');
   console.log('║            ✅ 发布完成!                                    ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
@@ -188,106 +337,6 @@ async function main() {
   console.log('  标签: ' + newTag);
   console.log('  远程: origin (gitee), github');
   console.log('\n📌 GitHub Actions 将自动构建并发布安装包');
-}
-
-/**
- * 规范化提交信息 - 处理换行符，将 \r\n 或 \n 转换为多行
- */
-function normalizeCommitMessage(message) {
-  return message
-    .replace(/\r\n/g, '\n')  // 将 \r\n 统一为 \n
-    .replace(/\n{3,}/g, '\n\n'); // 压缩连续3个以上换行为两个
-}
-
-/**
- * 生成 GitHub Release 发布说明（仅包含当前版本提交）
- */
-function generateReleaseNotes(fromTag, toVersion) {
-  try {
-    const rawCommits = exec(`git log --format="%h|%s|%b" v${fromTag}..HEAD`)
-      .split('\n')
-      .filter(line => line.trim());
-
-    if (rawCommits.length === 0) {
-      return `# ${toVersion}\n\n暂无更新内容\n`;
-    }
-
-    // 处理每一行，可能包含换行符的提交信息
-    const commits = [];
-    let currentCommit = null;
-
-    rawCommits.forEach((line) => {
-      const parts = line.split('|');
-      if (parts.length >= 2 && parts[0].match(/^[a-f0-9]{7,}$/)) {
-        // 这是一个新的提交行
-        if (currentCommit) {
-          commits.push(currentCommit);
-        }
-        const [, hash, subject, ...rest] = parts;
-        // 规范化换行符
-        const body = rest.length > 0 ? normalizeCommitMessage(rest.join('|')) : '';
-        currentCommit = {
-          hash,
-          subject: normalizeCommitMessage(subject),
-          body
-        };
-      } else if (currentCommit && line.trim()) {
-        // 这是前一个提交的 body 内容（换行部分）
-        currentCommit.body += '\n' + normalizeCommitMessage(line);
-      }
-    });
-
-    if (currentCommit) {
-      commits.push(currentCommit);
-    }
-
-    const typeGroups = {
-      feat: { title: '✨ Features (新功能)', commits: [] },
-      fix: { title: '🐛 Bug Fixes (Bug 修复)', commits: [] },
-      perf: { title: '⚡ Performance Improvements (性能优化)', commits: [] },
-      refactor: { title: '🔄 Code Refactoring (重构)', commits: [] },
-      docs: { title: '📝 Documentation (文档)', commits: [] },
-      style: { title: '💄 Styles (样式)', commits: [] },
-      test: { title: '🧪 Tests (测试)', commits: [] },
-      build: { title: '📦 Build System (构建)', commits: [] },
-      ci: { title: '🔧 CI/CD', commits: [] },
-      chore: { title: '🔧 Chores (其他)', commits: [] },
-    };
-
-    commits.forEach((commit) => {
-      // commit 现在是对象 { hash, subject, body }
-      const { hash, subject, body } = commit;
-
-      const typeMatch = subject.match(/^(\w+)(\(.+\))?:\s*(.+)$/);
-      if (typeMatch) {
-        const [, type, scope, desc] = typeMatch;
-        const scopeStr = scope ? `**${scope}** ` : '';
-        // 如果有 body 内容，需要将换行符转为多行显示
-        const bodyStr = body ? `\n  ${body.split('\n').join('\n  ')}` : '';
-        const formatted = `${scopeStr}${desc} (${hash})${bodyStr}`;
-        if (typeGroups[type]) {
-          typeGroups[type].commits.push(formatted);
-        } else {
-          typeGroups.chore.commits.push(formatted);
-        }
-      } else {
-        typeGroups.chore.commits.push(`${subject} (${hash})`);
-      }
-    });
-
-    const lines = [`# ${toVersion}\n`];
-
-    Object.values(typeGroups).forEach(({ title, commits }) => {
-      if (commits.length > 0) {
-        lines.push(`\n## ${title}\n`);
-        commits.forEach(msg => lines.push(`- ${msg}`));
-      }
-    });
-
-    return lines.join('\n');
-  } catch {
-    return `# ${toVersion}\n\n暂无更新内容\n`;
-  }
 }
 
 main().catch((err) => {
