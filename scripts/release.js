@@ -326,19 +326,19 @@ async function main() {
   run(`git tag -d ${newTag}`);
   run(`git tag ${newTag}`);
 
-  // 10. 推送（提示用户手动执行）
+  // 10. 推送
   console.log('\n【6/6】推送');
-  console.log('请手动执行以下命令推送:');
-  console.log('  git push origin main');
-  console.log('  git push origin --tags');
+  if (!run('git push origin main')) process.exit(1);
+  if (!run('git push origin --tags')) process.exit(1);
+  if (!run('git push github main')) process.exit(1);
+  if (!run('git push github --tags')) process.exit(1);
 
   console.log('\n╔════════════════════════════════════════════════════════════╗');
-  console.log('║            ✅ 发布准备完成!                                ║');
+  console.log('║            ✅ 发布完成!                                    ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
-  console.log(`\n  当前版本: ${currentVersion}`);
-  console.log(`  新版本: ${newPkg.version}`);
+  console.log(`\n  版本: ${newPkg.version}`);
   console.log(`  标签: ${newTag}`);
-  console.log('\n📌 推送后 GitHub Actions 将自动构建并发布安装包');
+  console.log('\n📌 GitHub Actions 将自动构建并发布安装包');
 }
 
 main().catch((err) => {

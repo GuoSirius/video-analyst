@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### [1.3.28](https://github.com/GuoSirius/video-analyst/compare/v1.3.27...v1.3.28)
 
-- No functional changes in this release
+
+### 🐛 Bug Fixes
+
+- releaseAs patch [d5efdf3](https://github.com/GuoSirius/video-analyst/commit/d5efdf3)
+- version [c169a2e](https://github.com/GuoSirius/video-analyst/commit/c169a2e)
 
 ### [1.3.27](https://github.com/GuoSirius/video-analyst/compare/v1.3.26...v1.3.27)
 
