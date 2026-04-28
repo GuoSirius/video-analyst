@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.3.16](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.15...v1.3.16) (2026-04-28)
+
+
+### Bug Fixes
+
+* **ci:** 删除 .npmrc 使用官方镜像避免 dmg-builder 下载失败 ([adcd8ec](https://gitee.com/siriussupreme/video-analyst/commit/adcd8ecc7c1456731c8e30534841d40a3ff42f4e))
+
 ### [1.3.15](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.14...v1.3.15) (2026-04-28)
 
 
