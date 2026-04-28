@@ -2,6 +2,8 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.3.13](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.12...v1.3.13) (2026-04-28)
+
 ### [1.3.12](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.11...v1.3.12) (2026-04-27)
 
 
