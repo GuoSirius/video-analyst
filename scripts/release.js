@@ -295,7 +295,15 @@ async function main() {
 
   // 7. 更新版本和创建 tag
   console.log('\n【4/6】更新 package.json 和创建 tag');
-  if (!run(`npx standard-version --release-as ${releaseType.value} --skip-changelog`)) {
+  try {
+    const standardVersion = await import('standard-version');
+    await standardVersion.default({
+      releaseAs: releaseType.value,
+      skip: { changelog: true }
+    });
+    console.log('✓ 版本更新完成');
+  } catch (e) {
+    console.error('✗ 版本更新失败:', e.message);
     process.exit(1);
   }
 
