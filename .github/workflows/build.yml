@@ -10,93 +10,72 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  NODE_VERSION: '24'
+  REPO_URL: https://github.com/GuoSirius/video-analyst
+
 jobs:
+  # ============================================================
+  # 构建任务 - 多平台并行构建
+  # ============================================================
   build:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            build_cmd: --win
-            artifact_name: windows-installer
+            target: --win
+            artifact: windows-installer
           - os: ubuntu-latest
-            build_cmd: --linux AppImage
-            artifact_name: linux-appimage
+            target: --linux AppImage
+            artifact: linux-appimage
           - os: macos-latest
-            build_cmd: --mac
-            artifact_name: macos-dmg
-
-    runs-on: ${{ matrix.os }}
+            target: --mac
+            artifact: macos-dmg
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: ${{ env.NODE_VERSION }}
 
+      # Linux 系统依赖
       - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev \
-            libnotify-dev \
-            libnss3 \
-            libxss1 \
-            libasound2t64 \
-            libxtst6 \
-            libayatana-appindicator3-dev \
-            libdrm2 \
-            libgbm1 \
-            libxshmfence1 \
-            fakeroot \
-            rpm
+            libgtk-3-dev libnotify-dev libnss3 libxss1 \
+            libasound2t64 libxtst6 libayatana-appindicator3-dev \
+            libdrm2 libgbm1 libxshmfence1 fakeroot rpm
 
+      # 安装依赖
       - name: Install dependencies
-        run: |
-          echo "=== npm install (skip postinstall) ===" && npm install --ignore-scripts
+        run: npm install --ignore-scripts
 
-      - name: Install native deps
+      - name: Install native dependencies
         run: npx electron-builder install-app-deps
 
-      - name: Build
+      # 构建
+      - name: Build application
         env:
           NODE_ENV: production
         run: npm run build
 
-      - name: Build installers (macOS)
-        if: matrix.os == 'macos-latest'
-        # env:
-        #   # CI 环境使用官方 electron-builder 镜像，避免 npmmirror 缺失文件
-        #   ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
-        #   ELECTRON_BUILDER_BINARY_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
-        run: npx electron-builder ${{ matrix.build_cmd }} --publish never
+      # 打包
+      - name: Package installers
+        run: npx electron-builder ${{ matrix.target }} --publish never
 
-      - name: Build installers (others)
-        if: matrix.os != 'macos-latest'
-        run: npx electron-builder ${{ matrix.build_cmd }} --publish never
-
-      - name: Debug - Artifacts (Unix)
-        if: matrix.os != 'windows-latest'
-        run: |
-          echo "=== dist folder ===" && ls -la dist/ 2>&1 || echo "dist not found"
-          echo "=== dist-electron folder ===" && ls -la dist-electron/ 2>&1 || echo "dist-electron not found"
-
-      - name: Debug - Artifacts (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          echo "=== dist folder ===" && Get-ChildItem dist/ -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-          echo "=== dist-electron folder ===" && Get-ChildItem dist-electron/ -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-
+      # 上传构建产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: ${{ matrix.artifact }}
           path: |
             dist/**/*.exe
             dist/**/*.AppImage
@@ -105,7 +84,11 @@ jobs:
             dist/*.tar.gz
           if-no-files-found: warn
 
+  # ============================================================
+  # 发布任务 - 仅在 tag 推送时执行
+  # ============================================================
   release:
+    name: Create Release
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -114,49 +97,47 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: List artifacts
-        shell: bash
-        run: ls -laR artifacts/
-
+      # ============================================================
+      # 生成 Release Notes - 仅包含当前版本的所有提交
+      # ============================================================
       - name: Generate Release Notes
         id: release-notes
         run: |
-          # Get the previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          echo "Previous tag: $PREV_TAG"
-          CURRENT_TAG="${{ github.ref_name }}"
-          REPO_URL="https://github.com/GuoSirius/video-analyst"
+          set -e
 
-          # Generate changelog - exclude chore(release) commits, show only commits in this version
+          # 当前版本号（去除 v 前缀）
+          CURRENT_TAG="${GITHUB_REF#refs/tags/v}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          echo "Current: $CURRENT_TAG"
+          echo "Previous: $PREV_TAG"
+
+          # 获取当前版本的所有提交（排除 chore(release)）
           if [ -n "$PREV_TAG" ]; then
-            # Get commits between PREV_TAG and the commit before CURRENT_TAG (to exclude the release commit)
-            COMMITS=$(git log ${PREV_TAG}..HEAD^ --pretty=format:"%s|%h" --invert-grep --grep="chore(release)" 2>/dev/null)
+            COMMITS=$(git log ${PREV_TAG}..HEAD^ --pretty=format:"%s|%h" --invert-grep --grep="chore(release)")
           else
-            COMMITS=$(git log --pretty=format:"%s|%h" --invert-grep --grep="chore(release)" 2>/dev/null)
+            COMMITS=$(git log --pretty=format:"%s|%h" --invert-grep --grep="chore(release)")
           fi
 
-          # Initialize type groups
+          # 初始化分组
           declare -A groups
-          groups[feat]=""
-          groups[fix]=""
-          groups[perf]=""
-          groups[refactor]=""
-          groups[docs]=""
-          groups[build]=""
-          groups[ci]=""
-          groups[chore]=""
-          groups[other]=""
+          groups[feat]=""; groups[fix]=""; groups[perf]=""
+          groups[refactor]=""; groups[docs]=""; groups[build]=""
+          groups[ci]=""; groups[chore]=""; groups[other]=""
 
-          # Parse commits and group by type
+          # 按类型分类提交
           while IFS='|' read -r subject hash; do
             [ -z "$subject" ] && continue
             commit_url="[${hash}](${REPO_URL}/commit/${hash})"
-            
+
             if [[ "$subject" =~ ^feat(\(.+\))?: ]]; then
               desc="${subject#feat*:* }"
               groups[feat]+="- ${desc} ${commit_url}\n"
@@ -186,42 +167,37 @@ jobs:
             fi
           done <<< "$COMMITS"
 
-          # Build changelog
+          # 构建 Release Notes
           CHANGELOG="## What's Changed\n\n"
 
-          # Helper function to add section
           add_section() {
-            local key=$1
-            local title=$2
-            if [ -n "${groups[$key]}" ]; then
-              CHANGELOG+="### ${title}\n\n"
-              CHANGELOG+="${groups[$key]}\n"
-            fi
+            local key=$1; local title=$2
+            [ -n "${groups[$key]}" ] && CHANGELOG+="### ${title}\n\n${groups[$key]}\n"
           }
 
-          add_section "feat" "✨ Features (新功能)"
-          add_section "fix" "🐛 Bug Fixes (Bug 修复)"
-          add_section "perf" "⚡ Performance Improvements (性能优化)"
-          add_section "refactor" "🔄 Code Refactoring (重构)"
-          add_section "docs" "📝 Documentation (文档)"
-          add_section "build" "📦 Build System (构建)"
+          add_section "feat" "✨ Features"
+          add_section "fix" "🐛 Bug Fixes"
+          add_section "perf" "⚡ Performance"
+          add_section "refactor" "🔄 Refactoring"
+          add_section "docs" "📝 Documentation"
+          add_section "build" "📦 Build System"
           add_section "ci" "🔧 CI/CD"
-          add_section "chore" "🔧 Chores (其他更新)"
-          add_section "other" "📋 Other Changes"
+          add_section "chore" "🔧 Chores"
+          add_section "other" "📋 Other"
 
-          # Check if there's any content
+          # 无内容时提示
           if [ "${groups[feat]}${groups[fix]}${groups[perf]}${groups[refactor]}${groups[docs]}${groups[build]}${groups[ci]}${groups[chore]}${groups[other]}" == "" ]; then
             CHANGELOG+="- No functional changes in this release\n"
           fi
 
-          CHANGELOG+="\n---\n\n**Full Changelog**: ${REPO_URL}/compare/${PREV_TAG:-0.0.0}...${CURRENT_TAG#v}"
+          CHANGELOG+="\n---\n\n**Full Changelog**: ${REPO_URL}/compare/${PREV_TAG:-0.0.0}...${CURRENT_TAG}"
 
-          # Output as multiline string for GitHub Actions
+          # 输出到 GitHub Actions
           echo "changelog<<EOF" >> $GITHUB_OUTPUT
           echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
