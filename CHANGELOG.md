@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.3.15](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.14...v1.3.15) (2026-04-28)
+
+
+### Bug Fixes
+
+* **ci:** 修复 macOS arm64 构建使用官方 electron-builder 镜像 ([51cdd3e](https://gitee.com/siriussupreme/video-analyst/commit/51cdd3e9cc10d2f60f58e67885263966b6b116bc))
+
 ### [1.3.14](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.13...v1.3.14) (2026-04-28)
 
 ### [1.3.13](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.12...v1.3.13) (2026-04-28)
