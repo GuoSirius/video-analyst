@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.3.17](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.16...v1.3.17) (2026-04-28)
+
+
+### Bug Fixes
+
+* macOS build use official electron mirror ([c31a8f7](https://gitee.com/siriussupreme/video-analyst/commit/c31a8f76907d401cda2019531dabc9102dd46666))
+
 ### [1.3.16](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.15...v1.3.16) (2026-04-28)
 
 
