@@ -2,13 +2,18 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-### [1.3.28](https://github.com/GuoSirius/video-analyst/compare/v1.3.27...v1.3.28)
+### [1.3.29](https://github.com/GuoSirius/video-analyst/compare/v1.3.27...v1.3.29)
 
 
 ### 🐛 Bug Fixes
 
+- 确认后自动推送 [359db0f](https://github.com/GuoSirius/video-analyst/commit/359db0f)
 - releaseAs patch [d5efdf3](https://github.com/GuoSirius/video-analyst/commit/d5efdf3)
 - version [c169a2e](https://github.com/GuoSirius/video-analyst/commit/c169a2e)
+
+### 🔄 Refactoring
+
+- 优化发布流程 [1f79173](https://github.com/GuoSirius/video-analyst/commit/1f79173)
 
 ### [1.3.27](https://github.com/GuoSirius/video-analyst/compare/v1.3.26...v1.3.27)
 
