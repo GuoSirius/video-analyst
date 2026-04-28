@@ -4,8 +4,17 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### [1.3.21](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.20...v1.3.21) (2026-04-28)
 
+
+### Performance Improvements
+
+* optimize changelog ([f7a576d](https://gitee.com/siriussupreme/video-analyst/commit/f7a576d))
+
 ### [1.3.20](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.19...v1.3.20) (2026-04-28)
 
+
+### Chores
+
+* show chore commits in changelog ([29eebf3](https://gitee.com/siriussupreme/video-analyst/commit/29eebf3))
 
 ### Bug Fixes
 
@@ -19,6 +28,11 @@ All notable changes to this project will be documented in this file. See [standa
 * add slash ([be898d9](https://gitee.com/siriussupreme/video-analyst/commit/be898d9fc454e5e308ff16bf027426070aa323da))
 
 ### [1.3.18](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.17...v1.3.18) (2026-04-28)
+
+
+### Performance Improvements
+
+* 优化镜像 ([e279728](https://gitee.com/siriussupreme/video-analyst/commit/e279728))
 
 ### [1.3.17](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.16...v1.3.17) (2026-04-28)
 
@@ -47,7 +61,18 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### [1.3.14](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.13...v1.3.14) (2026-04-28)
 
+
+### Performance Improvements
+
+* 优化package
+* 优化配置 ([12bd4f8](https://gitee.com/siriussupreme/video-analyst/commit/12bd4f8))
+
 ### [1.3.13](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.12...v1.3.13) (2026-04-28)
+
+
+### Performance Improvements
+
+* release ([3307d03](https://gitee.com/siriussupreme/video-analyst/commit/3307d03))
 
 ### [1.3.12](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.11...v1.3.12) (2026-04-27)
 
@@ -55,13 +80,16 @@ All notable changes to this project will be documented in this file. See [standa
 ### Bug Fixes
 
 * 修复 Home.vue 模板结构并完善功能 ([7ae083b](https://gitee.com/siriussupreme/video-analyst/commit/7ae083b72a94f73dacb44335137c9230f6759ec6))
+* 修复 preload 脚本路径和构建配置 ([a3417fa](https://gitee.com/siriussupreme/video-analyst/commit/a3417fa))
 
-### [1.3.10](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.9...v1.3.10) (2026-04-27)
+### [1.3.11](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.10...v1.3.11) (2026-04-27)
 
 
 ### Bug Fixes
 
-* 修复构建产物文件匹配 pattern ([6babd6c](https://gitee.com/siriussupreme/video-analyst/commit/6babd6c01907f1c6692f8c224a2729e6076d49bf))
+* 修复构建产物文件匹配 pattern ([6babd6c](https://gitee.com/siriussupreme/video-analyst/commit/6babd6c))
+
+### [1.3.10](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.9...v1.3.10) (2026-04-27)
 
 ### [1.3.9](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.8...v1.3.9) (2026-04-26)
 
