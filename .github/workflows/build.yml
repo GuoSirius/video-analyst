@@ -58,7 +58,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          echo "=== Remove .npmrc to use official mirrors in CI ===" && rm -f .npmrc
           echo "=== npm install (skip postinstall) ===" && npm install --ignore-scripts
 
       - name: Install native deps
@@ -69,10 +68,16 @@ jobs:
           NODE_ENV: production
         run: npm run build
 
-      - name: Build installers
+      - name: Build installers (macOS)
+        if: matrix.os == 'macos-latest'
         env:
           # CI 环境使用官方 electron-builder 镜像，避免 npmmirror 缺失文件
+          ELECTRON_MIRROR: https://cdn.electron.build/
           ELECTRON_BUILDER_BINARY_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download
+        run: npx electron-builder ${{ matrix.build_cmd }} --publish never
+
+      - name: Build installers (others)
+        if: matrix.os != 'macos-latest'
         run: npx electron-builder ${{ matrix.build_cmd }} --publish never
 
       - name: Debug - Artifacts (Unix)
