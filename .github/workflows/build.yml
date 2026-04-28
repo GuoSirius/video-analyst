@@ -120,12 +120,23 @@ jobs:
           echo "Current: $CURRENT_TAG"
           echo "Previous: $PREV_TAG"
 
-          # 获取当前版本的所有提交（排除 chore(release)）
+          # 获取当前版本的所有提交（排除 chore(release): X.X.X 格式的版本发布提交）
           if [ -n "$PREV_TAG" ]; then
-            COMMITS=$(git log ${PREV_TAG}..HEAD^ --pretty=format:"%s|%h" --invert-grep --grep="chore(release)")
+            ALL_COMMITS=$(git log ${PREV_TAG}..HEAD^ --pretty=format:"%s|%h")
           else
-            COMMITS=$(git log --pretty=format:"%s|%h" --invert-grep --grep="chore(release)")
+            ALL_COMMITS=$(git log --pretty=format:"%s|%h")
           fi
+
+          # 过滤掉版本发布提交，只保留功能改动
+          COMMITS=""
+          while IFS='|' read -r subject hash; do
+            [ -z "$subject" ] && continue
+            # 排除 chore(release): X.X.X 格式的提交
+            if [[ "$subject" =~ ^chore\(release\):\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              continue
+            fi
+            COMMITS+="${subject}|${hash}"$'\n'
+          done <<< "$ALL_COMMITS"
 
           # 初始化分组
           declare -A groups
