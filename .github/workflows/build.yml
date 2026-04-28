@@ -84,117 +84,102 @@ jobs:
         with:
           path: artifacts
 
-      - name: Generate Release Notes
-        id: release-notes
+      - name: Get version range
+        id: version-info
         run: |
           set -euo pipefail
-          shopt -s lastpipe
 
           CURRENT_TAG="${GITHUB_REF#refs/tags/v}"
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_OUTPUT
+
+          # 获取上一个 tag（排除当前版本）
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+          echo "PREV_TAG=${PREV_TAG:-0.0.0}" >> $GITHUB_OUTPUT
 
           # 获取当前版本所有提交（排除版本发布提交）
           if [ -n "$PREV_TAG" ]; then
-            RANGE="${PREV_TAG}..HEAD^"
+            RANGE="${PREV_TAG}..HEAD"
           else
             RANGE="HEAD"
           fi
-
-          git log $RANGE --format="%s|%h" 2>/dev/null | \
-            grep -v "^chore(release):" | \
-            while IFS='|' read -r subject hash; do
-              [ -z "$subject" ] && continue
-              echo "${subject}|${hash}"
-            done | \
-          {
-            IFS= read -rd '' COMMITS || true
-            echo "COMMITS<<EOF"
-            echo "${COMMITS:-}"
-            echo "EOF"
-          }
-
-          # 输出版本信息
-          echo "CURRENT_TAG=$CURRENT_TAG"
-          echo "PREV_TAG=${PREV_TAG:-0.0.0}"
+          echo "RANGE=$RANGE" >> $GITHUB_OUTPUT
 
       - name: Generate Release Notes (Categorized)
         id: release-body
         run: |
           set -euo pipefail
+          shopt -s extglob
 
-          CURRENT_TAG="${{ steps.release-notes.outputs.CURRENT_TAG }}"
-          PREV_TAG="${{ steps.release-notes.outputs.PREV_TAG }}"
-          COMMITS="${{ steps.release-notes.outputs.COMMITS }}"
+          CURRENT_TAG="${{ steps.version-info.outputs.CURRENT_TAG }}"
+          PREV_TAG="${{ steps.version-info.outputs.PREV_TAG }}"
+          RANGE="${{ steps.version-info.outputs.RANGE }}"
 
           REPO_URL="https://github.com/GuoSirius/video-analyst"
 
-          # 初始化分组
-          declare -A groups
-          groups[feat]=""; groups[fix]=""; groups[perf]=""
-          groups[refactor]=""; groups[docs]=""; groups[style]=""
-          groups[test]=""; groups[build]=""; groups[ci]=""
-          groups[chore]=""; groups[other]=""
+          # 获取并分类提交
+          FEATS=""; FIXES=""; PERFS=""; REFS=""; DOCS=""
+          STYLES=""; TESTS=""; BUILDS=""; CIS=""; CHORES=""; OTHERS=""
 
-          # 按类型分类提交
           while IFS='|' read -r subject hash; do
             [ -z "$subject" ] && continue
             commit_url="[\`${hash}\`](${REPO_URL}/commit/${hash})"
             desc="${subject#*:* }"
 
-            if [[ "$subject" =~ ^feat(\(.+\))?: ]]; then
-              groups[feat]+="- ${desc} ${commit_url}\n"
-            elif [[ "$subject" =~ ^fix(\(.+\))?: ]]; then
-              groups[fix]+="- ${desc} ${commit_url}\n"
-            elif [[ "$subject" =~ ^perf(\(.+\))?: ]]; then
-              groups[perf]+="- ${desc} ${commit_url}\n"
-            elif [[ "$subject" =~ ^refactor(\(.+\))?: ]]; then
-              groups[refactor]+="- ${desc} ${commit_url}\n"
-            elif [[ "$subject" =~ ^docs(\(.+\))?: ]]; then
-              groups[docs]+="- ${desc} ${commit_url}\n"
-            elif [[ "$subject" =~ ^style(\(.+\))?: ]]; then
-              groups[style]+="- ${desc} ${commit_url}\n"
-            elif [[ "$subject" =~ ^test(\(.+\))?: ]]; then
-              groups[test]+="- ${desc} ${commit_url}\n"
-            elif [[ "$subject" =~ ^build(\(.+\))?: ]]; then
-              groups[build]+="- ${desc} ${commit_url}\n"
-            elif [[ "$subject" =~ ^ci(\(.+\))?: ]]; then
-              groups[ci]+="- ${desc} ${commit_url}\n"
-            elif [[ "$subject" =~ ^chore(\(.+\))?: ]]; then
-              groups[chore]+="- ${desc} ${commit_url}\n"
-            else
-              groups[other]+="- ${subject} ${commit_url}\n"
-            fi
-          done <<< "${COMMITS:-}"
+            case "$subject" in
+              feat\(*\)*|feat:*)
+                FEATS="${FEATS}- ${desc} ${commit_url}\n"
+                ;;
+              fix\(*\)*|fix:*)
+                FIXES="${FIXES}- ${desc} ${commit_url}\n"
+                ;;
+              perf\(*\)*|perf:*)
+                PERFS="${PERFS}- ${desc} ${commit_url}\n"
+                ;;
+              refactor\(*\)*|refactor:*)
+                REFS="${REFS}- ${desc} ${commit_url}\n"
+                ;;
+              docs\(*\)*|docs:*)
+                DOCS="${DOCS}- ${desc} ${commit_url}\n"
+                ;;
+              style\(*\)*|style:*)
+                STYLES="${STYLES}- ${desc} ${commit_url}\n"
+                ;;
+              test\(*\)*|test:*)
+                TESTS="${TESTS}- ${desc} ${commit_url}\n"
+                ;;
+              build\(*\)*|build:*)
+                BUILDS="${BUILDS}- ${desc} ${commit_url}\n"
+                ;;
+              ci\(*\)*|ci:*)
+                CIS="${CIS}- ${desc} ${commit_url}\n"
+                ;;
+              chore\(*\)*|chore:*)
+                CHORES="${CHORES}- ${desc} ${commit_url}\n"
+                ;;
+              *)
+                OTHERS="${OTHERS}- ${subject} ${commit_url}\n"
+                ;;
+            esac
+          done < <(git log $RANGE --format="%s|%h" 2>/dev/null | grep -v "^chore(release):")
 
           # 构建 Release Notes
           CHANGELOG="## What's Changed\n\n"
 
-          add_section() {
-            local key="$1"; local title="$2"
-            [ -n "${groups[$key]}" ] && CHANGELOG+="### ${title}\n\n${groups[$key]}\n"
-          }
-
-          add_section "feat" "✨ Features"
-          add_section "fix" "🐛 Bug Fixes"
-          add_section "perf" "⚡ Performance"
-          add_section "refactor" "🔄 Refactoring"
-          add_section "docs" "📝 Documentation"
-          add_section "style" "💄 Styles"
-          add_section "test" "🧪 Tests"
-          add_section "build" "📦 Build System"
-          add_section "ci" "🔧 CI/CD"
-          add_section "chore" "🔧 Chores"
-          add_section "other" "📋 Other Changes"
+          [ -n "$FEATS" ] && CHANGELOG+="### ✨ Features\n\n${FEATS}"
+          [ -n "$FIXES" ] && CHANGELOG+="### 🐛 Bug Fixes\n\n${FIXES}"
+          [ -n "$PERFS" ] && CHANGELOG+="### ⚡ Performance\n\n${PERFS}"
+          [ -n "$REFS" ] && CHANGELOG+="### 🔄 Refactoring\n\n${REFS}"
+          [ -n "$DOCS" ] && CHANGELOG+="### 📝 Documentation\n\n${DOCS}"
+          [ -n "$STYLES" ] && CHANGELOG+="### 💄 Styles\n\n${STYLES}"
+          [ -n "$TESTS" ] && CHANGELOG+="### 🧪 Tests\n\n${TESTS}"
+          [ -n "$BUILDS" ] && CHANGELOG+="### 📦 Build System\n\n${BUILDS}"
+          [ -n "$CIS" ] && CHANGELOG+="### 🔧 CI/CD\n\n${CIS}"
+          [ -n "$CHORES" ] && CHANGELOG+="### 🔧 Chores\n\n${CHORES}"
+          [ -n "$OTHERS" ] && CHANGELOG+="### 📋 Other Changes\n\n${OTHERS}"
 
           # 检查是否有内容
-          all_content=""
-          for key in feat fix perf refactor docs style test build ci chore other; do
-            all_content+="${groups[$key]}"
-          done
-
-          if [ -z "$all_content" ]; then
-            CHANGELOG+="- No functional changes in this release\n"
-          fi
+          all_content="${FEATS}${FIXES}${PERFS}${REFS}${DOCS}${STYLES}${TESTS}${BUILDS}${CIS}${CHORES}${OTHERS}"
+          [ -z "$all_content" ] && CHANGELOG+="- No functional changes in this release\n"
 
           CHANGELOG+="\n---\n\n**Full Changelog**: ${REPO_URL}/compare/${PREV_TAG}...v${CURRENT_TAG}"
 
