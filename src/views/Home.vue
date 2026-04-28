@@ -19,6 +19,12 @@ const isProcessing = ref(false)
 const selectedTask = ref<Task | null>(null)
 const summarizingTasks = ref<Set<string>>(new Set())
 
+// 复制文本到剪贴板
+async function copyToClipboard(text: string) {
+  await navigator.clipboard.writeText(text)
+  ElMessage.success('已复制到剪贴板')
+}
+
 // 选中任务变化
 watch(selectedTask, async (newTask, oldTask) => {
   if (oldTask) {
@@ -26,7 +32,7 @@ watch(selectedTask, async (newTask, oldTask) => {
   }
   if (newTask) {
     // 监听进度更新
-    window.electronAPI?.onSummaryProgress((taskId, progress) => {
+    window.electronAPI?.onSummaryProgress((taskId: string, progress: number) => {
       if (taskId === newTask.id) {
         console.log('Summary progress:', progress)
       }
@@ -103,7 +109,7 @@ async function processNextTask() {
     const total = taskStore.tasks.length
     const completed = taskStore.completedTasks.length
     const failed = taskStore.failedTasks.length
-    ElMessage.success(`全部处理完成！成功: ${completed}, 失败: ${failed}`)
+    ElMessage.success(`全部处理完成！总计: ${total}, 成功: ${completed}, 失败: ${failed}`)
     return
   }
   
@@ -430,7 +436,7 @@ onMounted(async () => {
           <div class="detail-item" v-if="selectedTask.status === 'completed' && selectedTask.transcriptionText">
             <div class="detail-label-row">
               <label>转录文字</label>
-              <button class="text-copy-btn" @click="() => navigator.clipboard.writeText(selectedTask?.transcriptionText || '')">
+              <button class="text-copy-btn" @click="copyToClipboard(selectedTask?.transcriptionText || '')">
                 <i class="fa-solid fa-copy"></i> 复制
               </button>
             </div>
@@ -456,7 +462,7 @@ onMounted(async () => {
           <div class="detail-item" v-if="selectedTask.summaryText">
             <div class="detail-label-row">
               <label>分析总结</label>
-              <button class="text-copy-btn" @click="() => navigator.clipboard.writeText(selectedTask?.summaryText || '')">
+              <button class="text-copy-btn" @click="copyToClipboard(selectedTask?.summaryText || '')">
                 <i class="fa-solid fa-copy"></i> 复制
               </button>
             </div>

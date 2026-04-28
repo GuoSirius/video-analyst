@@ -27,7 +27,9 @@ export interface ElectronAPI {
   getTasks: () => Promise<any[]>
   addTask: (task: any) => Promise<any[]>
   updateTask: (taskId: string, updates: any) => Promise<boolean>
+  clearTasks: () => Promise<boolean>
   processTask: (taskId: string, method: string, llmConfigId: string) => Promise<string>
+  summarizeTask: (taskId: string, llmConfigId: string) => Promise<string>
 
   // LLM 配置管理
   getLLMConfigs: () => Promise<any[]>
@@ -36,6 +38,7 @@ export interface ElectronAPI {
 
   // 任务进度监听
   onTaskProgress: (callback: (taskId: string, progress: number) => void) => () => void
+  onSummaryProgress: (callback: (taskId: string, progress: number) => void) => () => void
 
   // 自动更新
   updateCheck: () => Promise<{ status: string; version?: string; message?: string }>
