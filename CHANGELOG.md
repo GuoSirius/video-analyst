@@ -2,7 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-### [1.3.29](https://github.com/GuoSirius/video-analyst/compare/v1.3.27...v1.3.29)
+### [1.3.30](https://github.com/GuoSirius/video-analyst/compare/v1.3.29...v1.3.30)
+
+
+### 🐛 Bug Fixes
+
+- 使用 Node.js API 调用 standard-version [719051d](https://github.com/GuoSirius/video-analyst/commit/719051d)
+
+### [1.3.29](https://github.com/GuoSirius/video-analyst/compare/v1.3.28...v1.3.29)
 
 
 ### 🐛 Bug Fixes
@@ -10,10 +17,20 @@ All notable changes to this project will be documented in this file. See [standa
 - 确认后自动推送 [359db0f](https://github.com/GuoSirius/video-analyst/commit/359db0f)
 - releaseAs patch [d5efdf3](https://github.com/GuoSirius/video-analyst/commit/d5efdf3)
 - version [c169a2e](https://github.com/GuoSirius/video-analyst/commit/c169a2e)
+- 修复 GitHub Actions Release Notes 生成逻辑 [3a8699f](https://github.com/GuoSirius/video-analyst/commit/3a8699f)
+- 修复 1.3.27 版本 CHANGELOG，补充缺失的提交记录 [464102b](https://github.com/GuoSirius/video-analyst/commit/464102b)
 
 ### 🔄 Refactoring
 
 - 优化发布流程 [1f79173](https://github.com/GuoSirius/video-analyst/commit/1f79173)
+
+### 📝 Documentation
+
+- 补全 1.3.28 版本 CHANGELOG [398d4d7](https://github.com/GuoSirius/video-analyst/commit/398d4d7)
+
+### [1.3.28](https://github.com/GuoSirius/video-analyst/compare/v1.3.27...v1.3.28)
+
+- No functional changes in this release
 
 ### [1.3.27](https://github.com/GuoSirius/video-analyst/compare/v1.3.26...v1.3.27)
 
