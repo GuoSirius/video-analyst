@@ -72,8 +72,8 @@ jobs:
         if: matrix.os == 'macos-latest'
         env:
           # CI 环境使用官方 electron-builder 镜像，避免 npmmirror 缺失文件
-          ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
-          ELECTRON_BUILDER_BINARY_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+          # ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
+          # ELECTRON_BUILDER_BINARY_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
         run: npx electron-builder ${{ matrix.build_cmd }} --publish never
 
       - name: Build installers (others)
