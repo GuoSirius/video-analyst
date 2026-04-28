@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file. See [standa
 ### [1.3.27](https://github.com/GuoSirius/video-analyst/compare/v1.3.26...v1.3.27)
 
 
+### Code Refactoring
+
+- 优化发布流程和工具配置 [cf58ae9](https://github.com/GuoSirius/video-analyst/commit/cf58ae9)
+
+### CI/CD
+
+- 修复 CHANGELOG 生成逻辑，确保包含所有提交类型 [1e080d4](https://github.com/GuoSirius/video-analyst/commit/1e080d4)
+
 ### Continuous Integration
 
 - 优化工作流结构，移除冗余步骤 [cb05243](https://github.com/GuoSirius/video-analyst/commit/cb05243)
