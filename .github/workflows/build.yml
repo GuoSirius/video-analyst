@@ -129,21 +129,27 @@ jobs:
           # Get the previous tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           echo "Previous tag: $PREV_TAG"
+          CURRENT_TAG="${{ github.ref_name }}"
 
-          # Generate changelog using git log
+          # Generate changelog - exclude chore(release) commits, show only commits in this version
           if [ -n "$PREV_TAG" ]; then
-            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s ([%h](https://github.com/GuoSirius/video-analyst/commit/%H))" 2>/dev/null | head -50)
+            # Get commits between PREV_TAG and the commit before CURRENT_TAG (to exclude the release commit)
+            CHANGELOG=$(git log ${PREV_TAG}..HEAD^ --pretty=format:"- %s ([%h](https://github.com/GuoSirius/video-analyst/commit/%H))" --grep="." --invert-grep --grep="chore(release)" 2>/dev/null | head -50)
+            # If no commits left after filtering (single commit version), show nothing meaningful
+            if [ -z "$CHANGELOG" ]; then
+              CHANGELOG="- No functional changes in this release"
+            fi
           else
             CHANGELOG=$(git log --pretty=format:"- %s ([%h](https://github.com/GuoSirius/video-analyst/commit/%H))" | head -50)
           fi
 
           # Output as multiline string for GitHub Actions
           echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "## Changes since ${PREV_TAG:-initial}" >> $GITHUB_OUTPUT
+          echo "## What's Changed" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
-          echo "[Full Changelog](https://github.com/GuoSirius/video-analyst/compare/${PREV_TAG:-0.0.0}...${GITHUB_REF_NAME#v})" >> $GITHUB_OUTPUT
+          echo "**Full Changelog**: https://github.com/GuoSirius/video-analyst/compare/${PREV_TAG:-0.0.0}...${CURRENT_TAG#v}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create Release
