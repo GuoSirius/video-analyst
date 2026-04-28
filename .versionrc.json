@@ -12,7 +12,7 @@
       "type": "json"
     }
   ],
-  "releaseAs": "minor",
+  "releaseAs": "patch",
   "releaseCommitMessageFormat": "chore(release): {{currentTag}}",
   "skip": {
     "changelog": false,
