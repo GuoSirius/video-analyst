@@ -191,16 +191,54 @@ async function main() {
 }
 
 /**
+ * 规范化提交信息 - 处理换行符，将 \r\n 或 \n 转换为多行
+ */
+function normalizeCommitMessage(message) {
+  return message
+    .replace(/\r\n/g, '\n')  // 将 \r\n 统一为 \n
+    .replace(/\n{3,}/g, '\n\n'); // 压缩连续3个以上换行为两个
+}
+
+/**
  * 生成 GitHub Release 发布说明（仅包含当前版本提交）
  */
 function generateReleaseNotes(fromTag, toVersion) {
   try {
-    const commits = exec(`git log --oneline v${fromTag}..HEAD --format="%h %s"`)
+    const rawCommits = exec(`git log --format="%h|%s|%b" v${fromTag}..HEAD`)
       .split('\n')
       .filter(line => line.trim());
 
-    if (commits.length === 0) {
+    if (rawCommits.length === 0) {
       return `# ${toVersion}\n\n暂无更新内容\n`;
+    }
+
+    // 处理每一行，可能包含换行符的提交信息
+    const commits = [];
+    let currentCommit = null;
+
+    rawCommits.forEach((line) => {
+      const parts = line.split('|');
+      if (parts.length >= 2 && parts[0].match(/^[a-f0-9]{7,}$/)) {
+        // 这是一个新的提交行
+        if (currentCommit) {
+          commits.push(currentCommit);
+        }
+        const [, hash, subject, ...rest] = parts;
+        // 规范化换行符
+        const body = rest.length > 0 ? normalizeCommitMessage(rest.join('|')) : '';
+        currentCommit = {
+          hash,
+          subject: normalizeCommitMessage(subject),
+          body
+        };
+      } else if (currentCommit && line.trim()) {
+        // 这是前一个提交的 body 内容（换行部分）
+        currentCommit.body += '\n' + normalizeCommitMessage(line);
+      }
+    });
+
+    if (currentCommit) {
+      commits.push(currentCommit);
     }
 
     const typeGroups = {
@@ -217,22 +255,23 @@ function generateReleaseNotes(fromTag, toVersion) {
     };
 
     commits.forEach((commit) => {
-      const match = commit.match(/^([a-f0-9]+)\s+(.+)$/);
-      if (!match) return;
-      const [, hash, message] = match;
+      // commit 现在是对象 { hash, subject, body }
+      const { hash, subject, body } = commit;
 
-      const typeMatch = message.match(/^(\w+)(\(.+\))?:\s*(.+)$/);
+      const typeMatch = subject.match(/^(\w+)(\(.+\))?:\s*(.+)$/);
       if (typeMatch) {
         const [, type, scope, desc] = typeMatch;
         const scopeStr = scope ? `**${scope}** ` : '';
-        const formatted = `${scopeStr}${desc} (${hash})`;
+        // 如果有 body 内容，需要将换行符转为多行显示
+        const bodyStr = body ? `\n  ${body.split('\n').join('\n  ')}` : '';
+        const formatted = `${scopeStr}${desc} (${hash})${bodyStr}`;
         if (typeGroups[type]) {
           typeGroups[type].commits.push(formatted);
         } else {
           typeGroups.chore.commits.push(formatted);
         }
       } else {
-        typeGroups.chore.commits.push(`${message} (${hash})`);
+        typeGroups.chore.commits.push(`${subject} (${hash})`);
       }
     });
 
