@@ -4,20 +4,27 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### [1.3.28](https://github.com/GuoSirius/video-analyst/compare/v1.3.27...v1.3.28)
 
+- No functional changes in this release
+
+### [1.3.27](https://github.com/GuoSirius/video-analyst/compare/v1.3.26...v1.3.27)
+
+
+### 🐛 Bug Fixes
+
+- 修复 GitHub Actions Release Notes 生成逻辑 [3a8699f](https://github.com/GuoSirius/video-analyst/commit/3a8699f)
+- 修复 1.3.27 版本 CHANGELOG，补充缺失的提交记录 [464102b](https://github.com/GuoSirius/video-analyst/commit/464102b)
 
 ### 🔄 Refactoring
 
 - 优化发布流程和工具配置 [cf58ae9](https://github.com/GuoSirius/video-analyst/commit/cf58ae9)
 
+### 📝 Documentation
+
+- 补全 1.3.28 版本 CHANGELOG [398d4d7](https://github.com/GuoSirius/video-analyst/commit/398d4d7)
+
 ### 🔧 CI/CD
 
 - 修复 CHANGELOG 生成逻辑，确保包含所有提交类型 [1e080d4](https://github.com/GuoSirius/video-analyst/commit/1e080d4)
-
-### [1.3.27](https://github.com/GuoSirius/video-analyst/compare/v1.3.26...v1.3.27)
-
-
-### 🔧 CI/CD
-
 - 优化工作流结构，移除冗余步骤 [cb05243](https://github.com/GuoSirius/video-analyst/commit/cb05243)
 
 ### [1.3.26](https://github.com/GuoSirius/video-analyst/compare/v1.3.25...v1.3.26)
