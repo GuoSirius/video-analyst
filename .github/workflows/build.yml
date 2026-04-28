@@ -58,6 +58,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          echo "=== Remove .npmrc to use official mirrors in CI ===" && rm -f .npmrc
           echo "=== npm install (skip postinstall) ===" && npm install --ignore-scripts
 
       - name: Install native deps
