@@ -123,6 +123,104 @@ jobs:
         shell: bash
         run: ls -laR artifacts/
 
+      - name: Generate Release Notes
+        id: release-notes
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "Previous tag: $PREV_TAG"
+          CURRENT_TAG="${{ github.ref_name }}"
+          REPO_URL="https://github.com/GuoSirius/video-analyst"
+
+          # Generate changelog - exclude chore(release) commits, show only commits in this version
+          if [ -n "$PREV_TAG" ]; then
+            # Get commits between PREV_TAG and the commit before CURRENT_TAG (to exclude the release commit)
+            COMMITS=$(git log ${PREV_TAG}..HEAD^ --pretty=format:"%s|%h" --invert-grep --grep="chore(release)" 2>/dev/null)
+          else
+            COMMITS=$(git log --pretty=format:"%s|%h" --invert-grep --grep="chore(release)" 2>/dev/null)
+          fi
+
+          # Initialize type groups
+          declare -A groups
+          groups[feat]=""
+          groups[fix]=""
+          groups[perf]=""
+          groups[refactor]=""
+          groups[docs]=""
+          groups[build]=""
+          groups[ci]=""
+          groups[chore]=""
+          groups[other]=""
+
+          # Parse commits and group by type
+          while IFS='|' read -r subject hash; do
+            [ -z "$subject" ] && continue
+            commit_url="[${hash}](${REPO_URL}/commit/${hash})"
+            
+            if [[ "$subject" =~ ^feat(\(.+\))?: ]]; then
+              desc="${subject#feat*:* }"
+              groups[feat]+="- ${desc} ${commit_url}\n"
+            elif [[ "$subject" =~ ^fix(\(.+\))?: ]]; then
+              desc="${subject#fix*:* }"
+              groups[fix]+="- ${desc} ${commit_url}\n"
+            elif [[ "$subject" =~ ^perf(\(.+\))?: ]]; then
+              desc="${subject#perf*:* }"
+              groups[perf]+="- ${desc} ${commit_url}\n"
+            elif [[ "$subject" =~ ^refactor(\(.+\))?: ]]; then
+              desc="${subject#refactor*:* }"
+              groups[refactor]+="- ${desc} ${commit_url}\n"
+            elif [[ "$subject" =~ ^docs(\(.+\))?: ]]; then
+              desc="${subject#docs*:* }"
+              groups[docs]+="- ${desc} ${commit_url}\n"
+            elif [[ "$subject" =~ ^build(\(.+\))?: ]]; then
+              desc="${subject#build*:* }"
+              groups[build]+="- ${desc} ${commit_url}\n"
+            elif [[ "$subject" =~ ^ci(\(.+\))?: ]]; then
+              desc="${subject#ci*:* }"
+              groups[ci]+="- ${desc} ${commit_url}\n"
+            elif [[ "$subject" =~ ^chore(\(.+\))?: ]]; then
+              desc="${subject#chore*:* }"
+              groups[chore]+="- ${desc} ${commit_url}\n"
+            else
+              groups[other]+="- ${subject} ${commit_url}\n"
+            fi
+          done <<< "$COMMITS"
+
+          # Build changelog
+          CHANGELOG="## What's Changed\n\n"
+
+          # Helper function to add section
+          add_section() {
+            local key=$1
+            local title=$2
+            if [ -n "${groups[$key]}" ]; then
+              CHANGELOG+="### ${title}\n\n"
+              CHANGELOG+="${groups[$key]}\n"
+            fi
+          }
+
+          add_section "feat" "✨ Features (新功能)"
+          add_section "fix" "🐛 Bug Fixes (Bug 修复)"
+          add_section "perf" "⚡ Performance Improvements (性能优化)"
+          add_section "refactor" "🔄 Code Refactoring (重构)"
+          add_section "docs" "📝 Documentation (文档)"
+          add_section "build" "📦 Build System (构建)"
+          add_section "ci" "🔧 CI/CD"
+          add_section "chore" "🔧 Chores (其他更新)"
+          add_section "other" "📋 Other Changes"
+
+          # Check if there's any content
+          if [ "${groups[feat]}${groups[fix]}${groups[perf]}${groups[refactor]}${groups[docs]}${groups[build]}${groups[ci]}${groups[chore]}${groups[other]}" == "" ]; then
+            CHANGELOG+="- No functional changes in this release\n"
+          fi
+
+          CHANGELOG+="\n---\n\n**Full Changelog**: ${REPO_URL}/compare/${PREV_TAG:-0.0.0}...${CURRENT_TAG#v}"
+
+          # Output as multiline string for GitHub Actions
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
@@ -130,7 +228,7 @@ jobs:
           release_name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body: ${{ steps.release-notes.outputs.changelog }}
           files: |
             artifacts/windows-installer/**/*.exe
             artifacts/linux-appimage/*.AppImage
