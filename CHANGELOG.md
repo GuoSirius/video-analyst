@@ -21,6 +21,10 @@ All notable changes to this project will be documented in this file. See [standa
 ### [1.3.17](https://gitee.com/siriussupreme/video-analyst/compare/v1.3.16...v1.3.17) (2026-04-28)
 
 
+### Chores
+
+* disable electron mirror in .npmrc, remove RELEASE_NOTES.md ([105d9bb](https://gitee.com/siriussupreme/video-analyst/commit/105d9bb2b3da4daecb64c5c0d4b8b8cfddb5c6f9))
+
 ### Bug Fixes
 
 * macOS build use official electron mirror ([c31a8f7](https://gitee.com/siriussupreme/video-analyst/commit/c31a8f76907d401cda2019531dabc9102dd46666))
