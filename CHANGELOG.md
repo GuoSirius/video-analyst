@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.3.28](https://github.com/GuoSirius/video-analyst/compare/v1.3.27...v1.3.28)
+
+
+### Code Refactoring
+
+- 优化发布流程和工具配置 [cf58ae9](https://github.com/GuoSirius/video-analyst/commit/cf58ae9)
+
+### CI/CD
+
+- 修复 CHANGELOG 生成逻辑，确保包含所有提交类型 [1e080d4](https://github.com/GuoSirius/video-analyst/commit/1e080d4)
+- 修复 1.3.27 版本 CHANGELOG，补充缺失的提交记录 [464102b](https://github.com/GuoSirius/video-analyst/commit/464102b)
+
 ### [1.3.27](https://github.com/GuoSirius/video-analyst/compare/v1.3.26...v1.3.27)
 
 
