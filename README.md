@@ -125,6 +125,7 @@ video-analyst/
 | AI | `POST /api/ai/analyze` `GET /api/ai/providers` `GET /api/ai/results` |
 | 导出 | `POST /api/export/excel` `GET /api/export/columns` |
 | 设置 | `GET /api/settings/pipeline` `POST /api/settings/pipeline` |
+| 模型 | `GET/POST /api/ai/providers` `PUT/DELETE /api/ai/providers/:id` `POST /api/ai/priority` |
 | 进度 | 所有模块均有 `GET /api/*/events` (SSE) 实时推送任务状态 |
 
 ## 环境变量

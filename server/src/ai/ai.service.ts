@@ -1,9 +1,15 @@
 import { Injectable } from '@nestjs/common'
 import { DatabaseService } from '../common/database/database.service'
 
-export interface ProviderInfo {
+export interface AIProvider {
+  id: string
   name: string
-  configured: boolean
+  api_key: string
+  base_url: string
+  default_model: string
+  priority: number
+  enabled: number
+  created_at: string
 }
 
 export interface AIConfig {
@@ -16,114 +22,98 @@ export interface AIConfig {
 
 @Injectable()
 export class AIService {
-  private configs: Record<string, { apiKey: string; baseUrl: string }>
+  constructor(private readonly db: DatabaseService) {}
 
-  constructor(private readonly db: DatabaseService) {
-    this.configs = {
-      minimax: {
-        apiKey: process.env.MINIMAX_API_KEY || '',
-        baseUrl: process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat',
-      },
-      deepseek: {
-        apiKey: process.env.DEEPSEEK_API_KEY || '',
-        baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
-      },
-    }
+  /** 获取所有 provider (按优先级排序，启用的排前面) */
+  getProviders(): AIProvider[] {
+    return this.db.db.prepare(
+      'SELECT * FROM ai_providers ORDER BY enabled DESC, priority ASC'
+    ).all() as AIProvider[]
   }
 
-  /** 获取按优先级排序的 provider 列表 */
-  getProviders(): ProviderInfo[] {
-    const priority = this.getPriority()
-    const ordered = [...priority, ...Object.keys(this.configs).filter(k => !priority.includes(k))]
-    return ordered.map(name => ({
-      name,
-      configured: !!this.configs[name]?.apiKey,
-    }))
+  /** 获取启用的 provider 列表（优先级顺序） */
+  getEnabledProviders(): AIProvider[] {
+    return this.db.db.prepare(
+      'SELECT * FROM ai_providers WHERE enabled = 1 ORDER BY priority ASC'
+    ).all() as AIProvider[]
   }
 
-  /** 获取优先级列表 */
-  getPriority(): string[] {
-    const row = this.db.db.prepare("SELECT value FROM settings WHERE key = 'ai_priority'").get() as any
-    if (!row) return ['deepseek', 'minimax']
-    try { return JSON.parse(row.value) } catch { return ['deepseek', 'minimax'] }
+  /** 获取单个 provider */
+  getProvider(id: string): AIProvider | undefined {
+    return this.db.db.prepare('SELECT * FROM ai_providers WHERE id = ?').get(id) as any
   }
 
-  /** 设置优先级 */
-  setPriority(providers: string[]) {
-    this.db.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ai_priority', ?)").run(JSON.stringify(providers))
+  /** 创建或更新 provider */
+  saveProvider(p: Omit<AIProvider, 'created_at'>) {
+    this.db.db.prepare(`
+      INSERT OR REPLACE INTO ai_providers (id, name, api_key, base_url, default_model, priority, enabled)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(p.id, p.name, p.api_key, p.base_url, p.default_model, p.priority, p.enabled ? 1 : 0)
   }
 
-  /** 按优先级依次尝试，失败则尝试下一个 */
+  /** 删除 provider */
+  deleteProvider(id: string) {
+    this.db.db.prepare('DELETE FROM ai_providers WHERE id = ?').run(id)
+  }
+
+  /** 批量更新优先级 */
+  setPriorities(ids: string[]) {
+    const stmt = this.db.db.prepare('UPDATE ai_providers SET priority = ? WHERE id = ?')
+    ids.forEach((id, i) => stmt.run(i + 1, id))
+  }
+
+  /** 按优先级依次尝试调用 */
   async callLLM(config: AIConfig, inputText: string): Promise<{ text: string; provider: string }> {
-    const providers = config.provider ? [config.provider] : this.getPriority()
-    const errors: string[] = []
+    const providers = config.provider
+      ? [this.getProvider(config.provider)].filter(Boolean) as AIProvider[]
+      : this.getEnabledProviders()
 
-    for (const provider of providers) {
-      const cfg = this.configs[provider]
-      if (!cfg?.apiKey) {
-        errors.push(`${provider}: 未配置 API Key`)
-        continue
-      }
+    if (!providers.length) throw new Error('没有可用的 AI 模型')
+
+    const errors: string[] = []
+    for (const p of providers) {
       try {
-        const text = await this.callOneProvider(provider, config, inputText)
-        return { text, provider }
+        const text = await this.callProvider(p, config, inputText)
+        return { text, provider: p.name }
       } catch (err: any) {
-        errors.push(`${provider}: ${err.message}`)
+        errors.push(`${p.name}: ${err.message}`)
       }
     }
-
     throw new Error(`所有模型调用失败:\n${errors.join('\n')}`)
   }
 
-  private async callOneProvider(
-    provider: string,
-    config: AIConfig,
-    inputText: string,
-  ): Promise<string> {
-    const cfg = this.configs[provider]
-    const isMinimax = provider === 'minimax'
+  private async callProvider(p: AIProvider, config: AIConfig, inputText: string): Promise<string> {
+    const model = config.model || p.default_model
+    const isMinimax = p.name === 'minimax'
     const url = isMinimax
-      ? `${cfg.baseUrl}/v1/text/chatcompletion_v2`
-      : `${cfg.baseUrl}/chat/completions`
+      ? `${p.base_url}/v1/text/chatcompletion_v2`
+      : `${p.base_url}/chat/completions`
 
-    const body = isMinimax
-      ? {
-          model: config.model || 'MiniMax-M1',
-          messages: [
-            { role: 'system', content: 'You are a helpful assistant.' },
-            { role: 'user', content: `${config.prompt}\n\nInput text:\n${inputText}` },
-          ],
-          temperature: config.temperature ?? 0.7,
-          max_tokens: config.maxTokens ?? 4096,
-        }
-      : {
-          model: config.model || 'deepseek-chat',
-          messages: [
-            { role: 'system', content: 'You are a helpful assistant.' },
-            { role: 'user', content: `${config.prompt}\n\nInput text:\n${inputText}` },
-          ],
-          temperature: config.temperature ?? 0.7,
-          max_tokens: config.maxTokens ?? 4096,
-        }
+    const body = {
+      model,
+      messages: [
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: `${config.prompt}\n\nInput text:\n${inputText}` },
+      ],
+      temperature: config.temperature ?? 0.7,
+      max_tokens: config.maxTokens ?? 4096,
+    }
 
     const resp = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
+        Authorization: `Bearer ${p.api_key}`,
       },
       body: JSON.stringify(body),
     })
 
     if (!resp.ok) {
-      const errText = await resp.text()
-      throw new Error(`API ${resp.status}: ${errText.slice(0, 200)}`)
+      const txt = await resp.text()
+      throw new Error(`HTTP ${resp.status}: ${txt.slice(0, 200)}`)
     }
 
     const data = await resp.json() as any
-    if (isMinimax) {
-      return data.choices?.[0]?.message?.content || data.choices?.[0]?.text || JSON.stringify(data)
-    }
     return data.choices?.[0]?.message?.content || JSON.stringify(data)
   }
 }

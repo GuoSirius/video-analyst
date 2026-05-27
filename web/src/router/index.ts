@@ -28,6 +28,11 @@ const router = createRouter({
       name: 'export',
       component: () => import('../pages/Export.vue'),
     },
+    {
+      path: '/models',
+      name: 'models',
+      component: () => import('../pages/Models.vue'),
+    },
   ],
 })
 

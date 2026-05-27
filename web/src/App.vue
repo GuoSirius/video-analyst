@@ -12,6 +12,7 @@ const navItems = [
   { path: '/transcoder', label: '转码处理', icon: 'fa-wand-magic-sparkles' },
   { path: '/ai', label: 'AI 分析', icon: 'fa-robot' },
   { path: '/export', label: '数据导出', icon: 'fa-file-excel' },
+  { path: '/models', label: '模型管理', icon: 'fa-microchip' },
 ]
 const currentTitle = computed(() => navItems.find(i => i.path === route.path)?.label || '')
 

@@ -35,9 +35,13 @@ export const whisperAPI = {
 
 // AI
 export const aiAPI = {
+  // Providers CRUD
   getProviders: () => api.get('/ai/providers'),
-  getPriority: () => api.get('/ai/priority'),
-  setPriority: (providers: string[]) => api.post('/ai/priority', { providers }),
+  createProvider: (p: any) => api.post('/ai/providers', p),
+  updateProvider: (id: string, p: any) => api.put(`/ai/providers/${id}`, p),
+  deleteProvider: (id: string) => api.delete(`/ai/providers/${id}`),
+  setPriority: (ids: string[]) => api.post('/ai/priority', { ids }),
+  // Analysis
   analyze: (body: any) => api.post('/ai/analyze', body),
   getTasks: () => api.get('/ai/tasks'),
   getResults: () => api.get('/ai/results'),

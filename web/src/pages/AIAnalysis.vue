@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { whisperAPI, aiAPI, crawlerAPI } from '../api'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+
+const router = useRouter()
 
 const activeTab = ref('whisper')
 const whisperItems = ref<any[]>([])
@@ -20,6 +23,20 @@ async function refreshAll(){
   whisperItems.value=items.data;transcriptions.value=tr.data;providers.value=pv.data;aiResults.value=ar.data;allTranscriptions.value=tr.data
 }
 
+const enabledProviders = computed(() => providers.value.filter((p: any) => p.enabled))
+
+function ensureProviders(): boolean {
+  if (!enabledProviders.value.length) {
+    ElMessageBox.alert(
+      '尚未配置 AI 模型，请先在"模型管理"页面添加并启用至少一个模型。',
+      '无可用模型',
+      { confirmButtonText: '去配置', type: 'warning', callback: () => router.push('/models') }
+    )
+    return false
+  }
+  return true
+}
+
 async function startTranscribe(){
   if(!selectedWhisperIds.value.length){ElMessage.warning('请先选择媒体项');return}
   const{data}=await whisperAPI.transcribe({itemIds:selectedWhisperIds.value})
@@ -29,6 +46,7 @@ async function startTranscribe(){
 
 async function startAnalyze(){
   if(!selectedTransIds.value.length){ElMessage.warning('请选择要分析的文本');return}
+  if(!ensureProviders()) return
   const{data}=await aiAPI.analyze({config:{provider:selectedModel.value,model:selectedModel.value==='minimax'?'MiniMax-M1':'deepseek-chat',prompt:aiPrompt.value,temperature:temperature.value},transcriptionIds:selectedTransIds.value})
   if(data.error){ElMessage.error(data.error);return}
   ElMessage.success(`已创建 ${data.tasks.length} 个分析任务`);refreshAll()
@@ -83,6 +101,12 @@ onMounted(refreshAll)
     </div>
 
     <div v-show="activeTab==='ai'" class="space-y-5">
+      <div v-if="!enabledProviders.length" class="rounded-xl bg-amber-500/8 border border-amber-500/20 p-4 flex items-center justify-between">
+        <div class="flex items-center gap-2 text-sm text-amber-300">
+          <i class="fas fa-triangle-exclamation"></i> 尚未配置 AI 模型，AI 分析功能将不可用
+        </div>
+        <el-button size="small" type="warning" @click="router.push('/models')">去配置模型</el-button>
+      </div>
       <div class="card-static">
         <h3 class="text-sm font-semibold mb-4 flex items-center gap-2"><i class="fas fa-robot text-amber-400"></i>分析配置</h3>
 

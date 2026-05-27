@@ -8,14 +8,10 @@ Thumbs.db
 .turbo/
 .cache/
 
-# 数据目录：数据库提交，媒体文件忽略
-data/*.db
-data/*.db-journal
-data/*.db-wal
-data/*.db-shm
+# 数据：数据库提交，音视频/导出文件忽略
 data/media/
 data/transcoded/
 data/exports/
 
-# CodeGraph 索引文件
+# CodeGraph 缓存忽略，索引数据库提交
 .codegraph/cache/

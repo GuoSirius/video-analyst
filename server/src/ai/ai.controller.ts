@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Delete, Param, Body, Sse } from '@nestjs/common'
+import { Controller, Post, Get, Delete, Put, Param, Body, Sse } from '@nestjs/common'
 import { Observable } from 'rxjs'
 import { AIService, AIConfig } from './ai.service'
 import { QueueService } from '../common/queue/queue.service'
@@ -15,27 +15,54 @@ export class AIController {
     private readonly db: DatabaseService,
   ) {}
 
+  // === Provider CRUD ===
+
   @Get('providers')
   getProviders() {
     return this.ai.getProviders()
   }
 
-  @Get('priority')
-  getPriority() {
-    return { priority: this.ai.getPriority() }
+  @Post('providers')
+  createProvider(@Body() body: any) {
+    const p = {
+      id: body.id || body.name?.toLowerCase().replace(/\s+/g, '-'),
+      name: body.name,
+      api_key: body.api_key || '',
+      base_url: body.base_url || '',
+      default_model: body.default_model || '',
+      priority: body.priority ?? this.ai.getProviders().length + 1,
+      enabled: body.enabled ?? 1,
+    }
+    this.ai.saveProvider(p)
+    return this.ai.getProviders()
+  }
+
+  @Put('providers/:id')
+  updateProvider(@Param('id') id: string, @Body() body: any) {
+    const existing = this.ai.getProvider(id)
+    if (!existing) return { error: 'Not found' }
+    this.ai.saveProvider({ ...existing, ...body, id })
+    return this.ai.getProviders()
+  }
+
+  @Delete('providers/:id')
+  deleteProvider(@Param('id') id: string) {
+    this.ai.deleteProvider(id)
+    return this.ai.getProviders()
   }
 
   @Post('priority')
-  setPriority(@Body() body: { providers: string[] }) {
-    this.ai.setPriority(body.providers)
-    return { priority: this.ai.getPriority() }
+  setPriority(@Body() body: { ids: string[] }) {
+    this.ai.setPriorities(body.ids)
+    return this.ai.getProviders()
   }
+
+  // === Analysis ===
 
   @Post('analyze')
   async startAnalyze(@Body() body: {
     config: AIConfig
     transcriptionIds: string[]
-    batchSize?: number
   }) {
     if (!body.transcriptionIds?.length) {
       return { error: 'No transcriptions selected' }
@@ -78,9 +105,7 @@ export class AIController {
       this.queue.updateTaskProgress(taskId, 10)
 
       const transcription = this.db.db.prepare('SELECT * FROM transcriptions WHERE id = ?').get(transcriptionId) as any
-      if (!transcription) {
-        throw new Error('Transcription not found')
-      }
+      if (!transcription) throw new Error('Transcription not found')
 
       this.queue.updateTaskProgress(taskId, 30)
       const { text, provider } = await this.ai.callLLM(config, transcription.content)
