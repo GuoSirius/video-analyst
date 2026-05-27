@@ -1,8 +1,9 @@
-import { defineConfig } from 'unocss'
-import { presetIcons } from 'unocss'
+import { defineConfig, presetUno } from 'unocss'
 
 export default defineConfig({
-  presets: [],
+  presets: [
+    presetUno({ preflight: false }),
+  ],
   rules: [
     ['page-container', { padding: '28px 32px', 'max-width': '1440px', margin: '0 auto' }],
   ],
