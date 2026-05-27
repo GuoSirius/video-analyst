@@ -86,7 +86,7 @@ onMounted(refresh)
           </div>
           <div>
             <div class="text-xs text-gray-400 mb-1.5">最大页数 (0=全部)</div>
-            <el-input-number v-model="maxPages" :min="0" :max="9999" class="!w-full" />
+            <el-input-number v-model="maxPages" :min="0" :max="9999" :step="1" :precision="0" class="!w-full" />
           </div>
         </div>
       </div>
