@@ -8,8 +8,8 @@ const itemSelector = ref('')
 const nextPageSelector = ref('')
 const maxPages = ref(1)
 const rules = ref([
-  { name:'title', selector:'h1, .title, [class*="title"]', attr:'' },
-  { name:'media_url', selector:'video, audio, source, a[href$=".mp4"]', attr:'src' },
+  { name:'title',selector:'h1,.title,[class*="title"]',attr:'' },
+  { name:'media_url',selector:'video,audio,source,a[href$=".mp4"]',attr:'src' },
 ])
 const loading = ref(false)
 const activeTab = ref('config')
@@ -31,139 +31,116 @@ async function refresh(){const[t,i]=await Promise.all([crawlerAPI.getTasks(),cra
 async function startCrawl(){
   if(!url.value){ElMessage.warning('请输入目标 URL');return}
   loading.value=true
-  try{
-    await crawlerAPI.start({url:url.value,rules:rules.value.filter(r=>r.name&&r.selector),itemSelector:itemSelector.value||undefined,nextPageSelector:nextPageSelector.value||undefined,maxPages:maxPages.value})
-    ElMessage.success('采集任务已创建');await refresh();activeTab.value='tasks'
-  }catch{ElMessage.error('创建失败')}
+  try{await crawlerAPI.start({url:url.value,rules:rules.value.filter(r=>r.name&&r.selector),itemSelector:itemSelector.value||undefined,nextPageSelector:nextPageSelector.value||undefined,maxPages:maxPages.value});ElMessage.success('采集任务已创建');await refresh();activeTab.value='tasks'}catch{ElMessage.error('创建失败')}
   loading.value=false
 }
 
 async function cancelTask(id:string){await crawlerAPI.cancelTask(id);refresh()}
-onMounted(refresh)
 
 const filtered = computed(()=>selectedTaskId.value?items.value.filter((i:any)=>i.task_id===selectedTaskId.value):items.value)
+onMounted(refresh)
 </script>
 
 <template>
-  <div style="padding:24px 28px;max-width:1240px">
-    <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">爬虫采集</h2>
-    <p style="font-size:13px;color:#6b7280;margin-bottom:20px">抓取网页内容，提取标题、媒体链接等结构化数据</p>
+  <div class="px-7 py-6 max-w-[1240px]">
+    <h2 class="text-lg font-bold mb-1">爬虫采集</h2>
+    <p class="text-[13px] text-gray-500 mb-5">抓取网页内容，提取标题、媒体链接等结构化数据</p>
 
-    <div style="display:flex;gap:8px;margin-bottom:20px">
+    <div class="flex gap-2 mb-5">
       <el-button v-for="tab in [{k:'config',l:'采集配置'},{k:'tasks',l:'任务列表'},{k:'items',l:'采集结果'}]" :key="tab.k"
-        :type="activeTab===tab.k?'primary':'default'"
-        :plain="activeTab!==tab.k"
-        size="small"
-        @click="activeTab=tab.k"
-      >
-        {{tab.l}}
-        <span v-if="tab.k==='tasks'" style="margin-left:4px;opacity:0.6">({{tasks.length}})</span>
-        <span v-if="tab.k==='items'" style="margin-left:4px;opacity:0.6">({{items.length}})</span>
+        :type="activeTab===tab.k?'primary':'default'" :plain="activeTab!==tab.k" size="small" @click="activeTab=tab.k">
+        {{ tab.l }}
+        <span v-if="tab.k==='tasks'" class="ml-1 text-gray-500 text-xs">({{tasks.length}})</span>
+        <span v-if="tab.k==='items'" class="ml-1 text-gray-500 text-xs">({{items.length}})</span>
       </el-button>
     </div>
 
-    <!-- Config -->
-    <div v-show="activeTab==='config'" style="display:flex;flex-direction:column;gap:20px">
-      <div style="background:rgba(22,27,34,0.7);border:1px solid rgba(75,85,99,0.3);border-radius:12px;padding:24px">
-        <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px"><i class="fas fa-globe" style="color:#60a5fa"></i>目标页面</h3>
-        <div style="margin-bottom:16px">
-          <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">页面 URL</div>
-          <el-input v-model="url" placeholder="https://example.com/articles" size="default" />
+    <div v-show="activeTab==='config'" class="space-y-5">
+      <div class="card-static">
+        <h3 class="text-sm font-semibold mb-4 flex items-center gap-2"><i class="fas fa-globe text-blue-400"></i>目标页面</h3>
+        <div class="mb-4">
+          <div class="text-xs text-gray-400 mb-1.5">页面 URL</div>
+          <el-input v-model="url" placeholder="https://example.com/articles" />
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 160px;gap:16px">
+        <div class="grid grid-cols-3 gap-4">
           <div>
-            <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">列表项选择器</div>
-            <el-input v-model="itemSelector" placeholder=".article-item" size="default" />
-            <div style="font-size:11px;color:#6b7280;margin-top:4px">留空提取整页</div>
+            <div class="text-xs text-gray-400 mb-1.5">列表项选择器</div>
+            <el-input v-model="itemSelector" placeholder=".article-item" />
+            <div class="text-[11px] text-gray-600 mt-1">留空提取整页</div>
           </div>
           <div>
-            <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">下一页选择器</div>
-            <el-input v-model="nextPageSelector" placeholder=".pagination .next" size="default" />
-            <div style="font-size:11px;color:#6b7280;margin-top:4px">留空不翻页</div>
+            <div class="text-xs text-gray-400 mb-1.5">下一页选择器</div>
+            <el-input v-model="nextPageSelector" placeholder=".pagination .next" />
+            <div class="text-[11px] text-gray-600 mt-1">留空不翻页</div>
           </div>
           <div>
-            <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">最大页数</div>
-            <el-input-number v-model="maxPages" :min="1" :max="100" size="default" style="width:100%" />
+            <div class="text-xs text-gray-400 mb-1.5">最大页数</div>
+            <el-input-number v-model="maxPages" :min="1" :max="100" class="!w-full" />
           </div>
         </div>
       </div>
 
-      <div style="background:rgba(22,27,34,0.7);border:1px solid rgba(75,85,99,0.3);border-radius:12px;padding:24px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-          <h3 style="font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px"><i class="fas fa-magnifying-glass" style="color:#fbbf24"></i>提取规则</h3>
-          <div style="display:flex;gap:8px">
+      <div class="card-static">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold flex items-center gap-2"><i class="fas fa-magnifying-glass text-amber-400"></i>提取规则</h3>
+          <div class="flex gap-2">
             <el-button size="small" @click="applyPreset('basic')">基础</el-button>
             <el-button size="small" @click="applyPreset('list')">列表页</el-button>
-            <el-button size="small" @click="addRule"><i class="fas fa-plus" style="margin-right:4px"></i>添加</el-button>
+            <el-button size="small" @click="addRule"><i class="fas fa-plus mr-1"></i>添加</el-button>
           </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="space-y-2">
           <div v-for="(rule,i) in rules" :key="i"
-            style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;background:rgba(13,17,23,0.5);border:1px solid rgba(75,85,99,0.2)">
-            <span style="font-size:11px;color:#6b7280;width:20px;text-align:center">{{i+1}}</span>
-            <el-input v-model="rule.name" placeholder="字段名" size="small" style="width:120px" />
-            <el-input v-model="rule.selector" placeholder="CSS 选择器" size="small" style="flex:1" />
-            <el-input v-model="rule.attr" placeholder="属性(可选)" size="small" style="width:120px" />
+            class="flex items-center gap-3 p-2.5 rounded-lg bg-gray-900/40 border border-gray-700/30">
+            <span class="text-[11px] text-gray-600 w-5 text-center">{{ i+1 }}</span>
+            <el-input v-model="rule.name" placeholder="字段名" size="small" class="!w-32" />
+            <el-input v-model="rule.selector" placeholder="CSS 选择器" size="small" class="flex-1" />
+            <el-input v-model="rule.attr" placeholder="属性(可选)" size="small" class="!w-32" />
             <el-button v-if="rules.length>1" size="small" type="danger" circle plain @click="removeRule(i)"><i class="fas fa-xmark"></i></el-button>
           </div>
         </div>
-        <div style="font-size:11px;color:#6b7280;margin-top:8px">attr 留空=提取文本, 填写=提取属性值(src/href等)</div>
+        <div class="text-[11px] text-gray-600 mt-2">attr 留空=提取文本, 填写=提取属性值(src/href等)</div>
       </div>
 
-      <div style="display:flex;gap:12px">
-        <el-button type="primary" :disabled="!url||loading" :loading="loading" @click="startCrawl">
-          <i class="fas fa-play" style="margin-right:6px"></i>开始采集
-        </el-button>
-        <el-button @click="url='';rules=[{name:'title',selector:'h1',attr:''},{name:'media_url',selector:'video,audio,source',attr:'src'}]">
-          <i class="fas fa-arrows-rotate" style="margin-right:6px"></i>重置
-        </el-button>
+      <div class="flex gap-3">
+        <el-button type="primary" :disabled="!url||loading" :loading="loading" @click="startCrawl"><i class="fas fa-play mr-1.5"></i>开始采集</el-button>
+        <el-button @click="url='';rules=[{name:'title',selector:'h1',attr:''},{name:'media_url',selector:'video,audio,source',attr:'src'}]"><i class="fas fa-arrows-rotate mr-1.5"></i>重置</el-button>
       </div>
     </div>
 
-    <!-- Tasks -->
-    <div v-show="activeTab==='tasks'" style="background:rgba(22,27,34,0.7);border:1px solid rgba(75,85,99,0.3);border-radius:12px;padding:24px">
+    <div v-show="activeTab==='tasks'" class="card-static">
       <el-table v-if="tasks.length" :data="tasks" size="small">
-        <el-table-column label="任务 ID" min-width="160">
-          <template #default="{row}"><span style="font-size:12px;font-family:monospace;color:#9ca3af">{{row.id.slice(0,12)}}...</span></template>
-        </el-table-column>
+        <el-table-column label="任务 ID" min-width="160"><template #default="{row}"><span class="text-xs font-mono text-gray-400">{{row.id.slice(0,12)}}...</span></template></el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{row}">
-            <span :style="{
-              display:'inline-flex',alignItems:'center',padding:'2px 8px',borderRadius:'99px',fontSize:'11px',
-              background:row.status==='completed'?'rgba(52,211,153,0.15)':row.status==='running'?'rgba(59,130,246,0.15)':row.status==='failed'?'rgba(248,113,113,0.15)':'rgba(250,204,21,0.15)',
-              color:row.status==='completed'?'#6ee7b7':row.status==='running'?'#93c5fd':row.status==='failed'?'#fca5a5':'#fde047',
-            }">{{row.status==='completed'?'完成':row.status==='running'?'进行中':row.status==='failed'?'失败':'等待'}}</span>
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border"
+              :class="row.status==='completed'?'bg-emerald-500/15 text-emerald-300 border-emerald-500/25':row.status==='running'?'bg-blue-500/15 text-blue-300 border-blue-500/25':row.status==='failed'?'bg-red-500/15 text-red-300 border-red-500/25':'bg-yellow-500/15 text-yellow-300 border-yellow-500/25'">
+              {{ row.status==='completed'?'完成':row.status==='running'?'进行中':row.status==='failed'?'失败':'等待' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="进度" width="160">
-          <template #default="{row}"><el-progress :percentage="row.progress" :stroke-width="6" :status="row.status==='failed'?'exception':row.status==='completed'?'success':undefined" /></template>
-        </el-table-column>
-        <el-table-column prop="retries" label="重试" width="60" align="center" />
+        <el-table-column label="进度" width="160"><template #default="{row}"><el-progress :percentage="row.progress" :stroke-width="6" :status="row.status==='failed'?'exception':row.status==='completed'?'success':undefined"/></template></el-table-column>
+        <el-table-column prop="retries" label="重试" width="60" align="center"/>
         <el-table-column label="操作" width="80" align="center">
-          <template #default="{row}">
-            <el-button v-if="row.status==='running'||row.status==='pending'" size="small" type="danger" plain @click="cancelTask(row.id)">取消</el-button>
-            <span v-else style="font-size:12px;color:#6b7280">-</span>
-          </template>
+          <template #default="{row}"><el-button v-if="row.status==='running'||row.status==='pending'" size="small" type="danger" plain @click="cancelTask(row.id)">取消</el-button><span v-else class="text-xs text-gray-600">-</span></template>
         </el-table-column>
       </el-table>
-      <div v-else style="text-align:center;padding:48px 0;color:#6b7280;font-size:13px"><i class="fas fa-bug" style="font-size:32px;margin-bottom:12px;display:block;opacity:0.3"></i>暂无采集任务</div>
+      <div v-else class="text-center py-12 text-gray-500 text-sm"><i class="fas fa-bug text-3xl mb-3 block opacity-30"></i>暂无采集任务</div>
     </div>
 
-    <!-- Items -->
-    <div v-show="activeTab==='items'" style="background:rgba(22,27,34,0.7);border:1px solid rgba(75,85,99,0.3);border-radius:12px;padding:24px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <span style="font-size:13px;color:#9ca3af">共 {{items.length}} 条</span>
-        <el-select v-model="selectedTaskId" placeholder="全部任务" size="small" style="width:200px" clearable>
-          <el-option v-for="t in tasks" :key="t.id" :label="t.id.slice(0,12)+'...'" :value="t.id" />
+    <div v-show="activeTab==='items'" class="card-static">
+      <div class="flex items-center justify-between mb-4">
+        <span class="text-sm text-gray-400">共 {{items.length}} 条</span>
+        <el-select v-model="selectedTaskId" placeholder="全部任务" size="small" class="!w-48" clearable>
+          <el-option v-for="t in tasks" :key="t.id" :label="t.id.slice(0,12)+'...'" :value="t.id"/>
         </el-select>
       </div>
       <el-table v-if="filtered.length" :data="filtered" size="small" max-height="400">
-        <el-table-column prop="title" label="标题" show-overflow-tooltip min-width="200" />
-        <el-table-column prop="media_url" label="媒体链接" show-overflow-tooltip min-width="250" />
-        <el-table-column label="类型" width="80"><template #default="{row}"><span style="font-size:12px;color:#9ca3af">{{row.media_type||'-'}}</span></template></el-table-column>
-        <el-table-column label="来源" width="90"><template #default="{row}"><span style="font-size:12px;color:#9ca3af">{{row.media_source||'-'}}</span></template></el-table-column>
+        <el-table-column prop="title" label="标题" show-overflow-tooltip min-width="200"/>
+        <el-table-column prop="media_url" label="媒体链接" show-overflow-tooltip min-width="250"/>
+        <el-table-column label="类型" width="80"><template #default="{row}"><span class="text-xs text-gray-400">{{row.media_type||'-'}}</span></template></el-table-column>
+        <el-table-column label="来源" width="90"><template #default="{row}"><span class="text-xs text-gray-400">{{row.media_source||'-'}}</span></template></el-table-column>
       </el-table>
-      <div v-else style="text-align:center;padding:48px 0;color:#6b7280;font-size:13px"><i class="fas fa-table" style="font-size:32px;margin-bottom:12px;display:block;opacity:0.3"></i>暂无数据</div>
+      <div v-else class="text-center py-12 text-gray-500 text-sm"><i class="fas fa-table text-3xl mb-3 block opacity-30"></i>暂无数据</div>
     </div>
   </div>
 </template>
