@@ -20,6 +20,8 @@ const aiPrompt = ref('请对以下文本进行总结，提取关键信息和关�
 const temperature = ref(0.7)
 const whispTemp = ref(0.0)
 const whispTempInc = ref(0.2)
+const whispModel = ref('base')
+const whispFormat = ref('json')
 const selectedTransIds = ref<string[]>([])
 
 async function refreshAll(){
@@ -54,7 +56,12 @@ async function startTranscribe(){
   if(!selectedWhisperIds.value.length){ElMessage.warning('请先选择媒体项');return}
   const{data}=await whisperAPI.transcribe({
     itemIds: selectedWhisperIds.value,
-    options: { temperature: whispTemp.value, temperature_inc: whispTempInc.value, response_format: 'json' }
+    options: {
+      model: whispModel.value,
+      temperature: whispTemp.value,
+      temperature_inc: whispTempInc.value,
+      response_format: whispFormat.value,
+    }
   })
   if(data.error){ElMessage.error(data.error);return}
   ElMessage.success(`已创建 ${data.tasks.length} 个识别任务`);refreshAll()
@@ -99,14 +106,30 @@ onMounted(refreshAll)
           </div>
           <details class="text-xs text-gray-500">
             <summary class="cursor-pointer text-gray-400">识别参数</summary>
-            <div class="flex gap-4 mt-2 ml-4">
-              <div>
-                <span class="text-gray-500">Temperature</span>
-                <el-input-number v-model="whispTemp" :min="0" :max="1" :step="0.1" :precision="1" size="small" class="!w-28 ml-2"/>
+            <div class="grid grid-cols-2 gap-x-6 gap-y-2 mt-2 ml-4">
+              <div class="flex items-center">
+                <span class="text-xs text-gray-500 w-28">模型</span>
+                <el-select v-model="whispModel" size="small" class="!w-28">
+                  <el-option v-for="m in ['tiny','base','small','medium','large']" :key="m" :label="m" :value="m"/>
+                </el-select>
+                <span class="text-[10px] text-gray-600 ml-2">CLI+API</span>
               </div>
-              <div>
-                <span class="text-gray-500">Temperature Inc</span>
-                <el-input-number v-model="whispTempInc" :min="0" :max="1" :step="0.1" :precision="1" size="small" class="!w-28 ml-2"/>
+              <div class="flex items-center">
+                <span class="text-xs text-gray-500 w-28">输出格式</span>
+                <el-select v-model="whispFormat" size="small" class="!w-28">
+                  <el-option v-for="f in ['json','text','srt','vtt']" :key="f" :label="f" :value="f"/>
+                </el-select>
+                <span class="text-[10px] text-gray-600 ml-2">CLI+API</span>
+              </div>
+              <div class="flex items-center">
+                <span class="text-xs text-gray-500 w-28">Temperature</span>
+                <el-input-number v-model="whispTemp" :min="0" :max="1" :step="0.1" :precision="1" size="small" class="!w-28"/>
+                <span class="text-[10px] text-gray-600 ml-2">仅API</span>
+              </div>
+              <div class="flex items-center">
+                <span class="text-xs text-gray-500 w-28">Temp Inc</span>
+                <el-input-number v-model="whispTempInc" :min="0" :max="1" :step="0.1" :precision="1" size="small" class="!w-28"/>
+                <span class="text-[10px] text-gray-600 ml-2">仅API</span>
               </div>
             </div>
           </details>
