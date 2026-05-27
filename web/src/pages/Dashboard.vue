@@ -36,6 +36,7 @@ async function refresh() {
 const runningCount=computed(()=>Object.values(stats.value).reduce((s:any,v:any)=>s+v.running,0))
 
 const taskName = (t: any) => {
+  if (t.payload?.name) return t.payload.name
   if (t.type === 'crawl') return t.payload?.url || t.id.slice(0, 8)
   if (t.type === 'transcode') return (t.payload?.file || '').split(/[\\/]/).pop() || t.id.slice(0, 8)
   if (t.type === 'whisper') return (t.payload?.filePath || '').split(/[\\/]/).pop() || t.id.slice(0, 8)
