@@ -1,63 +1,7 @@
-import axios from 'axios'
-
-const BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'
-
-const api = axios.create({
-  baseURL: BASE,
-  timeout: 120000,
-})
-
-// Crawler
-export const crawlerAPI = {
-  start: (payload: any) => api.post('/crawler/crawl', payload),
-  getTasks: () => api.get('/crawler/tasks'),
-  getItems: (taskId?: string) => api.get('/crawler/items', { params: { taskId } }),
-  cancelTask: (id: string) => api.delete(`/crawler/tasks/${id}`),
-}
-
-// Transcoder
-export const transcoderAPI = {
-  checkFfmpeg: () => api.get('/transcoder/ffmpeg-check'),
-  upload: (formData: FormData) => api.post('/transcoder/upload', formData),
-  startConvert: (body: any) => api.post('/transcoder/convert', body),
-  getTasks: () => api.get('/transcoder/tasks'),
-  cancelTask: (id: string) => api.delete(`/transcoder/tasks/${id}`),
-}
-
-// Whisper
-export const whisperAPI = {
-  loadModel: (modelPath: string) => api.post('/whisper/load-model', { modelPath }),
-  transcribe: (body: any) => api.post('/whisper/transcribe', body),
-  getTasks: () => api.get('/whisper/tasks'),
-  getResults: (itemId?: string) => api.get('/whisper/results', { params: { itemId } }),
-  cancelTask: (id: string) => api.delete(`/whisper/tasks/${id}`),
-}
-
-// AI
-export const aiAPI = {
-  // Providers CRUD
-  getProviders: () => api.get('/ai/providers'),
-  createProvider: (p: any) => api.post('/ai/providers', p),
-  updateProvider: (id: string, p: any) => api.put(`/ai/providers/${id}`, p),
-  deleteProvider: (id: string) => api.delete(`/ai/providers/${id}`),
-  setPriority: (ids: string[]) => api.post('/ai/priority', { ids }),
-  // Analysis
-  analyze: (body: any) => api.post('/ai/analyze', body),
-  getTasks: () => api.get('/ai/tasks'),
-  getResults: () => api.get('/ai/results'),
-  cancelTask: (id: string) => api.delete(`/ai/tasks/${id}`),
-}
-
-// Export
-export const exportAPI = {
-  getColumns: () => api.get('/export/columns'),
-  exportExcel: (body: any) => api.post('/export/excel', body, { responseType: 'blob' }),
-}
-
-// Settings / Pipeline
-export const settingsAPI = {
-  getPipeline: () => api.get('/settings/pipeline'),
-  setPipeline: (autoMode: boolean) => api.post('/settings/pipeline', { autoMode }),
-}
-
-export default api
+export { default as api } from './client'
+export { crawlerAPI } from './modules/crawler'
+export { transcoderAPI } from './modules/transcoder'
+export { whisperAPI } from './modules/whisper'
+export { aiAPI } from './modules/ai'
+export { exportAPI } from './modules/export'
+export { settingsAPI } from './modules/settings'
