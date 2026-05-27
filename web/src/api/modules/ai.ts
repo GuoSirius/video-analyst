@@ -5,6 +5,7 @@ export const aiAPI = {
   createProvider: (p: any) => api.post('/ai/providers', p),
   updateProvider: (id: string, p: any) => api.put(`/ai/providers/${id}`, p),
   deleteProvider: (id: string) => api.delete(`/ai/providers/${id}`),
+  getProviderKey: (id: string) => api.get(`/ai/providers/${id}/key`),
   setPriority: (ids: string[]) => api.post('/ai/priority', { ids }),
   analyze: (body: any) => api.post('/ai/analyze', body),
   getTasks: () => api.get('/ai/tasks'),

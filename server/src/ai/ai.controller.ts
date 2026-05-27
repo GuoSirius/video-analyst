@@ -22,6 +22,13 @@ export class AIController {
     return this.ai.getProviders()
   }
 
+  @Get('providers/:id/key')
+  getProviderKey(@Param('id') id: string) {
+    const p = this.ai.getProvider(id)
+    if (!p) return { error: 'Not found' }
+    return { key: p.api_key }
+  }
+
   @Post('providers')
   createProvider(@Body() body: any) {
     const p = {

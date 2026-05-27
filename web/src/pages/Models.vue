@@ -25,10 +25,15 @@ function openNew() {
   dialogVisible.value = true
 }
 
-function openEdit(p: Provider) {
+async function openEdit(p: Provider) {
   isNew.value = false
-  editing.value = { ...p }
+  editing.value = { ...p, api_key: '' }
   dialogVisible.value = true
+  // 加载完整 Key
+  try {
+    const { data } = await aiAPI.getProviderKey(p.id)
+    editing.value.api_key = data.key
+  } catch {}
 }
 
 async function save() {
