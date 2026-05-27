@@ -4,6 +4,7 @@ import 'element-plus/dist/index.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
 import '@fortawesome/fontawesome-free/css/all.min.css'
 import 'uno.css'
+import './style.css'
 
 import App from './App.vue'
 import router from './router'

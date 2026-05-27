@@ -1,0 +1,50 @@
+/* Element Plus dark mode fixes — applied after UnoCSS */
+html.dark {
+  color-scheme: dark;
+}
+
+/* Ensure Element Plus dark variables take precedence over UnoCSS resets */
+.el-button,
+.el-input__wrapper,
+.el-select .el-input__wrapper,
+.el-input-number,
+.el-table {
+  --el-fill-color-blank: rgba(17, 24, 39, 0.8);
+}
+
+/* Fix el-table in dark mode */
+.el-table {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(17, 24, 39, 0.6);
+  --el-table-row-hover-bg-color: rgba(55, 65, 81, 0.4);
+  --el-table-border-color: rgba(75, 85, 99, 0.3);
+}
+
+/* Fix el-tabs */
+.el-tabs__item {
+  color: #9ca3af;
+}
+.el-tabs__item.is-active {
+  color: #93c5fd;
+}
+
+/* Fix el-progress bar background */
+.el-progress-bar__outer {
+  background-color: rgba(55, 65, 81, 0.6);
+}
+
+/* Fix el-input-number */
+.el-input-number .el-input__wrapper {
+  background-color: rgba(17, 24, 39, 0.7);
+}
+
+/* Fix el-select */
+.el-select .el-input__wrapper {
+  background-color: rgba(17, 24, 39, 0.7);
+}
+
+/* Fix el-checkbox label */
+.el-checkbox {
+  --el-checkbox-text-color: #d1d5db;
+}
