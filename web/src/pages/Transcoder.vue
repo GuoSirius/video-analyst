@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { transcoderAPI } from '../api'
 import { ElMessage } from 'element-plus'
 
@@ -10,107 +10,101 @@ const uploadedFiles = ref<string[]>([])
 const uploading = ref(false)
 const activeTab = ref('upload')
 
-async function checkFfmpeg() { const { data } = await transcoderAPI.checkFfmpeg(); ffmpegStatus.value = data }
-async function refreshTasks() { const { data } = await transcoderAPI.getTasks(); tasks.value = data }
+async function checkFfmpeg(){const{data}=await transcoderAPI.checkFfmpeg();ffmpegStatus.value=data}
+async function refreshTasks(){const{data}=await transcoderAPI.getTasks();tasks.value=data}
 
-async function handleUpload(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (!input.files?.length) return
-  uploading.value = true
-  const fd = new FormData()
-  for (const f of Array.from(input.files)) fd.append('files', f)
-  try {
-    const { data } = await transcoderAPI.upload(fd)
-    uploadedFiles.value.push(...data.files)
-    ElMessage.success(`已上传 ${data.files.length} 个文件`)
-  } catch { ElMessage.error('上传失败') }
-  uploading.value = false; input.value = ''
+async function handleUpload(e:Event){
+  const input=e.target as HTMLInputElement
+  if(!input.files?.length)return
+  uploading.value=true
+  const fd=new FormData()
+  for(const f of Array.from(input.files))fd.append('files',f)
+  try{const{data}=await transcoderAPI.upload(fd);uploadedFiles.value.push(...data.files);ElMessage.success(`已上传 ${data.files.length} 个文件`)}catch{ElMessage.error('上传失败')}
+  uploading.value=false;input.value=''
 }
 
-async function startConvert() {
-  if (!dirPath.value && !uploadedFiles.value.length) { ElMessage.warning('请先上传文件或指定目录'); return }
-  const { data } = await transcoderAPI.startConvert({
-    dir: dirPath.value || undefined,
-    files: uploadedFiles.value.length ? uploadedFiles.value : undefined,
-  })
-  if (data.error) { ElMessage.error(data.error); return }
-  ElMessage.success(`已创建 ${data.tasks.length} 个转码任务`)
-  activeTab.value = 'tasks'; refreshTasks()
+async function startConvert(){
+  if(!dirPath.value&&!uploadedFiles.value.length){ElMessage.warning('请先上传文件或指定目录');return}
+  const{data}=await transcoderAPI.startConvert({dir:dirPath.value||undefined,files:uploadedFiles.value.length?uploadedFiles.value:undefined})
+  if(data.error){ElMessage.error(data.error);return}
+  ElMessage.success(`已创建 ${data.tasks.length} 个转码任务`);activeTab.value='tasks';refreshTasks()
 }
 
-async function cancelTask(id: string) { await transcoderAPI.cancelTask(id); refreshTasks() }
-
-onMounted(() => { checkFfmpeg(); refreshTasks() })
+async function cancelTask(id:string){await transcoderAPI.cancelTask(id);refreshTasks()}
+onMounted(()=>{checkFfmpeg();refreshTasks()})
 </script>
 
 <template>
-  <div class="p-6 max-w-[1200px]">
-    <div class="flex items-center justify-between mb-5">
+  <div style="padding:24px 28px;max-width:1240px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
       <div>
-        <h2 class="text-lg font-bold mb-1">转码处理</h2>
-        <p class="text-sm text-gray-500">FFmpeg 将音视频转换为 16kHz 单声道 WAV</p>
+        <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">转码处理</h2>
+        <p style="font-size:13px;color:#6b7280">FFmpeg 将音视频转换为 16kHz 单声道 WAV</p>
       </div>
-      <div class="text-xs">
-        <span v-if="ffmpegStatus?.found" class="text-emerald-400"><i class="fas fa-circle text-[6px] mr-1"></i>FFmpeg {{ ffmpegStatus.version?.split('-')[0] }}</span>
-        <span v-else class="text-red-400"><i class="fas fa-circle text-[6px] mr-1"></i>FFmpeg 未检测到</span>
+      <div style="font-size:12px">
+        <span v-if="ffmpegStatus?.found" style="color:#34d399"><i class="fas fa-circle" style="font-size:5px;margin-right:4px"></i>FFmpeg {{ffmpegStatus.version?.split('-')[0]}}</span>
+        <span v-else style="color:#f87171"><i class="fas fa-circle" style="font-size:5px;margin-right:4px"></i>FFmpeg 未检测到</span>
       </div>
     </div>
 
-    <div class="flex gap-2 mb-5">
-      <button v-for="tab in [{ key: 'upload', label: '上传文件', icon: 'fa-upload' },{ key: 'tasks', label: '转码任务', icon: 'fa-list' }]"
-        :key="tab.key" @click="activeTab = tab.key"
-        class="px-4 py-2 text-sm rounded-lg transition-colors flex items-center gap-2"
-        :class="activeTab === tab.key ? 'bg-gray-800 text-gray-100 border border-gray-600' : 'text-gray-400 hover:text-gray-200'">
-        <i :class="'fas '+tab.icon+' text-xs'"></i>{{ tab.label }}<span v-if="tab.key==='tasks'" class="text-xs text-gray-500 ml-1">({{tasks.length}})</span>
-      </button>
+    <div style="display:flex;gap:8px;margin-bottom:20px">
+      <el-button v-for="tab in [{k:'upload',l:'上传文件'},{k:'tasks',l:'转码任务'}]" :key="tab.k"
+        :type="activeTab===tab.k?'primary':'default'" :plain="activeTab!==tab.k" size="small" @click="activeTab=tab.k">
+        {{tab.l}}<span v-if="tab.k==='tasks'" style="margin-left:4px;opacity:0.6">({{tasks.length}})</span>
+      </el-button>
     </div>
 
-    <div v-show="activeTab==='upload'" class="space-y-5">
-      <div class="bg-gray-800/60 rounded-xl border border-gray-700/50 p-5">
-        <h3 class="text-sm font-semibold mb-4 flex items-center gap-2"><i class="fas fa-upload text-emerald-400"></i>上传文件</h3>
-        <label class="block border-2 border-dashed border-gray-600/50 rounded-xl p-10 text-center cursor-pointer hover:border-blue-500/50 hover:bg-gray-700/30 transition-colors">
-          <i class="fas fa-cloud-arrow-up text-3xl text-gray-500 mb-3 block"></i>
-          <div class="text-sm text-gray-400 mb-1">{{ uploading ? '上传中...' : '点击或拖拽文件到此处' }}</div>
-          <div class="text-xs text-gray-600">支持 mp3/wav/flac/aac/ogg/mp4/mkv/webm/mov/avi</div>
-          <input type="file" multiple accept="audio/*,video/*" class="hidden" :disabled="uploading" @change="handleUpload" />
+    <div v-show="activeTab==='upload'" style="display:flex;flex-direction:column;gap:20px">
+      <div style="background:rgba(22,27,34,0.7);border:1px solid rgba(75,85,99,0.3);border-radius:12px;padding:24px">
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px"><i class="fas fa-upload" style="color:#34d399"></i>上传音视频文件</h3>
+        <label style="display:block;border:2px dashed rgba(75,85,99,0.35);border-radius:12px;padding:40px;text-align:center;cursor:pointer;transition:border-color 0.2s">
+          <i class="fas fa-cloud-arrow-up" style="font-size:32px;color:#6b7280;display:block;margin-bottom:12px"></i>
+          <div style="font-size:14px;color:#9ca3af;margin-bottom:4px">{{uploading?'上传中...':'点击或拖拽文件到此处'}}</div>
+          <div style="font-size:12px;color:#6b7280">支持 mp3/wav/flac/aac/ogg/mp4/mkv/webm/mov/avi</div>
+          <input type="file" multiple accept="audio/*,video/*" style="display:none" :disabled="uploading" @change="handleUpload" />
         </label>
-        <div v-if="uploadedFiles.length" class="mt-4 space-y-1">
-          <div class="text-xs text-gray-500 mb-2">已上传 {{ uploadedFiles.length }} 个文件</div>
-          <div v-for="f in uploadedFiles.slice(0,6)" :key="f" class="text-xs text-gray-400 py-1.5 px-3 bg-gray-900/40 rounded-lg truncate font-mono"><i class="fas fa-file-lines mr-2 text-gray-600"></i>{{ f }}</div>
+        <div v-if="uploadedFiles.length" style="margin-top:16px">
+          <div style="font-size:12px;color:#9ca3af;margin-bottom:8px">已上传 {{uploadedFiles.length}} 个文件</div>
+          <div v-for="f in uploadedFiles.slice(0,6)" :key="f" style="font-size:12px;color:#9ca3af;padding:6px 12px;background:rgba(13,17,23,0.5);border-radius:8px;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace"><i class="fas fa-file-lines" style="margin-right:8px;color:#6b7280"></i>{{f}}</div>
         </div>
       </div>
 
-      <div class="bg-gray-800/60 rounded-xl border border-gray-700/50 p-5">
-        <h3 class="text-sm font-semibold mb-4 flex items-center gap-2"><i class="fas fa-folder-open text-amber-400"></i>或扫描本地目录</h3>
-        <div class="flex gap-3">
-          <input v-model="dirPath" class="flex-1 px-3 py-2.5 bg-gray-900/70 border border-gray-600/50 rounded-lg text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-blue-500/50" placeholder="D:\media 或 /home/user/media" />
-          <button class="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-500 flex items-center gap-2 flex-shrink-0" @click="startConvert"><i class="fas fa-play text-xs"></i>开始转换</button>
+      <div style="background:rgba(22,27,34,0.7);border:1px solid rgba(75,85,99,0.3);border-radius:12px;padding:24px">
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px"><i class="fas fa-folder-open" style="color:#fbbf24"></i>或扫描本地目录</h3>
+        <div style="display:flex;gap:12px">
+          <el-input v-model="dirPath" placeholder="D:\media 或 /home/user/media" size="default" style="flex:1" />
+          <el-button type="primary" @click="startConvert"><i class="fas fa-play" style="margin-right:6px"></i>开始转换</el-button>
         </div>
       </div>
 
-      <div class="p-4 rounded-xl bg-blue-500/5 border border-blue-500/15 flex items-start gap-3">
-        <i class="fas fa-bolt text-blue-400 mt-0.5"></i>
-        <div><div class="text-sm text-blue-300 font-medium mb-0.5">输出规格</div><div class="text-xs text-blue-400/70">16kHz · 单声道 · 16-bit PCM WAV</div></div>
+      <div style="background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius:12px;padding:16px;display:flex;align-items:flex-start;gap:10px">
+        <i class="fas fa-bolt" style="color:#60a5fa;margin-top:2px"></i>
+        <div><div style="font-size:13px;color:#93c5fd;font-weight:500;margin-bottom:2px">输出规格</div><div style="font-size:12px;color:rgba(147,197,253,0.7)">16kHz · 单声道 · 16-bit PCM WAV</div></div>
       </div>
     </div>
 
-    <div v-show="activeTab==='tasks'" class="bg-gray-800/60 rounded-xl border border-gray-700/50 p-5">
+    <div v-show="activeTab==='tasks'" style="background:rgba(22,27,34,0.7);border:1px solid rgba(75,85,99,0.3);border-radius:12px;padding:24px">
       <el-table v-if="tasks.length" :data="tasks" size="small">
-        <el-table-column label="任务 ID" min-width="160"><template #default="{row}"><span class="text-xs font-mono text-gray-400">{{row.id.slice(0,12)}}...</span></template></el-table-column>
+        <el-table-column label="任务 ID" min-width="160"><template #default="{row}"><span style="font-size:12px;font-family:monospace;color:#9ca3af">{{row.id.slice(0,12)}}...</span></template></el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{row}">
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs"
-              :class="row.status==='completed'?'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25':row.status==='running'?'bg-blue-500/15 text-blue-300 border border-blue-500/25':row.status==='failed'?'bg-red-500/15 text-red-300 border border-red-500/25':'bg-yellow-500/15 text-yellow-300 border border-yellow-500/25'">
-              {{row.status==='completed'?'完成':row.status==='running'?'转换中':row.status==='failed'?'失败':'等待'}}</span>
+            <span :style="{
+              display:'inline-flex',padding:'2px 8px',borderRadius:'99px',fontSize:'11px',
+              background:row.status==='completed'?'rgba(52,211,153,0.15)':row.status==='running'?'rgba(59,130,246,0.15)':row.status==='failed'?'rgba(248,113,113,0.15)':'rgba(250,204,21,0.15)',
+              color:row.status==='completed'?'#6ee7b7':row.status==='running'?'#93c5fd':row.status==='failed'?'#fca5a5':'#fde047',
+            }">{{row.status==='completed'?'完成':row.status==='running'?'转换中':row.status==='failed'?'失败':'等待'}}</span>
           </template>
         </el-table-column>
-        <el-table-column label="进度" width="180"><template #default="{row}"><el-progress :percentage="row.progress" :stroke-width="6" :status="row.status==='failed'?'exception':row.status==='completed'?'success':undefined"/></template></el-table-column>
-        <el-table-column prop="retries" label="重试" width="60" align="center"/>
+        <el-table-column label="进度" width="180"><template #default="{row}"><el-progress :percentage="row.progress" :stroke-width="6" :status="row.status==='failed'?'exception':row.status==='completed'?'success':undefined" /></template></el-table-column>
+        <el-table-column prop="retries" label="重试" width="60" align="center" />
         <el-table-column label="操作" width="80" align="center">
-          <template #default="{row}"><button v-if="row.status==='running'||row.status==='pending'" class="text-xs text-red-400 hover:text-red-300" @click="cancelTask(row.id)">取消</button><span v-else class="text-xs text-gray-600">-</span></template>
+          <template #default="{row}">
+            <el-button v-if="row.status==='running'||row.status==='pending'" size="small" type="danger" plain @click="cancelTask(row.id)">取消</el-button>
+            <span v-else style="font-size:12px;color:#6b7280">-</span>
+          </template>
         </el-table-column>
       </el-table>
-      <div v-else class="text-center py-16 text-gray-500 text-sm"><i class="fas fa-wand-magic-sparkles text-3xl mb-3 block opacity-30"></i>暂无转码任务</div>
+      <div v-else style="text-align:center;padding:48px 0;color:#6b7280;font-size:13px"><i class="fas fa-wand-magic-sparkles" style="font-size:32px;margin-bottom:12px;display:block;opacity:0.3"></i>暂无转码任务</div>
     </div>
   </div>
 </template>

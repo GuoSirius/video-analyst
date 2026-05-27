@@ -1,50 +1,84 @@
-/* Element Plus dark mode fixes — applied after UnoCSS */
-html.dark {
-  color-scheme: dark;
+/* Element Plus dark mode comprehensive fixes */
+html.dark { color-scheme: dark; }
+
+/* Fix dark background for all Element Plus components */
+:root {
+  --app-bg: #0d1117;
+  --app-card: rgba(22, 27, 34, 0.8);
+  --app-border: rgba(75, 85, 99, 0.35);
+  --app-input-bg: rgba(13, 17, 23, 0.8);
 }
 
-/* Ensure Element Plus dark variables take precedence over UnoCSS resets */
-.el-button,
-.el-input__wrapper,
-.el-select .el-input__wrapper,
-.el-input-number,
-.el-table {
-  --el-fill-color-blank: rgba(17, 24, 39, 0.8);
+/* Override Element Plus button in dark mode */
+.el-button--primary {
+  --el-button-bg-color: #2563eb;
+  --el-button-border-color: #2563eb;
+  --el-button-hover-bg-color: #3b82f6;
+  --el-button-hover-border-color: #3b82f6;
+  --el-button-active-bg-color: #1d4ed8;
+}
+.el-button--default {
+  --el-button-bg-color: rgba(55, 65, 81, 0.6);
+  --el-button-border-color: rgba(75, 85, 99, 0.4);
+  --el-button-text-color: #d1d5db;
+  --el-button-hover-bg-color: rgba(75, 85, 99, 0.6);
+  --el-button-hover-text-color: #f3f4f6;
 }
 
-/* Fix el-table in dark mode */
+/* Table */
 .el-table {
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
   --el-table-header-bg-color: rgba(17, 24, 39, 0.6);
-  --el-table-row-hover-bg-color: rgba(55, 65, 81, 0.4);
-  --el-table-border-color: rgba(75, 85, 99, 0.3);
+  --el-table-row-hover-bg-color: rgba(55, 65, 81, 0.3);
+  --el-table-border-color: rgba(75, 85, 99, 0.25);
 }
+.el-table th { color: #9ca3af; font-weight: 600; font-size: 12px; }
+.el-table td { color: #d1d5db; font-size: 13px; }
 
-/* Fix el-tabs */
-.el-tabs__item {
-  color: #9ca3af;
-}
-.el-tabs__item.is-active {
-  color: #93c5fd;
-}
+/* Tabs */
+.el-tabs__item { color: #9ca3af !important; }
+.el-tabs__item.is-active { color: #93c5fd !important; }
+.el-tabs__active-bar { background-color: #3b82f6; }
 
-/* Fix el-progress bar background */
-.el-progress-bar__outer {
-  background-color: rgba(55, 65, 81, 0.6);
-}
+/* Progress */
+.el-progress-bar__outer { background-color: rgba(55, 65, 81, 0.5); }
+.el-progress-bar__inner { background-color: #3b82f6; }
+.el-progress-bar__innerText { color: #d1d5db !important; }
 
-/* Fix el-input-number */
-.el-input-number .el-input__wrapper {
-  background-color: rgba(17, 24, 39, 0.7);
+/* Input / Select */
+.el-input__wrapper, .el-textarea__inner {
+  background-color: rgba(13, 17, 23, 0.7) !important;
+  border-color: rgba(75, 85, 99, 0.35) !important;
+  box-shadow: none !important;
 }
+.el-input__inner { color: #e5e7eb !important; }
+.el-input__inner::placeholder { color: #6b7280; }
 
-/* Fix el-select */
-.el-select .el-input__wrapper {
-  background-color: rgba(17, 24, 39, 0.7);
-}
+/* Input number */
+.el-input-number .el-input__wrapper { background-color: rgba(13, 17, 23, 0.7) !important; }
 
-/* Fix el-checkbox label */
-.el-checkbox {
-  --el-checkbox-text-color: #d1d5db;
-}
+/* Select dropdown */
+.el-select-dropdown { background-color: #1f2937 !important; border-color: rgba(75, 85, 99, 0.4) !important; }
+.el-select-dropdown__item { color: #d1d5db; }
+.el-select-dropdown__item.hover, .el-select-dropdown__item:hover { background-color: rgba(55, 65, 81, 0.5); }
+.el-select-dropdown__item.selected { color: #93c5fd; }
+
+/* Checkbox */
+.el-checkbox__label { color: #d1d5db; }
+
+/* Pagination */
+.el-pagination button, .el-pager li { color: #d1d5db; background-color: transparent; }
+.el-pager li.is-active { background-color: #2563eb; }
+
+/* Message box for dark mode */
+.el-message { background-color: #1f2937 !important; border-color: rgba(75, 85, 99, 0.4) !important; }
+.el-message--success { --el-message-bg-color: #1f2937; }
+.el-message--warning { --el-message-bg-color: #1f2937; }
+.el-message--error { --el-message-bg-color: #1f2937; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: rgba(17, 24, 39, 0.5); }
+::-webkit-scrollbar-thumb { background: rgba(75, 85, 99, 0.5); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.5); }
