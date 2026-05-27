@@ -21,6 +21,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('foreign_keys = ON')
     this.initTables()
+    this.seedDefaults()
   }
 
   onModuleDestroy() {
@@ -101,5 +102,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS idx_transcriptions_item ON transcriptions(item_id);
       CREATE INDEX IF NOT EXISTS idx_ai_results_transcription ON ai_results(transcription_id);
     `)
+  }
+
+  /** 从 .env 导入默认模型（INSERT OR IGNORE，仅首次初始化时写入） */
+  private seedDefaults() {
+    const stmt = this.db.prepare(`
+      INSERT OR IGNORE INTO ai_providers (id, name, api_key, base_url, default_model, priority, enabled)
+      VALUES (?, ?, ?, ?, ?, ?, 1)
+    `)
+    stmt.run('deepseek', 'deepseek',
+      process.env.DEEPSEEK_API_KEY || '',
+      process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
+      'deepseek-chat', 1)
+    stmt.run('minimax', 'minimax',
+      process.env.MINIMAX_API_KEY || '',
+      process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat',
+      'MiniMax-M1', 2)
   }
 }
