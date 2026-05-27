@@ -147,15 +147,15 @@ export class WhisperController {
       const transcription = this.db.db.prepare('SELECT * FROM transcriptions WHERE id = ?').get(transcriptionId) as any
       if (!transcription) throw new Error('Transcription not found')
       this.queue.updateTaskProgress(taskId, 30)
-      const result = await this.ai.callLLM(config, transcription.content)
+      const { text } = await this.ai.callLLM(config, transcription.content)
       this.queue.updateTaskProgress(taskId, 80)
       const resultId = uuid()
       this.db.db.prepare(`
         INSERT INTO ai_results (id, transcription_id, model, prompt, result, status)
         VALUES (?, ?, ?, ?, ?, 'completed')
-      `).run(resultId, transcriptionId, config.model, config.prompt, result)
+      `).run(resultId, transcriptionId, config.model, config.prompt, text)
       this.queue.updateTaskProgress(taskId, 100)
-      this.queue.updateTaskResult(taskId, { resultId, result })
+      this.queue.updateTaskResult(taskId, { resultId, text })
     } catch (err: any) {
       this.queue.updateTaskError(taskId, err.message)
     }

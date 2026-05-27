@@ -20,6 +20,17 @@ export class AIController {
     return this.ai.getProviders()
   }
 
+  @Get('priority')
+  getPriority() {
+    return { priority: this.ai.getPriority() }
+  }
+
+  @Post('priority')
+  setPriority(@Body() body: { providers: string[] }) {
+    this.ai.setPriority(body.providers)
+    return { priority: this.ai.getPriority() }
+  }
+
   @Post('analyze')
   async startAnalyze(@Body() body: {
     config: AIConfig
@@ -72,17 +83,17 @@ export class AIController {
       }
 
       this.queue.updateTaskProgress(taskId, 30)
-      const result = await this.ai.callLLM(config, transcription.content)
+      const { text, provider } = await this.ai.callLLM(config, transcription.content)
       this.queue.updateTaskProgress(taskId, 80)
 
       const resultId = uuid()
       this.db.db.prepare(`
         INSERT INTO ai_results (id, transcription_id, model, prompt, result, status)
         VALUES (?, ?, ?, ?, ?, 'completed')
-      `).run(resultId, transcriptionId, config.model, config.prompt, result)
+      `).run(resultId, transcriptionId, `${provider}/${config.model || 'default'}`, config.prompt, text)
 
       this.queue.updateTaskProgress(taskId, 100)
-      this.queue.updateTaskResult(taskId, { resultId, result })
+      this.queue.updateTaskResult(taskId, { resultId, text, provider })
     } catch (err: any) {
       this.queue.updateTaskError(taskId, err.message)
     }

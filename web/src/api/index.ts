@@ -36,6 +36,8 @@ export const whisperAPI = {
 // AI
 export const aiAPI = {
   getProviders: () => api.get('/ai/providers'),
+  getPriority: () => api.get('/ai/priority'),
+  setPriority: (providers: string[]) => api.post('/ai/priority', { providers }),
   analyze: (body: any) => api.post('/ai/analyze', body),
   getTasks: () => api.get('/ai/tasks'),
   getResults: () => api.get('/ai/results'),

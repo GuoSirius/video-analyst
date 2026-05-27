@@ -107,11 +107,11 @@ video-analyst/
 │       ├── pages/          # 仪表盘/爬虫/转码/AI/导出
 │       ├── api/            # 全部 API 封装 (含 settings)
 │       └── composables/    # useSSE 实时进度
-├── data/                   # 运行时数据 (gitignore)
-│   ├── video-analyst.db    # SQLite 数据库
-│   ├── media/              # 上传文件
-│   ├── transcoded/         # 转码输出 WAV
-│   └── exports/            # Excel 导出
+├── data/                   # 运行时数据
+│   ├── video-analyst.db    # SQLite 数据库 (Git 提交)
+│   ├── media/              # 用户上传的音视频 (gitignore)
+│   ├── transcoded/         # FFmpeg 转码输出 WAV (gitignore)
+│   └── exports/            # Excel 导出文件 (gitignore)
 └── .env                    # 环境配置
 ```
 

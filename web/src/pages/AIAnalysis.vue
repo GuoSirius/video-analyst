@@ -85,11 +85,30 @@ onMounted(refreshAll)
     <div v-show="activeTab==='ai'" class="space-y-5">
       <div class="card-static">
         <h3 class="text-sm font-semibold mb-4 flex items-center gap-2"><i class="fas fa-robot text-amber-400"></i>分析配置</h3>
+
+        <!-- Provider priority -->
+        <div class="mb-4 p-4 rounded-lg bg-gray-900/40 border border-gray-700/30">
+          <div class="text-xs text-gray-400 mb-2">模型优先级 (调用顺序：从上到下，失败后自动尝试下一个)</div>
+          <div class="space-y-1">
+            <div v-for="(p, i) in providers" :key="p.name"
+              class="flex items-center gap-3 px-3 py-2 rounded-lg"
+              :class="p.configured ? 'bg-gray-800/60 border border-gray-700/40' : 'bg-gray-900/40 border border-gray-700/20 opacity-60'">
+              <span class="text-[11px] text-gray-500 w-5 text-center">{{ i + 1 }}</span>
+              <span class="text-sm flex-1" :class="p.configured ? 'text-gray-200' : 'text-gray-500'">
+                {{ p.name === 'deepseek' ? 'DeepSeek' : 'MiniMax' }}
+                <span v-if="!p.configured" class="text-[11px] text-red-400 ml-2">未配置 API Key</span>
+                <span v-else-if="i === 0" class="text-[11px] text-emerald-400 ml-2">首选</span>
+                <span v-else class="text-[11px] text-gray-500 ml-2">备选 #{{ i + 1 }}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
         <div class="grid grid-cols-3 gap-4 mb-4">
           <div>
-            <div class="text-xs text-gray-400 mb-1.5">模型</div>
+            <div class="text-xs text-gray-400 mb-1.5">首选模型</div>
             <el-select v-model="selectedModel" class="!w-full">
-              <el-option v-for="p in providers" :key="p.name" :value="p.name" :label="p.name==='deepseek'?'DeepSeek':'MiniMax'"/>
+              <el-option v-for="p in providers.filter((x:any)=>x.configured)" :key="p.name" :value="p.name" :label="p.name==='deepseek'?'DeepSeek':'MiniMax'"/>
             </el-select>
           </div>
           <div>
@@ -97,10 +116,10 @@ onMounted(refreshAll)
             <el-input-number v-model="temperature" :min="0" :max="2" :step="0.1" :precision="1" class="!w-full"/>
           </div>
           <div>
-            <div class="text-xs text-gray-400 mb-1.5">可用模型</div>
-            <div class="flex gap-2 pt-1.5">
-              <span v-for="p in providers.filter((x:any)=>x.configured)" :key="p.name" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">{{p.name}}</span>
-              <span v-if="!providers.filter((x:any)=>x.configured).length" class="text-xs text-red-400">无可用模型</span>
+            <div class="text-xs text-gray-400 mb-1.5">调用策略</div>
+            <div class="text-xs text-gray-300 pt-1.5 leading-relaxed">
+              按优先级依次调用<br/>
+              <span class="text-gray-500">失败自动 fallback 到下一级</span>
             </div>
           </div>
         </div>

@@ -1,13 +1,21 @@
 node_modules/
 dist/
 .env
-data/
-*.db
-*.db-journal
-!/.codegraph/*.db
 *.tsbuildinfo
 *.log
 .DS_Store
 Thumbs.db
 .turbo/
 .cache/
+
+# 数据目录：数据库提交，媒体文件忽略
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/media/
+data/transcoded/
+data/exports/
+
+# CodeGraph 索引文件
+.codegraph/cache/
