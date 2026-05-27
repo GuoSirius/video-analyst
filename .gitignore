@@ -12,6 +12,8 @@ Thumbs.db
 data/media/
 data/transcoded/
 data/exports/
+data/*.db-shm
+data/*.db-wal
 
 # CodeGraph 缓存忽略，索引数据库提交
 .codegraph/cache/
