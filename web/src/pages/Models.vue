@@ -114,15 +114,13 @@ const modelOptions = computed(() => {
               <span class="text-sm font-mono font-bold" :class="row.enabled ? 'text-blue-300' : 'text-gray-600'">
                 #{{ $index + 1 }}
               </span>
-              <div class="flex flex-col gap-0.5 ml-1">
-                <button class="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700 transition-colors"
-                  :class="{'invisible': $index === 0}" @click="moveUp($index)">
+              <div class="flex flex-col gap-0.5">
+                <el-button size="small" circle :disabled="$index === 0" @click="moveUp($index)">
                   <i class="fas fa-chevron-up text-[10px]"></i>
-                </button>
-                <button class="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700 transition-colors"
-                  :class="{'invisible': $index === providers.length - 1}" @click="moveDown($index)">
+                </el-button>
+                <el-button size="small" circle :disabled="$index === providers.length - 1" @click="moveDown($index)">
                   <i class="fas fa-chevron-down text-[10px]"></i>
-                </button>
+                </el-button>
               </div>
             </div>
           </template>
