@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { crawlerAPI } from '../api'
+import { crawlerAPI, whisperAPI } from '../api'
 import { ElMessage } from 'element-plus'
 
 const url = ref('')
@@ -36,6 +36,17 @@ async function startCrawl(){
 }
 
 async function cancelTask(id:string){await crawlerAPI.cancelTask(id);refresh()}
+
+const selectedIds = ref<string[]>([])
+async function continuePipeline() {
+  if (!selectedIds.value.length) { ElMessage.warning('请先勾选要处理的项'); return }
+  try {
+    const { data } = await whisperAPI.transcribe({ itemIds: selectedIds.value })
+    if (data.error) { ElMessage.error(data.error); return }
+    ElMessage.success(`已送入流水线: ${data.tasks?.length || 0} 个任务, 后续自动完成`)
+    refresh()
+  } catch { ElMessage.error('启动失败') }
+}
 
 const filtered = computed(()=>selectedTaskId.value?items.value.filter((i:any)=>i.task_id===selectedTaskId.value):items.value)
 onMounted(refresh)
@@ -134,12 +145,19 @@ onMounted(refresh)
           <el-option v-for="t in tasks" :key="t.id" :label="t.id.slice(0,12)+'...'" :value="t.id"/>
         </el-select>
       </div>
-      <el-table v-if="filtered.length" :data="filtered" size="small" max-height="400">
+      <el-table v-if="filtered.length" :data="filtered" size="small" max-height="400" @selection-change="(rows:any)=>selectedIds=rows.map((r:any)=>r.id)">
         <el-table-column prop="title" label="标题" show-overflow-tooltip min-width="200"/>
+        <el-table-column type="selection" width="40"/>
         <el-table-column prop="media_url" label="媒体链接" show-overflow-tooltip min-width="250"/>
         <el-table-column label="类型" width="80"><template #default="{row}"><span class="text-xs text-gray-400">{{row.media_type||'-'}}</span></template></el-table-column>
         <el-table-column label="来源" width="90"><template #default="{row}"><span class="text-xs text-gray-400">{{row.media_source||'-'}}</span></template></el-table-column>
       </el-table>
+      <div v-if="filtered.length" class="mt-4 flex items-center gap-3">
+        <el-button type="success" :disabled="!selectedIds.length" @click="continuePipeline">
+          <i class="fas fa-forward-step mr-1.5"></i>继续流水线 → 识别+AI分析
+        </el-button>
+        <span class="text-xs text-gray-500">勾选项目后送入自动流水线 (需已转码为 WAV)</span>
+      </div>
       <div v-else class="text-center py-12 text-gray-500 text-sm"><i class="fas fa-table text-3xl mb-3 block opacity-30"></i>暂无数据</div>
     </div>
   </div>

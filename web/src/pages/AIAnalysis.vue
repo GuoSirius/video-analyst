@@ -62,7 +62,12 @@ onMounted(refreshAll)
       </div>
 
       <div v-if="transcriptions.length" class="card-static">
-        <h3 class="text-sm font-semibold mb-4">识别结果 ({{transcriptions.length}})</h3>
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold">识别结果 ({{transcriptions.length}})</h3>
+          <el-button type="success" size="small" @click="activeTab='ai'; selectedTransIds=transcriptions.filter((t:any)=>t.status==='completed').map((t:any)=>t.id)">
+            <i class="fas fa-forward-step mr-1"></i>继续流水线 → AI分析
+          </el-button>
+        </div>
         <div class="space-y-3 max-h-[500px] overflow-y-auto">
           <div v-for="t in transcriptions" :key="t.id" class="p-4 rounded-lg bg-gray-900/40 border border-gray-700/30">
             <div class="flex items-center justify-between mb-2">

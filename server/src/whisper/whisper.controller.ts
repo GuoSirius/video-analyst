@@ -25,9 +25,20 @@ export class WhisperController {
     this.transcodedDir = path.resolve(process.cwd(), '..', 'data', 'transcoded')
   }
 
-  @Post('load-model')
-  async loadModel(@Body() body: { modelPath: string }) {
-    return this.whisper.loadModel(body.modelPath)
+  @Get('models')
+  getModels() {
+    const current = this.db.db.prepare("SELECT value FROM settings WHERE key = 'whisper_model'").get() as any
+    return {
+      models: this.whisper.getAvailableModels(),
+      current: current?.value || 'base',
+      mode: this.whisper.isApiMode() ? 'api' : 'local',
+    }
+  }
+
+  @Post('models')
+  setModel(@Body() body: { model: string }) {
+    this.db.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('whisper_model', ?)").run(body.model)
+    return { model: body.model }
   }
 
   @Post('transcribe')
@@ -98,7 +109,9 @@ export class WhisperController {
       this.queue.updateTaskStatus(taskId, 'running')
       this.queue.updateTaskProgress(taskId, 30)
 
-      const result = await this.whisper.inference(filePath, options)
+      const modelRow = this.db.db.prepare("SELECT value FROM settings WHERE key = 'whisper_model'").get() as any
+      const model = (modelRow?.value || 'base') as any
+      const result = await this.whisper.inference(filePath, { ...options, model })
 
       const transcriptionId = uuid()
       this.db.db.prepare(`
@@ -106,8 +119,7 @@ export class WhisperController {
         VALUES (?, ?, ?, ?, ?, ?, 'completed')
       `).run(
         transcriptionId, itemId || null, filePath,
-        result.text || JSON.stringify(result), 'auto',
-        result.duration || result.duration_seconds || 0,
+        result.text || JSON.stringify(result), 'auto', 0,
       )
 
       this.queue.updateTaskProgress(taskId, 100)
