@@ -6,7 +6,7 @@ import { ElMessage } from 'element-plus'
 const url = ref('')
 const itemSelector = ref('')
 const nextPageSelector = ref('')
-const maxPages = ref(1)
+const maxPages = ref(0)
 const rules = ref([
   { name:'title',selector:'h1,.title,[class*="title"]',attr:'' },
   { name:'media_url',selector:'video,audio,source,a[href$=".mp4"]',attr:'src' },

@@ -108,13 +108,11 @@ const modelOptions = computed(() => {
       </div>
 
       <el-table v-if="providers.length" :data="providers" size="small">
-        <el-table-column label="优先级" width="100" align="center">
+        <el-table-column label="优先级" width="80" align="center">
           <template #default="{ row, $index }">
-            <div class="flex items-center justify-center gap-1">
-              <span class="text-sm font-mono font-bold" :class="row.enabled ? 'text-blue-300' : 'text-gray-600'">
-                #{{ $index + 1 }}
-              </span>
-              <div class="flex flex-col gap-0.5">
+            <div class="flex flex-col items-center gap-1">
+              <span class="text-xs font-bold" :class="row.enabled ? 'text-blue-300' : 'text-gray-600'">#{{ $index + 1 }}</span>
+              <div class="flex gap-1">
                 <el-button size="small" circle :disabled="$index === 0" @click="moveUp($index)">
                   <i class="fas fa-chevron-up text-[10px]"></i>
                 </el-button>
@@ -122,6 +120,7 @@ const modelOptions = computed(() => {
                   <i class="fas fa-chevron-down text-[10px]"></i>
                 </el-button>
               </div>
+            </div>
             </div>
           </template>
         </el-table-column>
