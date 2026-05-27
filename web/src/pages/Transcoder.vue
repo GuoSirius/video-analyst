@@ -60,6 +60,20 @@ onMounted(()=>{checkFfmpeg();checkWhisper();refreshTasks()})
       </el-button>
     </div>
 
+    <div v-if="whisperStatus?.mode==='unavailable'" class="rounded-xl bg-amber-500/8 border border-amber-500/20 p-4 mb-5">
+      <div class="flex items-start gap-3">
+        <i class="fas fa-triangle-exclamation text-amber-400 mt-0.5"></i>
+        <div class="flex-1">
+          <div class="text-sm text-amber-300 font-medium mb-1">语音识别不可用</div>
+          <div class="text-xs text-amber-400/80 mb-2">{{ whisperStatus.detail }}</div>
+          <div class="text-xs text-gray-400 space-y-1">
+            <div><strong>方案一 (远端服务):</strong> 在 <code class="text-gray-500 bg-gray-800 px-1 rounded">.env</code> 中设置 <code class="text-gray-500 bg-gray-800 px-1 rounded">MEMO_AI_BASE_URL=http://your-server:9588</code>，然后重启</div>
+            <div><strong>方案二 (本地 CLI):</strong> 执行 <code class="text-gray-500 bg-gray-800 px-1 rounded">pip install openai-whisper</code>，确保 <code class="text-gray-500 bg-gray-800 px-1 rounded">whisper</code> 命令可用</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-show="activeTab==='upload'" class="space-y-5">
       <div class="card-static">
         <h3 class="text-sm font-semibold mb-4 flex items-center gap-2"><i class="fas fa-upload text-emerald-400"></i>上传音视频文件</h3>
