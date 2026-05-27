@@ -60,8 +60,11 @@ export class CrawlerController {
 
       let currentUrl = url
       let totalItems = 0
+      let page = 0
+      const isUnlimited = maxPages === 0
 
-      for (let page = 0; page < maxPages; page++) {
+      while (true) {
+        if (!isUnlimited && page >= maxPages) break
         const html = await this.crawler.fetchHtml(currentUrl)
         const items = this.crawler.parseHtml(html, rules, itemSelector)
 
@@ -88,18 +91,19 @@ export class CrawlerController {
           totalItems++
         }
 
-        const progress = maxPages > 1 ? Math.round(((page + 1) / maxPages) * 100) : 100
-        this.queue.updateTaskProgress(taskId, progress)
+        const progress = isUnlimited ? 50 : Math.round(((page + 1) / maxPages) * 100)
+        this.queue.updateTaskProgress(taskId, Math.min(progress, 99))
 
-        if (nextPageSelector && page < maxPages - 1) {
+        if (nextPageSelector) {
           const $ = cheerio.load(html)
           const nextHref = $(nextPageSelector).attr('href')
           if (nextHref) {
             currentUrl = new URL(nextHref, currentUrl).href
-          } else {
-            break
+            page++
+            continue
           }
         }
+        break
       }
 
       this.queue.updateTaskResult(taskId, { itemsFound: totalItems })

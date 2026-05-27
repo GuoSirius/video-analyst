@@ -1,7 +1,7 @@
 import api from '../client'
 
 export const whisperAPI = {
-  loadModel: (modelPath: string) => api.post('/whisper/load-model', { modelPath }),
+  getStatus: () => api.get('/whisper/status'),
   transcribe: (body: any) => api.post('/whisper/transcribe', body),
   getTasks: () => api.get('/whisper/tasks'),
   getResults: (itemId?: string) => api.get('/whisper/results', { params: { itemId } }),

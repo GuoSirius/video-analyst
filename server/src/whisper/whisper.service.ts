@@ -25,6 +25,35 @@ export class WhisperService {
     return this.baseUrl
   }
 
+  async getStatus(): Promise<{ mode: 'api' | 'local' | 'unavailable'; detail: string }> {
+    if (this.baseUrl) {
+      try {
+        const resp = await fetch(`${this.baseUrl}/inference`, { method: 'HEAD', signal: AbortSignal.timeout(3000) })
+        if (resp.ok || resp.status === 405) {
+          return { mode: 'api', detail: `远端服务: ${this.baseUrl}` }
+        }
+        return { mode: 'api', detail: `远端服务异常: HTTP ${resp.status}` }
+      } catch {
+        return { mode: 'api', detail: `远端服务不可达: ${this.baseUrl}` }
+      }
+    }
+    // Check local CLI
+    try {
+      const { execSync } = require('child_process')
+      const out = execSync('whisper --help 2>&1', { timeout: 5000, encoding: 'utf-8' })
+      if (out.includes('usage') || out.includes('--model')) {
+        return { mode: 'local', detail: '本地 Whisper CLI' }
+      }
+      return { mode: 'unavailable', detail: 'whisper CLI 未正确安装' }
+    } catch (err: any) {
+      const msg = err.stderr || err.stdout || err.message || ''
+      if (msg.includes('not found') || msg.includes('not recognized')) {
+        return { mode: 'unavailable', detail: 'whisper CLI 未安装，请执行: pip install openai-whisper' }
+      }
+      return { mode: 'unavailable', detail: `whisper CLI 异常: ${msg.slice(0, 100)}` }
+    }
+  }
+
   getAvailableModels(): WhisperModel[] {
     return ['tiny', 'base', 'small', 'medium', 'large']
   }

@@ -25,6 +25,11 @@ export class WhisperController {
     this.transcodedDir = path.resolve(process.cwd(), '..', 'data', 'transcoded')
   }
 
+  @Get('status')
+  async getStatus() {
+    return this.whisper.getStatus()
+  }
+
   @Get('models')
   getModels() {
     const current = this.db.db.prepare("SELECT value FROM settings WHERE key = 'whisper_model'").get() as any

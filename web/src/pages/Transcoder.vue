@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { transcoderAPI } from '../api'
+import { transcoderAPI, whisperAPI } from '../api'
 import { ElMessage } from 'element-plus'
 
 const ffmpegStatus = ref<any>(null)
+const whisperStatus = ref<any>(null)
 const dirPath = ref('')
 const tasks = ref<any[]>([])
 const uploadedFiles = ref<string[]>([])
@@ -11,6 +12,7 @@ const uploading = ref(false)
 const activeTab = ref('upload')
 
 async function checkFfmpeg(){const{data}=await transcoderAPI.checkFfmpeg();ffmpegStatus.value=data}
+async function checkWhisper(){try{const{data}=await whisperAPI.getStatus();whisperStatus.value=data}catch{whisperStatus.value=null}}
 async function refreshTasks(){const{data}=await transcoderAPI.getTasks();tasks.value=data}
 
 async function handleUpload(e:Event){
@@ -31,7 +33,7 @@ async function startConvert(){
 }
 
 async function cancelTask(id:string){await transcoderAPI.cancelTask(id);refreshTasks()}
-onMounted(()=>{checkFfmpeg();refreshTasks()})
+onMounted(()=>{checkFfmpeg();checkWhisper();refreshTasks()})
 </script>
 
 <template>
@@ -41,9 +43,13 @@ onMounted(()=>{checkFfmpeg();refreshTasks()})
         <h2 class="text-lg font-bold mb-1">转码处理</h2>
         <p class="text-[13px] text-gray-500">FFmpeg 将音视频转换为 16kHz 单声道 WAV</p>
       </div>
-      <div class="text-xs">
+      <div class="text-xs flex items-center gap-4">
         <span v-if="ffmpegStatus?.found" class="text-emerald-400"><i class="fas fa-circle text-[5px] mr-1"></i>FFmpeg {{ffmpegStatus.version?.split('-')[0]}}</span>
         <span v-else class="text-red-400"><i class="fas fa-circle text-[5px] mr-1"></i>FFmpeg 未检测到</span>
+        <span class="text-gray-600">|</span>
+        <span v-if="whisperStatus?.mode==='api'" class="text-blue-400"><i class="fas fa-cloud mr-1"></i>识别: API</span>
+        <span v-else-if="whisperStatus?.mode==='local'" class="text-emerald-400"><i class="fas fa-laptop mr-1"></i>识别: 本地 CLI</span>
+        <span v-else class="text-red-400 cursor-help" :title="whisperStatus?.detail">{{ whisperStatus ? '识别: 不可用' : '检测中...' }}</span>
       </div>
     </div>
 

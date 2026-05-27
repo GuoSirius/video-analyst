@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { aiAPI } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -77,6 +77,13 @@ async function toggleEnabled(p: Provider) {
 }
 
 onMounted(load)
+
+const modelOptions = computed(() => {
+  const base = ['deepseek-chat','deepseek-reasoner','gpt-4o','gpt-4o-mini','claude-3-opus','claude-3-sonnet','gemini-pro','qwen-turbo','qwen-plus','glm-4','moonshot-v1','MiniMax-M1','abab6.5s-chat']
+  if (editing.value.name === 'deepseek') return ['deepseek-chat','deepseek-reasoner',...base]
+  if (editing.value.name === 'minimax') return ['MiniMax-M1','abab6.5s-chat',...base]
+  return base
+})
 </script>
 
 <template>
@@ -145,7 +152,9 @@ onMounted(load)
       <div class="space-y-4">
         <div>
           <div class="text-xs text-gray-400 mb-1.5">名称</div>
-          <el-input v-model="editing.name" placeholder="例如: deepseek, openai, qwen" />
+          <el-select v-model="editing.name" filterable allow-create placeholder="选择或输入模型名" class="!w-full">
+            <el-option v-for="n in ['deepseek','minimax','openai','qwen','glm','moonshot','baichuan','gemini','claude']" :key="n" :label="n" :value="n" />
+          </el-select>
         </div>
         <div>
           <div class="text-xs text-gray-400 mb-1.5">API Key</div>
@@ -158,7 +167,9 @@ onMounted(load)
         <div class="grid grid-cols-2 gap-4">
           <div>
             <div class="text-xs text-gray-400 mb-1.5">默认模型名</div>
-            <el-input v-model="editing.default_model" placeholder="model-name" />
+            <el-select v-model="editing.default_model" filterable allow-create placeholder="选择或输入" class="!w-full">
+              <el-option v-for="n in modelOptions" :key="n" :label="n" :value="n" />
+            </el-select>
           </div>
           <div>
             <div class="text-xs text-gray-400 mb-1.5">启用</div>

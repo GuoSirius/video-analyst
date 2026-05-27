@@ -85,8 +85,8 @@ onMounted(refresh)
             <div class="text-[11px] text-gray-600 mt-1">留空不翻页</div>
           </div>
           <div>
-            <div class="text-xs text-gray-400 mb-1.5">最大页数</div>
-            <el-input-number v-model="maxPages" :min="1" :max="100" class="!w-full" />
+            <div class="text-xs text-gray-400 mb-1.5">最大页数 (0=全部)</div>
+            <el-input-number v-model="maxPages" :min="0" :max="9999" class="!w-full" />
           </div>
         </div>
       </div>
