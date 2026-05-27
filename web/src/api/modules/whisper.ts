@@ -8,4 +8,5 @@ export const whisperAPI = {
   getModels: () => api.get('/whisper/models'),
   setModel: (model: string) => api.post('/whisper/models', { model }),
   cancelTask: (id: string) => api.delete(`/whisper/tasks/${id}`),
+  retryTask: (id: string) => api.post(`/whisper/tasks/${id}/retry`),
 }

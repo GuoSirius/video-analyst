@@ -101,6 +101,16 @@ export class AIController {
     return { ok: true }
   }
 
+  @Post('tasks/:id/retry')
+  retryTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    this.queue.retryTask(id)
+    const { config, transcriptionId } = task.payload
+    this.processAITask(id, config, transcriptionId)
+    return { ok: true }
+  }
+
   @Sse('events')
   events(): Observable<MessageEvent> {
     return this.sse.getTaskStream()

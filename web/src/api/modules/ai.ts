@@ -11,4 +11,5 @@ export const aiAPI = {
   getTasks: () => api.get('/ai/tasks'),
   getResults: () => api.get('/ai/results'),
   cancelTask: (id: string) => api.delete(`/ai/tasks/${id}`),
+  retryTask: (id: string) => api.post(`/ai/tasks/${id}/retry`),
 }

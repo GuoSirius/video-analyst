@@ -46,6 +46,15 @@ export class CrawlerController {
     return { ok: true }
   }
 
+  @Post('tasks/:id/retry')
+  retryTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    this.queue.retryTask(id)
+    this.processCrawlTask(id, task.payload)
+    return { ok: true }
+  }
+
   @Sse('events')
   events(): Observable<MessageEvent> {
     return this.sse.getTaskStream()

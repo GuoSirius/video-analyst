@@ -138,10 +138,12 @@ const modelOptions = computed(() => {
         <el-table-column label="默认模型" width="140">
           <template #default="{ row }"><span class="text-xs text-gray-400">{{ row.default_model }}</span></template>
         </el-table-column>
-        <el-table-column label="操作" width="100" align="center">
+        <el-table-column label="操作" width="140" align="center">
           <template #default="{ row }">
+            <div class="flex items-center justify-center gap-1">
             <el-button size="small" @click="openEdit(row)">编辑</el-button>
             <el-button size="small" type="danger" plain @click="remove(row)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>

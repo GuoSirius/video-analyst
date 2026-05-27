@@ -5,4 +5,5 @@ export const crawlerAPI = {
   getTasks: () => api.get('/crawler/tasks'),
   getItems: (taskId?: string) => api.get('/crawler/items', { params: { taskId } }),
   cancelTask: (id: string) => api.delete(`/crawler/tasks/${id}`),
+  retryTask: (id: string) => api.post(`/crawler/tasks/${id}/retry`),
 }

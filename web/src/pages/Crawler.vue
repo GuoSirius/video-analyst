@@ -36,6 +36,7 @@ async function startCrawl(){
 }
 
 async function cancelTask(id:string){await crawlerAPI.cancelTask(id);refresh()}
+async function retryTask(id:string){await crawlerAPI.retryTask(id);ElMessage.success('已重新加入队列');refresh()}
 
 const selectedIds = ref<string[]>([])
 async function continuePipeline() {
@@ -121,7 +122,12 @@ onMounted(refresh)
 
     <div v-show="activeTab==='tasks'" class="card-static">
       <el-table v-if="tasks.length" :data="tasks" size="small">
-        <el-table-column label="任务 ID" min-width="160"><template #default="{row}"><span class="text-xs font-mono text-gray-400">{{row.id.slice(0,12)}}...</span></template></el-table-column>
+        <el-table-column label="任务" min-width="200">
+          <template #default="{row}">
+            <div class="text-xs text-gray-300 truncate max-w-[260px]">{{ row.payload?.url || row.id.slice(0,12)+'...' }}</div>
+            <div class="text-[11px] text-gray-600">{{ row.created_at }}</div>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{row}">
             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border"
@@ -131,8 +137,12 @@ onMounted(refresh)
         </el-table-column>
         <el-table-column label="进度" width="160"><template #default="{row}"><el-progress :percentage="row.progress" :stroke-width="6" :status="row.status==='failed'?'exception':row.status==='completed'?'success':undefined"/></template></el-table-column>
         <el-table-column prop="retries" label="重试" width="60" align="center"/>
-        <el-table-column label="操作" width="80" align="center">
-          <template #default="{row}"><el-button v-if="row.status==='running'||row.status==='pending'" size="small" type="danger" plain @click="cancelTask(row.id)">取消</el-button><span v-else class="text-xs text-gray-600">-</span></template>
+        <el-table-column label="操作" width="130" align="center">
+          <template #default="{row}">
+            <div class="flex items-center justify-center gap-1">
+            <el-button v-if="row.status==='running'||row.status==='pending'" size="small" type="danger" plain @click="cancelTask(row.id)">取消</el-button><el-button v-else-if="row.status==='failed'" size="small" type="warning" plain @click="retryTask(row.id)">重试</el-button><el-button v-else-if="row.status==='completed'" size="small" type="primary" plain @click="retryTask(row.id)">重跑</el-button><span v-else class="text-xs text-gray-600">-</span>
+            </div>
+          </template>
         </el-table-column>
       </el-table>
       <div v-else class="text-center py-12 text-gray-500 text-sm"><i class="fas fa-bug text-3xl mb-3 block opacity-30"></i>暂无采集任务</div>

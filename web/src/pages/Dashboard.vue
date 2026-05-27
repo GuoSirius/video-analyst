@@ -35,6 +35,14 @@ async function refresh() {
 
 const runningCount=computed(()=>Object.values(stats.value).reduce((s:any,v:any)=>s+v.running,0))
 
+const taskName = (t: any) => {
+  if (t.type === 'crawl') return t.payload?.url || t.id.slice(0, 8)
+  if (t.type === 'transcode') return (t.payload?.file || '').split(/[\\/]/).pop() || t.id.slice(0, 8)
+  if (t.type === 'whisper') return (t.payload?.filePath || '').split(/[\\/]/).pop() || t.id.slice(0, 8)
+  if (t.type === 'ai') return t.payload?.config?.prompt?.slice(0, 40) || 'AI 分析'
+  return t.id.slice(0, 8)
+}
+
 const statusStyle=(s:string)=>({
   completed:'bg-emerald-500/15 text-emerald-300 border-emerald-500/25',
   running:'bg-blue-500/15 text-blue-300 border-blue-500/25',
@@ -83,7 +91,7 @@ onUnmounted(()=>clearInterval(timer))
             <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] border" :class="statusStyle(t.status)">
               {{ t.status==='completed'?'完成':t.status==='running'?'进行中':t.status==='failed'?'失败':'等待' }}</span>
             <span class="text-xs text-gray-500 w-10">{{ t.type==='crawl'?'爬虫':t.type==='transcode'?'转码':t.type==='whisper'?'识别':'AI' }}</span>
-            <span class="text-xs text-gray-400 truncate flex-1 font-mono">{{ t.id.slice(0,8) }}</span>
+            <span class="text-xs text-gray-400 truncate flex-1">{{ taskName(t) }}</span>
             <div v-if="t.status==='running'" class="w-16 bg-gray-700 rounded-full h-1"><div class="bg-blue-500 h-1 rounded-full" :style="{width:t.progress+'%'}"></div></div>
             <span class="text-[11px] text-gray-600 w-16 text-right">{{ t.updated_at?.slice(11,19) }}</span>
           </div>

@@ -109,6 +109,13 @@ export class QueueService {
     this.db.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
   }
 
+  retryTask(id: string) {
+    this.db.db.prepare(`
+      UPDATE tasks SET status = 'pending', progress = 0, error = NULL, retries = 0, updated_at = datetime('now')
+      WHERE id = ? AND status IN ('failed', 'completed', 'cancelled')
+    `).run(id)
+  }
+
   private emitEvent(taskId: string) {
     const task = this.getTask(taskId)
     if (task) {

@@ -6,4 +6,5 @@ export const transcoderAPI = {
   startConvert: (body: any) => api.post('/transcoder/convert', body),
   getTasks: () => api.get('/transcoder/tasks'),
   cancelTask: (id: string) => api.delete(`/transcoder/tasks/${id}`),
+  retryTask: (id: string) => api.post(`/transcoder/tasks/${id}/retry`),
 }
