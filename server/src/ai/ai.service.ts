@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { DatabaseService } from '../common/database/database.service'
+import { encrypt, decrypt } from '../common/crypto/crypto.util'
 
 export interface AIProvider {
   id: string
@@ -24,31 +25,38 @@ export interface AIConfig {
 export class AIService {
   constructor(private readonly db: DatabaseService) {}
 
-  /** 获取所有 provider (按优先级排序，启用的排前面) */
+  /** 获取所有 provider (前端展示用，api_key 脱敏) */
   getProviders(): AIProvider[] {
-    return this.db.db.prepare(
+    const rows = this.db.db.prepare(
       'SELECT * FROM ai_providers ORDER BY enabled DESC, priority ASC'
     ).all() as AIProvider[]
+    return rows.map(r => ({
+      ...r,
+      api_key: maskKey(decrypt(r.api_key)),
+    }))
   }
 
-  /** 获取启用的 provider 列表（优先级顺序） */
-  getEnabledProviders(): AIProvider[] {
-    return this.db.db.prepare(
+  /** 获取启用的 provider（内部调用用，api_key 解密） */
+  private getEnabledProviders(): AIProvider[] {
+    const rows = this.db.db.prepare(
       'SELECT * FROM ai_providers WHERE enabled = 1 ORDER BY priority ASC'
     ).all() as AIProvider[]
+    return rows.map(r => ({ ...r, api_key: decrypt(r.api_key) }))
   }
 
   /** 获取单个 provider */
   getProvider(id: string): AIProvider | undefined {
-    return this.db.db.prepare('SELECT * FROM ai_providers WHERE id = ?').get(id) as any
+    const row = this.db.db.prepare('SELECT * FROM ai_providers WHERE id = ?').get(id) as any
+    if (!row) return undefined
+    return { ...row, api_key: decrypt(row.api_key) }
   }
 
-  /** 创建或更新 provider */
+  /** 创建或更新 provider（api_key 加密存储） */
   saveProvider(p: Omit<AIProvider, 'created_at'>) {
     this.db.db.prepare(`
       INSERT OR REPLACE INTO ai_providers (id, name, api_key, base_url, default_model, priority, enabled)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(p.id, p.name, p.api_key, p.base_url, p.default_model, p.priority, p.enabled ? 1 : 0)
+    `).run(p.id, p.name, encrypt(p.api_key), p.base_url, p.default_model, p.priority, p.enabled ? 1 : 0)
   }
 
   /** 删除 provider */
@@ -116,4 +124,9 @@ export class AIService {
     const data = await resp.json() as any
     return data.choices?.[0]?.message?.content || JSON.stringify(data)
   }
+}
+
+function maskKey(key: string): string {
+  if (!key || key.length <= 8) return key
+  return key.slice(0, 6) + '****' + key.slice(-4)
 }

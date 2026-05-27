@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common'
 import Database from 'better-sqlite3'
 import * as path from 'path'
 import * as fs from 'fs'
+import { encrypt } from '../crypto/crypto.util'
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
@@ -111,11 +112,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       VALUES (?, ?, ?, ?, ?, ?, 1)
     `)
     stmt.run('deepseek', 'deepseek',
-      process.env.DEEPSEEK_API_KEY || '',
+      encrypt(process.env.DEEPSEEK_API_KEY || ''),
       process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
       'deepseek-chat', 1)
     stmt.run('minimax', 'minimax',
-      process.env.MINIMAX_API_KEY || '',
+      encrypt(process.env.MINIMAX_API_KEY || ''),
       process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat',
       'MiniMax-M1', 2)
   }
