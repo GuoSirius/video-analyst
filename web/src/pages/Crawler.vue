@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { crawlerAPI } from '../api'
 import { ElMessage } from 'element-plus'
 
@@ -42,7 +42,6 @@ async function cancelTask(id:string){await crawlerAPI.cancelTask(id);refresh()}
 onMounted(refresh)
 
 const filtered = computed(()=>selectedTaskId.value?items.value.filter((i:any)=>i.task_id===selectedTaskId.value):items.value)
-import { computed } from 'vue'
 </script>
 
 <template>
@@ -105,7 +104,7 @@ import { computed } from 'vue'
             <el-input v-model="rule.name" placeholder="字段名" size="small" style="width:120px" />
             <el-input v-model="rule.selector" placeholder="CSS 选择器" size="small" style="flex:1" />
             <el-input v-model="rule.attr" placeholder="属性(可选)" size="small" style="width:120px" />
-            <el-button v-if="rules.length>1" size="small" type="danger" :icon="'fas fa-xmark'" circle plain @click="removeRule(i)" />
+            <el-button v-if="rules.length>1" size="small" type="danger" circle plain @click="removeRule(i)"><i class="fas fa-xmark"></i></el-button>
           </div>
         </div>
         <div style="font-size:11px;color:#6b7280;margin-top:8px">attr 留空=提取文本, 填写=提取属性值(src/href等)</div>
