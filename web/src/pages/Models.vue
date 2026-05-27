@@ -121,7 +121,6 @@ const modelOptions = computed(() => {
                 </el-button>
               </div>
             </div>
-            </div>
           </template>
         </el-table-column>
         <el-table-column label="名称" min-width="120">
