@@ -97,6 +97,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         created_at TEXT DEFAULT (datetime('now'))
       );
 
+      CREATE TABLE IF NOT EXISTS ai_prompts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_crawl_items_task ON crawl_items(task_id);
@@ -119,5 +128,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       encrypt(process.env.DEEPSEEK_API_KEY || ''),
       process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
       'deepseek-chat', 2)
+
+    const promptStmt = this.db.prepare(`
+      INSERT OR IGNORE INTO ai_prompts (id, name, content, is_default)
+      VALUES (?, ?, ?, 1)
+    `)
+    promptStmt.run('default', '通用总结', '请对以下文本进行总结，提取关键信息和关键词，用中文回复。\n\n{{content}}')
+    promptStmt.run('keywords', '提取关键词', '请从以下文本中提取最重要的关键词和短语，用中文列出。\n\n{{content}}')
+    promptStmt.run('summary', '详细摘要', '请对以下文本进行详细摘要，保留主要观点和结论，用中文回复。\n\n{{content}}')
   }
 }

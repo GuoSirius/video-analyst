@@ -13,6 +13,7 @@ const navItems = [
   { path: '/ai', label: 'AI 分析', icon: 'fa-robot' },
   { path: '/export', label: '数据导出', icon: 'fa-file-excel' },
   { path: '/models', label: '模型管理', icon: 'fa-microchip' },
+  { path: '/prompts', label: '提示词管理', icon: 'fa-file-lines' },
 ]
 const currentTitle = computed(() => navItems.find(i => i.path === route.path)?.label || '')
 

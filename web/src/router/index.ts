@@ -33,6 +33,11 @@ const router = createRouter({
       name: 'models',
       component: () => import('../pages/Models.vue'),
     },
+    {
+      path: '/prompts',
+      name: 'prompts',
+      component: () => import('../pages/Prompts.vue'),
+    },
   ],
 })
 

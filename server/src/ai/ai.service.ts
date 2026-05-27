@@ -92,6 +92,7 @@ export class AIService {
 
   private async callProvider(p: AIProvider, config: AIConfig, inputText: string): Promise<string> {
     const model = config.model || p.default_model
+    const prompt = (config.prompt || '').replace(/\{\{content\}\}/g, inputText)
     const isMinimax = p.name === 'minimax'
     const url = isMinimax
       ? `${p.base_url}/v1/text/chatcompletion_v2`
@@ -101,7 +102,7 @@ export class AIService {
       model,
       messages: [
         { role: 'system', content: 'You are a helpful assistant.' },
-        { role: 'user', content: `${config.prompt}\n\nInput text:\n${inputText}` },
+        { role: 'user', content: prompt },
       ],
       temperature: config.temperature ?? 0.7,
       max_tokens: config.maxTokens ?? 4096,
