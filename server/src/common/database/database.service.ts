@@ -111,13 +111,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       INSERT OR IGNORE INTO ai_providers (id, name, api_key, base_url, default_model, priority, enabled)
       VALUES (?, ?, ?, ?, ?, ?, 1)
     `)
-    stmt.run('deepseek', 'deepseek',
-      encrypt(process.env.DEEPSEEK_API_KEY || ''),
-      process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
-      'deepseek-chat', 1)
     stmt.run('minimax', 'minimax',
       encrypt(process.env.MINIMAX_API_KEY || ''),
       process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat',
-      'MiniMax-M1', 2)
+      'MiniMax-M1', 1)
+    stmt.run('deepseek', 'deepseek',
+      encrypt(process.env.DEEPSEEK_API_KEY || ''),
+      process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
+      'deepseek-chat', 2)
   }
 }
