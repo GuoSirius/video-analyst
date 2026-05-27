@@ -77,6 +77,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         created_at TEXT DEFAULT (datetime('now'))
       );
 
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('pipeline_auto', 'true');
+
       CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_crawl_items_task ON crawl_items(task_id);

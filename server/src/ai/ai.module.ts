@@ -7,5 +7,6 @@ import { SseModule } from '../common/sse/sse.module'
   imports: [SseModule],
   controllers: [AIController],
   providers: [AIService],
+  exports: [AIService],
 })
 export class AIModule {}

@@ -1,9 +1,12 @@
-import { Controller, Post, Get, Delete, Param, Body, Query, Sse, UploadedFiles, UseInterceptors } from '@nestjs/common'
+import { Controller, Post, Get, Delete, Param, Body, Sse, UploadedFiles, UseInterceptors } from '@nestjs/common'
 import { Observable } from 'rxjs'
 import { FilesInterceptor } from '@nestjs/platform-express'
 import { TranscoderService } from './transcoder.service'
+import { WhisperService } from '../whisper/whisper.service'
 import { QueueService } from '../common/queue/queue.service'
 import { SseService } from '../common/sse/sse.service'
+import { PipelineService } from '../common/pipeline/pipeline.service'
+import { DatabaseService } from '../common/database/database.service'
 import * as path from 'path'
 import * as fs from 'fs'
 import { v4 as uuid } from 'uuid'
@@ -16,8 +19,11 @@ const outputDir = path.resolve(process.cwd(), '..', 'data', 'transcoded')
 export class TranscoderController {
   constructor(
     private readonly transcoder: TranscoderService,
+    private readonly whisper: WhisperService,
     private readonly queue: QueueService,
     private readonly sse: SseService,
+    private readonly pipeline: PipelineService,
+    private readonly db: DatabaseService,
   ) {}
 
   @Get('ffmpeg-check')
@@ -40,6 +46,17 @@ export class TranscoderController {
   }))
   async uploadFiles(@UploadedFiles() files: Express.Multer.File[]) {
     const filenames = files.map(f => f.filename)
+    if (this.pipeline.isAutoMode()) {
+      // Auto-start transcode for uploaded files
+      const filePaths = filenames.map(f => path.resolve(mediaDir, f))
+      const tasks: any[] = []
+      for (const fp of filePaths) {
+        const task = this.queue.createTask('transcode', { file: fp, outputDir })
+        tasks.push({ taskId: task.id, file: fp })
+        this.processTranscodeTask(task.id, fp, outputDir)
+      }
+      return { files: filenames, dir: mediaDir, autoStarted: true, tasks }
+    }
     return { files: filenames, dir: mediaDir }
   }
 
@@ -94,6 +111,29 @@ export class TranscoderController {
       })
 
       this.queue.updateTaskResult(taskId, { outputPath })
+
+      // Auto-chain: transcode → whisper
+      if (this.pipeline.isAutoMode() && fs.existsSync(outputPath)) {
+        const whisperTask = this.queue.createTask('whisper', { filePath: outputPath })
+        this.processWhisperChain(whisperTask.id, outputPath)
+      }
+    } catch (err: any) {
+      this.queue.updateTaskError(taskId, err.message)
+    }
+  }
+
+  private async processWhisperChain(taskId: string, filePath: string) {
+    try {
+      this.queue.updateTaskStatus(taskId, 'running')
+      this.queue.updateTaskProgress(taskId, 30)
+      const result = await this.whisper.inference(filePath)
+      const transcriptionId = uuid()
+      this.db.db.prepare(`
+        INSERT INTO transcriptions (id, file_path, content, language, duration, status)
+        VALUES (?, ?, ?, 'auto', 0, 'completed')
+      `).run(transcriptionId, filePath, result.text || JSON.stringify(result))
+      this.queue.updateTaskProgress(taskId, 100)
+      this.queue.updateTaskResult(taskId, { transcriptionId, text: result.text })
     } catch (err: any) {
       this.queue.updateTaskError(taskId, err.message)
     }

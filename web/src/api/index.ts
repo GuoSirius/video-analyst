@@ -48,4 +48,10 @@ export const exportAPI = {
   exportExcel: (body: any) => api.post('/export/excel', body, { responseType: 'blob' }),
 }
 
+// Settings / Pipeline
+export const settingsAPI = {
+  getPipeline: () => api.get('/settings/pipeline'),
+  setPipeline: (autoMode: boolean) => api.post('/settings/pipeline', { autoMode }),
+}
+
 export default api

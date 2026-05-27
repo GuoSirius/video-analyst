@@ -5,6 +5,7 @@ import { CrawlerService, CrawlPayload } from './crawler.service'
 import { QueueService } from '../common/queue/queue.service'
 import { SseService } from '../common/sse/sse.service'
 import { DatabaseService } from '../common/database/database.service'
+import { PipelineService } from '../common/pipeline/pipeline.service'
 import { v4 as uuid } from 'uuid'
 
 @Controller('api/crawler')
@@ -14,6 +15,7 @@ export class CrawlerController {
     private readonly queue: QueueService,
     private readonly sse: SseService,
     private readonly db: DatabaseService,
+    private readonly pipeline: PipelineService,
   ) {}
 
   @Post('crawl')

@@ -4,11 +4,13 @@ import { join } from 'path'
 import { DatabaseModule } from './common/database/database.module'
 import { QueueModule } from './common/queue/queue.module'
 import { SseModule } from './common/sse/sse.module'
+import { PipelineModule } from './common/pipeline/pipeline.module'
 import { CrawlerModule } from './crawler/crawler.module'
 import { TranscoderModule } from './transcoder/transcoder.module'
 import { WhisperModule } from './whisper/whisper.module'
 import { AIModule } from './ai/ai.module'
 import { ExportModule } from './export/export.module'
+import { SettingsModule } from './settings/settings.module'
 
 @Module({
   imports: [
@@ -19,6 +21,8 @@ import { ExportModule } from './export/export.module'
     DatabaseModule,
     QueueModule,
     SseModule,
+    PipelineModule,
+    SettingsModule,
     CrawlerModule,
     TranscoderModule,
     WhisperModule,

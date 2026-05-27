@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { useRouter, useRoute } from 'vue-router'
-import { computed } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { settingsAPI } from './api'
+import { ElMessage } from 'element-plus'
 
 const route = useRoute()
+const autoMode = ref(true)
 const navItems = [
   { path: '/', label: '仪表盘', icon: 'fa-house' },
   { path: '/crawler', label: '爬虫采集', icon: 'fa-bug' },
@@ -11,6 +14,22 @@ const navItems = [
   { path: '/export', label: '数据导出', icon: 'fa-file-excel' },
 ]
 const currentTitle = computed(() => navItems.find(i => i.path === route.path)?.label || '')
+
+async function loadSettings() {
+  try {
+    const { data } = await settingsAPI.getPipeline()
+    autoMode.value = data.autoMode
+  } catch {}
+}
+
+async function toggleAuto() {
+  try {
+    const { data } = await settingsAPI.setPipeline(!autoMode.value)
+    autoMode.value = data.autoMode
+  } catch { ElMessage.error('设置失败') }
+}
+
+onMounted(loadSettings)
 </script>
 
 <template>
@@ -47,7 +66,18 @@ const currentTitle = computed(() => navItems.find(i => i.path === route.path)?.l
       <header class="h-12 border-b border-gray-800 flex items-center px-7 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-40">
         <h1 class="text-[13px] font-semibold text-gray-300">{{ currentTitle }}</h1>
         <div class="flex-1"></div>
-        <span class="text-[11px] text-gray-500"><i class="fas fa-circle text-[5px] text-emerald-500 mr-1"></i>运行中</span>
+        <div class="flex items-center gap-3">
+          <el-tooltip :content="autoMode ? '自动流水线已开启' : '自动流水线已关闭'" placement="bottom">
+            <el-switch
+              v-model="autoMode"
+              size="small"
+              @change="toggleAuto"
+              active-text="自动"
+              inactive-text="手动"
+            />
+          </el-tooltip>
+          <span class="text-[11px] text-gray-500"><i class="fas fa-circle text-[5px] text-emerald-500 mr-1"></i>运行中</span>
+        </div>
       </header>
       <router-view />
     </div>
