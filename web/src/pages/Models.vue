@@ -108,18 +108,20 @@ const modelOptions = computed(() => {
       </div>
 
       <el-table v-if="providers.length" :data="providers" size="small">
-        <el-table-column label="优先级" width="80" align="center">
-          <template #default="{ row, $index }">
-            <div class="flex flex-col items-center gap-1">
-              <span class="text-xs font-bold" :class="row.enabled ? 'text-blue-300' : 'text-gray-600'">#{{ $index + 1 }}</span>
-              <div class="flex gap-1">
-                <el-button size="small" circle :disabled="$index === 0" @click="moveUp($index)">
-                  <i class="fas fa-chevron-up text-[10px]"></i>
-                </el-button>
-                <el-button size="small" circle :disabled="$index === providers.length - 1" @click="moveDown($index)">
-                  <i class="fas fa-chevron-down text-[10px]"></i>
-                </el-button>
-              </div>
+        <el-table-column label="优先级" width="70" align="center">
+          <template #default="{ $index }">
+            <span class="text-sm font-bold" :class="providers[$index]?.enabled ? 'text-blue-300' : 'text-gray-600'">#{{ $index + 1 }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="排序" width="70" align="center">
+          <template #default="{ $index }">
+            <div class="flex justify-center gap-1">
+              <el-button size="small" circle :disabled="$index === 0" @click="moveUp($index)">
+                <i class="fas fa-chevron-up text-[10px]"></i>
+              </el-button>
+              <el-button size="small" circle :disabled="$index === providers.length - 1" @click="moveDown($index)">
+                <i class="fas fa-chevron-down text-[10px]"></i>
+              </el-button>
             </div>
           </template>
         </el-table-column>
