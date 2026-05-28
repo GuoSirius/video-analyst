@@ -56,7 +56,7 @@ onUnmounted(()=>clearInterval(timer))
 </script>
 
 <template>
-  <div class="px-7 py-6 max-w-[1240px]">
+  <div class="px-7 py-6">
     <h2 class="text-lg font-bold mb-1">工作台</h2>
     <p class="text-[13px] text-gray-500 mb-6">音视频采集 · 转码 · 识别 · 分析一站式处理</p>
 

@@ -29,7 +29,7 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="px-7 py-6 max-w-[1240px]">
+  <div class="px-7 py-6">
     <h2 class="text-lg font-bold mb-1">数据导出</h2>
     <p class="text-[13px] text-gray-500 mb-5">自定义字段和范围，导出 Excel 结构化数据</p>
 

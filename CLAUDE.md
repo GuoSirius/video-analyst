@@ -82,11 +82,15 @@ web/src/
 - 模型可选: tiny/base/small/medium/large
 
 ### 5. 数据库表
+
+详见 [DB-SCHEMA.md](./DB-SCHEMA.md) — 完整 ER 图、字段说明、数据流、读写频率。
+
 - `tasks` - 任务队列
 - `crawl_items` - 爬虫采集结果
 - `transcriptions` - 语音识别结果
 - `ai_results` - AI 分析结果
 - `ai_providers` - AI 模型配置（加密）
+- `ai_prompts` - 提示词模板
 - `settings` - 键值对（pipeline_auto, whisper_model 等）
 
 ### 6. 前端规范

@@ -50,7 +50,7 @@ onMounted(()=>{checkFfmpeg();checkWhisper();refreshAll()})
 </script>
 
 <template>
-  <div class="px-7 py-6 max-w-[1240px]">
+  <div class="px-7 py-6">
     <div class="flex items-center justify-between mb-3">
       <div>
         <h2 class="text-lg font-bold mb-1">转码处理</h2>

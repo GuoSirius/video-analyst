@@ -81,7 +81,7 @@ onMounted(refreshAll)
 </script>
 
 <template>
-  <div class="px-7 py-6 max-w-[1240px]">
+  <div class="px-7 py-6">
     <h2 class="text-lg font-bold mb-1">AI 分析</h2>
     <p class="text-[13px] text-gray-500 mb-5">Whisper 语音识别 → 大模型智能分析</p>
 

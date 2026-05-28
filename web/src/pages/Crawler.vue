@@ -84,7 +84,7 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="px-7 py-6 max-w-[1240px]">
+  <div class="px-7 py-6">
     <h2 class="text-lg font-bold mb-1">爬虫采集</h2>
     <p class="text-[13px] text-gray-500 mb-5">抓取网页内容，提取标题、媒体链接等结构化数据</p>
 

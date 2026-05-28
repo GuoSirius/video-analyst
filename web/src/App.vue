@@ -24,11 +24,14 @@ async function loadSettings() {
   } catch {}
 }
 
-async function toggleAuto() {
+async function toggleAuto(value: boolean) {
   try {
-    const { data } = await settingsAPI.setPipeline(!autoMode.value)
+    const { data } = await settingsAPI.setPipeline(value)
     autoMode.value = data.autoMode
-  } catch { ElMessage.error('设置失败') }
+  } catch {
+    autoMode.value = !value
+    ElMessage.error('设置失败')
+  }
 }
 
 onMounted(loadSettings)

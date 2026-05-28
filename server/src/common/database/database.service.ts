@@ -122,19 +122,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     `)
     stmt.run('minimax', 'minimax',
       encrypt(process.env.MINIMAX_API_KEY || ''),
-      process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat',
-      'MiniMax-M1', 1)
+      process.env.MINIMAX_BASE_URL || 'https://api.minimaxi.com/v1',
+      'MiniMax-M2.7', 1)
     stmt.run('deepseek', 'deepseek',
       encrypt(process.env.DEEPSEEK_API_KEY || ''),
       process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
-      'deepseek-chat', 2)
+      'deepseek-v4-flash', 2)
 
     const promptStmt = this.db.prepare(`
       INSERT OR IGNORE INTO ai_prompts (id, name, content, is_default)
-      VALUES (?, ?, ?, 1)
+      VALUES (?, ?, ?, ?)
     `)
-    promptStmt.run('default', '通用总结', '请对以下文本进行总结，提取关键信息和关键词，用中文回复。\n\n{{content}}')
-    promptStmt.run('keywords', '提取关键词', '请从以下文本中提取最重要的关键词和短语，用中文列出。\n\n{{content}}')
-    promptStmt.run('summary', '详细摘要', '请对以下文本进行详细摘要，保留主要观点和结论，用中文回复。\n\n{{content}}')
+    promptStmt.run('default', '通用总结', '请对以下文本进行总结，提取关键信息和关键词，用中文回复。\n\n{{content}}', 1)
+    promptStmt.run('keywords', '提取关键词', '请从以下文本中提取最重要的关键词和短语，用中文列出。\n\n{{content}}', 0)
+    promptStmt.run('summary', '详细摘要', '请对以下文本进行详细摘要，保留主要观点和结论，用中文回复。\n\n{{content}}', 0)
+
+    // Fix legacy data: keep only 'default' as the default prompt
+    this.db.prepare("UPDATE ai_prompts SET is_default = 0 WHERE id != 'default' AND is_default = 1").run()
   }
 }
