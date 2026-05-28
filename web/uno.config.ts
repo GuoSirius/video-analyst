@@ -24,6 +24,7 @@ export default defineConfig({
     'badge-completed': 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25',
     'badge-failed': 'bg-red-500/15 text-red-300 border border-red-500/25',
     'badge-cancelled': 'bg-gray-500/15 text-gray-400 border border-gray-500/25',
+    'badge-paused': 'bg-amber-500/15 text-amber-300 border border-amber-500/25',
     'stat-card': 'bg-gray-800/60 rounded-xl border border-gray-700/50 p-5 hover:bg-gray-800/80 transition-all duration-300',
     'divider': 'border-t border-gray-700/60',
   },

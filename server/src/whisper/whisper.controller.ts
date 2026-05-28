@@ -108,7 +108,50 @@ export class WhisperController {
   retryTask(@Param('id') id: string) {
     const task = this.queue.getTask(id)
     if (!task) return { error: 'Task not found' }
+    if (task.status !== 'failed') return { error: 'Only failed tasks can be retried' }
     this.queue.retryTask(id)
+    const { filePath, itemId, options } = task.payload
+    this.processWhisperTask(id, filePath, itemId, options)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/start')
+  startTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'pending' && task.status !== 'paused') {
+      return { error: `Cannot start task in ${task.status} status` }
+    }
+    const { filePath, itemId, options } = task.payload
+    this.processWhisperTask(id, filePath, itemId, options)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/pause')
+  pauseTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'running') return { error: 'Task is not running' }
+    this.queue.pauseTask(id)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/stop')
+  stopTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'running' && task.status !== 'paused') {
+      return { error: 'Task is not running or paused' }
+    }
+    this.queue.cancelTask(id)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/rerun')
+  reRunTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    this.queue.reRunTask(id)
     const { filePath, itemId, options } = task.payload
     this.processWhisperTask(id, filePath, itemId, options)
     return { ok: true }

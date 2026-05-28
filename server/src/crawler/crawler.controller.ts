@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Delete, Param, Body, Query, Sse } from '@nestjs/common'
+import { Controller, Post, Get, Delete, Put, Param, Body, Query, Sse } from '@nestjs/common'
 import { Observable } from 'rxjs'
 import * as cheerio from 'cheerio'
 import { CrawlerService, CrawlPayload } from './crawler.service'
@@ -31,17 +31,69 @@ export class CrawlerController {
   }
 
   @Get('items')
-  getItems(@Query('taskId') taskId?: string) {
-    const sql = taskId
-      ? 'SELECT * FROM crawl_items WHERE task_id = ? ORDER BY created_at DESC'
-      : 'SELECT * FROM crawl_items ORDER BY created_at DESC'
-    return taskId
-      ? this.db.db.prepare(sql).all(taskId)
-      : this.db.db.prepare(sql).all()
+  getItems(@Query('taskId') taskId?: string, @Query('status') status?: string) {
+    let rows: any[]
+    if (taskId && status) {
+      rows = this.db.db.prepare('SELECT * FROM crawl_items WHERE task_id = ? AND status = ? ORDER BY created_at DESC').all(taskId, status) as any[]
+    } else if (taskId) {
+      rows = this.db.db.prepare('SELECT * FROM crawl_items WHERE task_id = ? ORDER BY created_at DESC').all(taskId) as any[]
+    } else if (status) {
+      rows = this.db.db.prepare('SELECT * FROM crawl_items WHERE status = ? ORDER BY created_at DESC').all(status) as any[]
+    } else {
+      rows = this.db.db.prepare('SELECT * FROM crawl_items ORDER BY created_at DESC').all() as any[]
+    }
+    return rows
   }
 
-  @Delete('tasks/:id')
-  cancelTask(@Param('id') id: string) {
+  @Delete('items/:id')
+  deleteItem(@Param('id') id: string) {
+    this.db.db.prepare('DELETE FROM crawl_items WHERE id = ?').run(id)
+    return { ok: true }
+  }
+
+  @Post('items/:id/retry')
+  retryItem(@Param('id') id: string) {
+    const item = this.db.db.prepare('SELECT * FROM crawl_items WHERE id = ?').get(id) as any
+    if (!item) return { error: 'Item not found' }
+    const task = this.queue.getTask(item.task_id)
+    if (!task) return { error: 'Parent task not found' }
+    // Re-crawl this single item by re-running the parent task
+    this.queue.reRunTask(item.task_id)
+    this.processCrawlTask(item.task_id, task.payload)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/start')
+  startTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status === 'paused') {
+      const resumeState = task.result || {}
+      this.processCrawlTask(id, task.payload, resumeState)
+    } else if (task.status === 'pending') {
+      this.processCrawlTask(id, task.payload)
+    } else {
+      return { error: `Cannot start task in ${task.status} status` }
+    }
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/pause')
+  pauseTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'running') return { error: 'Task is not running' }
+    this.queue.pauseTask(id)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/stop')
+  stopTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'running' && task.status !== 'paused') {
+      return { error: 'Task is not running or paused' }
+    }
     this.queue.cancelTask(id)
     return { ok: true }
   }
@@ -50,8 +102,36 @@ export class CrawlerController {
   retryTask(@Param('id') id: string) {
     const task = this.queue.getTask(id)
     if (!task) return { error: 'Task not found' }
+    if (task.status !== 'failed') return { error: 'Only failed tasks can be retried' }
     this.queue.retryTask(id)
     this.processCrawlTask(id, task.payload)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/rerun')
+  reRunTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    this.queue.reRunTask(id)
+    this.processCrawlTask(id, task.payload)
+    return { ok: true }
+  }
+
+  @Delete('tasks/:id')
+  deleteTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status === 'running') return { error: 'Cannot delete a running task' }
+    this.queue.deleteTask(id)
+    return { ok: true }
+  }
+
+  @Put('tasks/:id')
+  updateTask(@Param('id') id: string, @Body() payload: CrawlPayload) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status === 'running') return { error: 'Cannot edit a running task' }
+    this.queue.updateTaskPayload(id, payload)
     return { ok: true }
   }
 
@@ -60,22 +140,56 @@ export class CrawlerController {
     return this.sse.getTaskStream()
   }
 
-  private async processCrawlTask(taskId: string, payload: CrawlPayload) {
-    const { url, rules, itemSelector, nextPageSelector, maxPages = 1, batchSize = 10 } = payload
+  private async processCrawlTask(taskId: string, payload: CrawlPayload, resumeState?: any) {
+    const {
+      url, rules, itemSelector, nextPageSelector,
+      maxPages = 1, batchSize = 10,
+      detailLinkSelector, detailRules,
+    } = payload
 
     try {
       this.queue.updateTaskStatus(taskId, 'running')
       this.queue.updateTaskProgress(taskId, 0)
 
-      let currentUrl = url
-      let totalItems = 0
-      let page = 0
+      let currentUrl = resumeState?.currentUrl || url
+      let totalItems = resumeState?.totalItems || 0
+      let page = resumeState?.page || 0
       const isUnlimited = maxPages === 0
 
       while (true) {
+        // Check for pause/cancel before each page
+        const currentTask = this.queue.getTask(taskId)
+        if (!currentTask || currentTask.status === 'cancelled') return
+        if (currentTask.status === 'paused') {
+          this.queue.updateTaskResult(taskId, { currentUrl, page, totalItems, paused: true })
+          return
+        }
+
         if (!isUnlimited && page >= maxPages) break
+
         const html = await this.crawler.fetchHtml(currentUrl)
         const items = this.crawler.parseHtml(html, rules, itemSelector)
+
+        // Detail page extraction
+        if (detailRules && detailRules.length > 0 && detailLinkSelector && itemSelector) {
+          const $ = cheerio.load(html)
+          const itemElements = $(itemSelector).toArray()
+          for (let i = 0; i < items.length && i < itemElements.length; i++) {
+            const detailHref = $(detailLinkSelector, itemElements[i]).attr('href')
+            if (detailHref) {
+              try {
+                const detailUrl = new URL(detailHref, currentUrl).href
+                const detailHtml = await this.crawler.fetchHtml(detailUrl)
+                const detailData = this.crawler.parseHtml(detailHtml, detailRules)
+                if (detailData.length > 0) {
+                  Object.assign(items[i], detailData[0])
+                }
+              } catch {
+                // Skip detail page fetch errors
+              }
+            }
+          }
+        }
 
         const insertStmt = this.db.db.prepare(`
           INSERT OR REPLACE INTO crawl_items (id, task_id, source_url, title, media_url, media_type, media_source, extra_data)

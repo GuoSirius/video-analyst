@@ -46,52 +46,68 @@ export class TranscoderController {
   }))
   async uploadFiles(@UploadedFiles() files: Express.Multer.File[]) {
     const filenames = files.map(f => f.filename)
-    if (this.pipeline.isAutoMode()) {
-      // Auto-start transcode for uploaded files
-      const filePaths = filenames.map(f => path.resolve(mediaDir, f))
-      const tasks: any[] = []
-      for (const fp of filePaths) {
-        const task = this.queue.createTask('transcode', { file: fp, outputDir })
-        tasks.push({ taskId: task.id, file: fp })
-        this.processTranscodeTask(task.id, fp, outputDir)
-      }
-      return { files: filenames, dir: mediaDir, autoStarted: true, tasks }
-    }
     return { files: filenames, dir: mediaDir }
   }
 
   @Post('convert')
-  async startConvert(@Body() body: { files?: string[]; dir?: string; itemIds?: string[] }) {
-    let filesToConvert: string[] = []
-
-    if (body.files?.length) {
-      filesToConvert = body.files.map(f => path.resolve(mediaDir, f))
-    } else if (body.dir) {
-      filesToConvert = this.transcoder.scanDirectory(body.dir)
-    }
+  async startConvert(@Body() body: { files: string[]; fileNames?: string[] }) {
+    const filesToConvert = body.files.map(f => path.resolve(mediaDir, f))
 
     if (!filesToConvert.length) {
       return { error: 'No files to convert' }
     }
 
     const tasks: { taskId: string; file: string }[] = []
-    for (const file of filesToConvert) {
-      if (!fs.existsSync(file)) continue
-      const task = this.queue.createTask('transcode', { file, outputDir })
-      tasks.push({ taskId: task.id, file })
-      this.processTranscodeTask(task.id, file, outputDir)
+    for (let i = 0; i < filesToConvert.length; i++) {
+      const fp = filesToConvert[i]
+      if (!fs.existsSync(fp)) continue
+      const displayName = body.fileNames?.[i] || path.basename(fp)
+      const task = this.queue.createTask('transcode', {
+        file: fp,
+        outputDir,
+        source: 'upload',
+        fileName: displayName,
+      })
+      tasks.push({ taskId: task.id, file: fp })
+      this.processTranscodeTask(task.id, fp, outputDir)
     }
 
     return { tasks }
   }
 
   @Get('tasks')
-  getTasks() {
+  getTasks(@Body('source') source?: string) {
     return this.queue.getTasksByType('transcode')
   }
 
-  @Delete('tasks/:id')
-  cancelTask(@Param('id') id: string) {
+  @Post('tasks/:id/start')
+  startTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'pending' && task.status !== 'paused') {
+      return { error: `Cannot start task in ${task.status} status` }
+    }
+    const { file, outputDir } = task.payload
+    this.processTranscodeTask(id, file, outputDir)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/pause')
+  pauseTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'running') return { error: 'Task is not running' }
+    this.queue.pauseTask(id)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/stop')
+  stopTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'running' && task.status !== 'paused') {
+      return { error: 'Task is not running or paused' }
+    }
     this.queue.cancelTask(id)
     return { ok: true }
   }
@@ -100,9 +116,29 @@ export class TranscoderController {
   retryTask(@Param('id') id: string) {
     const task = this.queue.getTask(id)
     if (!task) return { error: 'Task not found' }
+    if (task.status !== 'failed') return { error: 'Only failed tasks can be retried' }
     this.queue.retryTask(id)
     const { file, outputDir } = task.payload
     this.processTranscodeTask(id, file, outputDir)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/rerun')
+  reRunTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    this.queue.reRunTask(id)
+    const { file, outputDir } = task.payload
+    this.processTranscodeTask(id, file, outputDir)
+    return { ok: true }
+  }
+
+  @Delete('tasks/:id')
+  deleteTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status === 'running') return { error: 'Cannot delete a running task' }
+    this.queue.deleteTask(id)
     return { ok: true }
   }
 
@@ -122,7 +158,6 @@ export class TranscoderController {
 
       this.queue.updateTaskResult(taskId, { outputPath })
 
-      // Auto-chain: transcode → whisper
       if (this.pipeline.isAutoMode() && fs.existsSync(outputPath)) {
         const whisperTask = this.queue.createTask('whisper', { filePath: outputPath })
         this.processWhisperChain(whisperTask.id, outputPath)

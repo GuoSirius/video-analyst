@@ -48,6 +48,10 @@ export class AIController {
   updateProvider(@Param('id') id: string, @Body() body: any) {
     const existing = this.ai.getProvider(id)
     if (!existing) return { error: 'Not found' }
+    // If api_key is masked (contains ****) or empty, keep the existing key
+    if (!body.api_key || body.api_key.includes('****')) {
+      body.api_key = existing.api_key
+    }
     this.ai.saveProvider({ ...existing, ...body, id })
     return this.ai.getProviders()
   }
@@ -105,7 +109,50 @@ export class AIController {
   retryTask(@Param('id') id: string) {
     const task = this.queue.getTask(id)
     if (!task) return { error: 'Task not found' }
+    if (task.status !== 'failed') return { error: 'Only failed tasks can be retried' }
     this.queue.retryTask(id)
+    const { config, transcriptionId } = task.payload
+    this.processAITask(id, config, transcriptionId)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/start')
+  startTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'pending' && task.status !== 'paused') {
+      return { error: `Cannot start task in ${task.status} status` }
+    }
+    const { config, transcriptionId } = task.payload
+    this.processAITask(id, config, transcriptionId)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/pause')
+  pauseTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'running') return { error: 'Task is not running' }
+    this.queue.pauseTask(id)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/stop')
+  stopTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'running' && task.status !== 'paused') {
+      return { error: 'Task is not running or paused' }
+    }
+    this.queue.cancelTask(id)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/rerun')
+  reRunTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    this.queue.reRunTask(id)
     const { config, transcriptionId } = task.payload
     this.processAITask(id, config, transcriptionId)
     return { ok: true }

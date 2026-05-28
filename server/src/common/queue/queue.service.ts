@@ -6,7 +6,7 @@ import { Subject, Observable } from 'rxjs'
 export interface Task {
   id: string
   type: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
   payload: any
   result?: any
   error?: string
@@ -114,6 +114,24 @@ export class QueueService {
       UPDATE tasks SET status = 'pending', progress = 0, error = NULL, retries = 0, updated_at = datetime('now')
       WHERE id = ? AND status IN ('failed', 'completed', 'cancelled')
     `).run(id)
+  }
+
+  pauseTask(id: string) {
+    this.db.db.prepare("UPDATE tasks SET status = 'paused', updated_at = datetime('now') WHERE id = ? AND status = 'running'").run(id)
+    this.emitEvent(id)
+  }
+
+  reRunTask(id: string) {
+    this.db.db.prepare('DELETE FROM crawl_items WHERE task_id = ?').run(id)
+    this.db.db.prepare(`
+      UPDATE tasks SET status = 'pending', progress = 0, error = NULL, retries = 0, result = NULL, updated_at = datetime('now')
+      WHERE id = ? AND status IN ('failed', 'completed', 'cancelled', 'paused')
+    `).run(id)
+  }
+
+  updateTaskPayload(id: string, payload: any) {
+    this.db.db.prepare("UPDATE tasks SET payload = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(payload), id)
+    this.emitEvent(id)
   }
 
   private emitEvent(taskId: string) {

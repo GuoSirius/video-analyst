@@ -10,12 +10,15 @@ export interface CrawlRule {
 }
 
 export interface CrawlPayload {
+  name?: string
   url: string
   rules: CrawlRule[]
   itemSelector?: string
   nextPageSelector?: string
   maxPages?: number
   batchSize?: number
+  detailLinkSelector?: string
+  detailRules?: CrawlRule[]
 }
 
 @Injectable()

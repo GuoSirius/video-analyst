@@ -82,3 +82,51 @@ html.dark { color-scheme: dark; }
 ::-webkit-scrollbar-track { background: rgba(17, 24, 39, 0.5); }
 ::-webkit-scrollbar-thumb { background: rgba(75, 85, 99, 0.5); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.5); }
+
+/* Element Plus Menu dark overrides */
+.el-menu {
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: #9ca3af;
+  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.04);
+  --el-menu-active-color: #93c5fd;
+  --el-menu-item-height: 40px;
+  --el-menu-sub-item-height: 36px;
+  border-right: none !important;
+}
+.el-menu-item {
+  font-size: 13px;
+  margin: 1px 8px;
+  border-radius: 8px;
+}
+.el-menu-item.is-active {
+  background-color: rgba(37, 99, 235, 0.12) !important;
+  font-weight: 600;
+}
+.el-menu-item:hover {
+  background-color: rgba(255, 255, 255, 0.04) !important;
+}
+.el-sub-menu {
+  margin: 1px 8px;
+  border-radius: 8px;
+}
+.el-sub-menu__title {
+  font-size: 13px;
+  border-radius: 8px;
+}
+.el-sub-menu__title:hover {
+  background-color: rgba(255, 255, 255, 0.04) !important;
+}
+.el-sub-menu.is-active > .el-sub-menu__title {
+  color: #93c5fd !important;
+}
+.el-sub-menu .el-menu {
+  background-color: transparent !important;
+}
+.el-sub-menu .el-menu-item {
+  font-size: 12px;
+  padding-left: 56px !important;
+  min-width: auto;
+}
+.el-sub-menu .el-menu-item.is-active {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+}

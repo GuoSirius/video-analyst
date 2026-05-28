@@ -10,6 +10,10 @@ export const aiAPI = {
   analyze: (body: any) => api.post('/ai/analyze', body),
   getTasks: () => api.get('/ai/tasks'),
   getResults: () => api.get('/ai/results'),
-  cancelTask: (id: string) => api.delete(`/ai/tasks/${id}`),
+  startTask: (id: string) => api.post(`/ai/tasks/${id}/start`),
+  pauseTask: (id: string) => api.post(`/ai/tasks/${id}/pause`),
+  stopTask: (id: string) => api.post(`/ai/tasks/${id}/stop`),
   retryTask: (id: string) => api.post(`/ai/tasks/${id}/retry`),
+  reRunTask: (id: string) => api.post(`/ai/tasks/${id}/rerun`),
+  deleteTask: (id: string) => api.delete(`/ai/tasks/${id}`),
 }

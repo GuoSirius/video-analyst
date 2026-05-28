@@ -10,8 +10,19 @@ const router = createRouter({
     },
     {
       path: '/crawler',
-      name: 'crawler',
-      component: () => import('../pages/Crawler.vue'),
+      redirect: '/crawler/tasks',
+      children: [
+        {
+          path: 'tasks',
+          name: 'crawler-tasks',
+          component: () => import('../pages/CrawlerTasks.vue'),
+        },
+        {
+          path: 'items',
+          name: 'crawler-items',
+          component: () => import('../pages/CrawlerItems.vue'),
+        },
+      ],
     },
     {
       path: '/transcoder',
@@ -20,8 +31,19 @@ const router = createRouter({
     },
     {
       path: '/ai',
-      name: 'ai',
-      component: () => import('../pages/AIAnalysis.vue'),
+      redirect: '/ai/whisper',
+      children: [
+        {
+          path: 'whisper',
+          name: 'ai-whisper',
+          component: () => import('../pages/WhisperPage.vue'),
+        },
+        {
+          path: 'summary',
+          name: 'ai-summary',
+          component: () => import('../pages/AISummary.vue'),
+        },
+      ],
     },
     {
       path: '/export',
