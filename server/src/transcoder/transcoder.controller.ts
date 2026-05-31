@@ -76,7 +76,7 @@ export class TranscoderController {
   }
 
   @Get('tasks')
-  getTasks(@Body('source') source?: string) {
+  getTasks() {
     return this.queue.getTasksByType('transcode')
   }
 
@@ -127,6 +127,7 @@ export class TranscoderController {
   reRunTask(@Param('id') id: string) {
     const task = this.queue.getTask(id)
     if (!task) return { error: 'Task not found' }
+    if (task.status === 'running') return { error: 'Cannot re-run a running task' }
     this.queue.reRunTask(id)
     const { file, outputDir } = task.payload
     this.processTranscodeTask(id, file, outputDir)

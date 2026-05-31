@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { whisperAPI, crawlerAPI } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -107,7 +107,6 @@ function canRetry(s: string) { return s === 'failed' }
 function canReRun(s: string) { return s === 'completed' || s === 'failed' || s === 'cancelled' }
 function canDelete(s: string) { return s !== 'running' }
 
-import { computed } from 'vue'
 onMounted(refresh)
 </script>
 

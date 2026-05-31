@@ -106,7 +106,19 @@ export class QueueService {
   }
 
   deleteTask(id: string) {
+    // Emit event before deletion so subscribers are notified
+    const task = this.getTask(id)
     this.db.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
+    if (task) {
+      this.eventSubject.next({
+        taskId: task.id,
+        type: task.type,
+        status: 'deleted' as any,
+        progress: task.progress,
+        result: task.result,
+        error: task.error,
+      })
+    }
   }
 
   retryTask(id: string) {
@@ -127,6 +139,7 @@ export class QueueService {
       UPDATE tasks SET status = 'pending', progress = 0, error = NULL, retries = 0, result = NULL, updated_at = datetime('now')
       WHERE id = ? AND status IN ('failed', 'completed', 'cancelled', 'paused')
     `).run(id)
+    this.emitEvent(id)
   }
 
   updateTaskPayload(id: string, payload: any) {

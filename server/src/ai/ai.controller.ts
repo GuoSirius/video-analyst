@@ -100,8 +100,11 @@ export class AIController {
   }
 
   @Delete('tasks/:id')
-  cancelTask(@Param('id') id: string) {
-    this.queue.cancelTask(id)
+  deleteTask(@Param('id') id: string) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status === 'running') return { error: 'Cannot delete a running task' }
+    this.queue.deleteTask(id)
     return { ok: true }
   }
 
@@ -152,6 +155,7 @@ export class AIController {
   reRunTask(@Param('id') id: string) {
     const task = this.queue.getTask(id)
     if (!task) return { error: 'Task not found' }
+    if (task.status === 'running') return { error: 'Cannot re-run a running task' }
     this.queue.reRunTask(id)
     const { config, transcriptionId } = task.payload
     this.processAITask(id, config, transcriptionId)

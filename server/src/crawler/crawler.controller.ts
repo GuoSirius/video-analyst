@@ -112,6 +112,7 @@ export class CrawlerController {
   reRunTask(@Param('id') id: string) {
     const task = this.queue.getTask(id)
     if (!task) return { error: 'Task not found' }
+    if (task.status === 'running') return { error: 'Cannot re-run a running task' }
     this.queue.reRunTask(id)
     this.processCrawlTask(id, task.payload)
     return { ok: true }
