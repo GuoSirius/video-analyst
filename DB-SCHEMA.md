@@ -76,32 +76,62 @@ task(crawler)  (文件)       task(transcode)  task(whisper)    task(ai)
 |---|---|---|
 | `id` | TEXT PK | UUID |
 | `type` | TEXT NOT NULL | `crawler` / `transcode` / `whisper` / `ai` |
-| `status` | TEXT | `pending` → `running` → `completed` / `failed` / `cancelled` |
+| `status` | TEXT | `pending` / `running` / `paused` / `completed` / `failed` / `cancelled` |
 | `payload` | TEXT(JSON) | 任务参数，按 type 不同结构不同 |
 | `result` | TEXT(JSON) | 任务结果（完成后写入） |
 | `error` | TEXT | 失败时的错误信息 |
 | `progress` | INTEGER | 0-100 进度百分比 |
 | `retries` | INTEGER | 已重试次数 |
 | `max_retries` | INTEGER | 最大重试次数（默认 3） |
+| `started_at` | TEXT | 任务开始执行的时间（首次 status→running 时写入，暂停继续不重置） |
 | `created_at` / `updated_at` | TEXT | 时间戳 |
 
 **状态流转**:
 ```
-pending ──→ running ──→ completed
-   ↑          │              ↑
-   │          └──→ failed ───┘ (retries < max_retries 时回到 pending)
-   └── retryTask() 手动重试 (completed/failed/cancelled → pending)
+                    ┌──→ cancelled (用户终止) ←──┐
+                    │                            │
+pending ──→ running ──→ completed                │
+   ↑          │  │              ↑                │
+   │          │  └──→ failed ───┘ (retries<3)   │
+   │          │         ↓ (retries=max)          │
+   │          │         failed (执行失败)         │
+   │          │                                  │
+   │        paused ←──→ running (暂停/继续)       │
+   │          │                                  │
+   └── retry / reRun (清除 started_at 重新开始)   │
+   └── start (pending→running)                   │
 ```
 
-**payload 结构示例**:
+**crawler payload 结构**:
 
-| type | payload |
-|---|---|
-| `crawler` | `{ name, url, selector, maxPages, ... }` |
-| `transcode` | `{ file, outputDir }` |
-| `whisper` | `{ filePath, model, language }` |
-| `ai` | `{ config: { provider, model, prompt }, transcriptionId }` |
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | 任务名称 |
+| `url` | string | 起始页面地址 |
+| `mode` | `'single'` / `'list'` | 采集模式 |
+| `rules` | CrawlRule[] | 提取规则 |
+| `itemSelector` | string | 列表项 CSS 选择器（list 模式） |
+| `paginationMode` | `'none'` / `'page'` / `'count'` | 翻页方式 |
+| `nextPageSelector` | string | "下一页"CSS 选择器 |
+| `urlPattern` | string | URL 模板，`{page}` 表示页码 |
+| `pageStart` | number | URL 模式起始页码（默认 1） |
+| `maxPages` | number | 最大页数（0=无限） |
+| `maxItems` | number | 最大条数（count 模式） |
+| `loadMoreSelector` | string | "加载更多"选择器（实验性） |
+| `detailLinkSelector` | string | 详情页链接选择器 |
+| `detailRules` | CrawlRule[] | 详情页提取规则 |
+| `titleField` | string | 指定标题字段名（留空自动查找） |
+| `errorMode` | `'lenient'` / `'standard'` / `'strict'` | 容错模式（默认 standard） |
+| `autoStart` | boolean | 创建后是否自动执行（默认 false） |
 
+**crawler result 结构**:
+```json
+{
+  "itemsFound": 100,
+  "skippedPages": 1,
+  "skippedItems": 3
+}
+```
 索引: `idx_tasks_type`, `idx_tasks_status`
 
 ---
@@ -112,16 +142,25 @@ pending ──→ running ──→ completed
 |---|---|---|
 | `id` | TEXT PK | UUID |
 | `task_id` | TEXT FK → tasks(id) CASCADE | 所属爬虫任务 |
-| `source_url` | TEXT | 来源页面 URL |
-| `title` | TEXT | 条目标题 |
+| `source_url` | TEXT | 来源页面 URL（列表页或单页 URL） |
+| `detail_url` | TEXT | 详情页 URL（NULL=无详情页，有值可单项重采） |
+| `title` | TEXT | 条目标题（优先 titleField 指定字段，否则自动查找） |
 | `media_url` | TEXT | 媒体文件链接 |
-| `media_type` | TEXT | 媒体类型（video/audio） |
-| `media_source` | TEXT | 媒体来源平台标识 |
-| `status` | TEXT | pending / downloaded / transcoded / error |
-| `extra_data` | TEXT(JSON) | 扩展数据（作者、时长等） |
-| `created_at` | TEXT | 创建时间 |
+| `media_type` | TEXT | video / audio / image / link / text |
+| `media_source` | TEXT | 平台名(bilibili/tencent/youku) / direct / 域名 |
+| `status` | TEXT | `crawled`(已采集) / `pending` / `downloaded` / `transcoded` / `error` |
+| `extra_data` | TEXT(JSON) | 完整的提取数据 |
+| `created_at` | TEXT | 采集时间 |
 
 索引: `idx_crawl_items_task`
+
+**CrawlRule 结构**:
+| 字段 | 说明 |
+|------|------|
+| `name` | 字段名（存储 key） |
+| `selector` | CSS 选择器 |
+| `attr` | 属性名：留空=提取文本；填写=提取属性值（src/href） |
+| `regex` | 正则捕获组：截取部分内容（如 `/product/(\d+)` 提取 ID） |
 
 ---
 

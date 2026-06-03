@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { crawlerAPI, whisperAPI } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { usePagination } from '../composables/usePagination'
+
+const route = useRoute()
 
 // --- State ---
 const tasks = ref<any[]>([])
 const items = ref<any[]>([])
-const selectedTaskId = ref('')
+const selectedTaskId = ref((route.query.taskId as string) || '')
 const statusFilter = ref('all')
+let sseConnection: EventSource | null = null
 const selectedIds = ref<string[]>([])
 const detailItem = ref<any>(null)
 const detailVisible = ref(false)
@@ -34,8 +39,8 @@ async function retryTask(id: string) {
 }
 async function reRunTask(id: string) {
   try {
-    await ElMessageBox.confirm('重新运行将清除已有的采集数据并从头开始。', '确认', { type: 'warning' })
-    await crawlerAPI.reRunTask(id); ElMessage.success('任务已重新运行'); refresh()
+    await ElMessageBox.confirm('重新执行将清除已有的采集数据并从头开始。', '确认', { type: 'warning' })
+    await crawlerAPI.reRunTask(id); ElMessage.success('任务已重新执行'); refresh()
   } catch { /* cancelled */ }
 }
 async function deleteTask(id: string) {
@@ -53,6 +58,11 @@ async function refresh() {
   ])
   tasks.value = tRes.data
   items.value = iRes.data
+}
+
+async function refreshItemsOnly() {
+  const { data } = await crawlerAPI.getItems()
+  items.value = data
 }
 
 async function continuePipeline() {
@@ -112,11 +122,29 @@ async function deleteItem(id: string) {
 
 async function retryItem(id: string) {
   try {
-    await ElMessageBox.confirm('将重新运行该项所属的采集任务，已有数据会被清除。确定继续？', '确认', { type: 'warning' })
+    await ElMessageBox.confirm('将重新执行该项所属的采集任务，已有数据会被清除。确定继续？', '确认', { type: 'warning' })
     await crawlerAPI.retryItem(id)
     ElMessage.success('任务已重新运行')
     refresh()
   } catch { /* cancelled */ }
+}
+
+async function retrySingleItem(id: string) {
+  try {
+    await ElMessageBox.confirm('将重新抓取该项数据（仅该项，不影响其他）。确定继续？', '确认', { type: 'info' })
+    const res = await crawlerAPI.recrawlItem(id)
+    if (res.data?.error) { ElMessage.error(res.data.error) }
+    else { ElMessage.success('已重新抓取'); refreshItemsOnly() }
+  } catch { ElMessage.error('操作失败') }
+}
+
+async function recrawlSingleItem(id: string) {
+  try {
+    await ElMessageBox.confirm('将重新抓取该项数据。确定继续？', '确认', { type: 'info' })
+    const res = await crawlerAPI.recrawlItem(id)
+    if (res.data?.error) { ElMessage.error(res.data.error) }
+    else { ElMessage.success('已重新抓取'); refreshItemsOnly() }
+  } catch { ElMessage.error('操作失败') }
 }
 
 function copyJson() {
@@ -141,6 +169,13 @@ const filteredItems = computed(() => {
   return result
 })
 
+// --- Pagination ---
+const { page: itemPage, pageSize: itemPageSize, total: itemTotal, pageSizes: itemPageSizes, pagedData: pagedItems, onPageChange: onItemPageChange, onPageSizeChange: onItemPageSizeChange } = usePagination({
+  data: () => filteredItems.value,
+  defaultPageSize: 20,
+  resetOn: [selectedTaskId, statusFilter],
+})
+
 const taskNameMap = computed(() => {
   const m: Record<string, string> = {}
   tasks.value.forEach((t: any) => {
@@ -162,8 +197,8 @@ const itemCounts = computed(() => {
 
 function statusLabel(s: string) {
   const map: Record<string, string> = {
-    pending: '等待中', running: '进行中', completed: '已完成',
-    failed: '失败', cancelled: '已取消', paused: '已暂停',
+    pending: '未开始', running: '进行中', completed: '已完成',
+    failed: '执行失败', cancelled: '用户终止', paused: '已暂停',
   }
   return map[s] || s
 }
@@ -172,11 +207,101 @@ function canStart(s: string) { return s === 'pending' || s === 'paused' }
 function canPause(s: string) { return s === 'running' }
 function canStop(s: string) { return s === 'running' || s === 'paused' }
 function canRetry(s: string) { return s === 'failed' }
-function canReRun(s: string) { return s === 'completed' || s === 'failed' || s === 'cancelled' }
-function canDelete(s: string) { return s !== 'running' }
+function canReRun(s: string) { return s === 'completed' || s === 'cancelled' }
+function canDelete(s: string) { return s === 'pending' || s === 'completed' || s === 'failed' || s === 'cancelled' }
+
+function itemStatusLabel(s: string) {
+  const map: Record<string, string> = {
+    crawled: '已采集', pending: '待处理', processing: '处理中',
+    downloaded: '已下载', transcoded: '已转码', error: '错误',
+  }
+  return map[s] || s || '未知'
+}
+
+/** When title is empty, pick the best display field from extra_data */
+function pickDisplayField(item: any): string {
+  try {
+    const extra = item.extra_data
+    if (!extra) return ''
+    const data = typeof extra === 'string' ? JSON.parse(extra) : extra
+    if (!data || typeof data !== 'object') return ''
+    const entries = Object.entries(data) as [string, any][]
+    if (!entries.length) return ''
+    // Prefer fields that look like titles: longer text, not URLs, not numbers
+    const urlPattern = /^https?:\/\//
+    const textFields = entries.filter(([_, v]) =>
+      typeof v === 'string' && v.length > 1 && !urlPattern.test(v)
+    )
+    if (textFields.length) {
+      // Sort by length descending — longest text is likely the title
+      textFields.sort((a, b) => (b[1] as string).length - (a[1] as string).length)
+      const val = textFields[0][1] as string
+      return val.length > 80 ? val.slice(0, 80) + '…' : val
+    }
+    // Fallback: use any non-empty value that's not a URL
+    const anyField = entries.find(([_, v]) => typeof v === 'string' && v && !urlPattern.test(v))
+    return anyField ? (anyField[1] as string).slice(0, 80) : ''
+  } catch {
+    return ''
+  }
+}
 
 watch(selectedTaskId, () => { selectedIds.value = [] })
-onMounted(refresh)
+
+// SSE real-time updates — must use full backend URL (EventSource doesn't go through axios)
+const SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'}/crawler/events`
+
+function setupSSE() {
+  if (sseConnection) sseConnection.close()
+  sseConnection = new EventSource(SSE_URL)
+  sseConnection.onmessage = (e) => {
+    try {
+      const evt = JSON.parse(e.data)
+      if (evt.type === 'crawl') {
+        const idx = tasks.value.findIndex((t: any) => t.id === evt.taskId)
+        if (idx !== -1) {
+          if (evt.status === 'deleted') {
+            tasks.value.splice(idx, 1)
+          } else {
+            Object.assign(tasks.value[idx], {
+              status: evt.status,
+              progress: evt.progress,
+              result: evt.result,
+              error: evt.error,
+              started_at: evt.started_at || tasks.value[idx].started_at,
+              updated_at: evt.updated_at || new Date().toISOString().replace('T', ' ').slice(0, 19),
+            })
+            // Refresh items when task produces/stops with data
+            if (['completed', 'failed', 'cancelled', 'paused'].includes(evt.status)) {
+              refreshItemsOnly()
+            }
+            // Also refresh task list to update item counts
+            if (['completed', 'failed', 'cancelled', 'paused'].includes(evt.status)) {
+              crawlerAPI.getTasks().then(({ data }) => { tasks.value = data })
+            }
+          }
+        } else if (evt.status !== 'deleted') {
+          refresh()
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  sseConnection.onerror = () => {
+    sseConnection?.close()
+    setTimeout(setupSSE, 3000)
+  }
+}
+
+function teardownSSE() {
+  sseConnection?.close()
+  sseConnection = null
+}
+
+onMounted(() => {
+  refresh()
+  setupSSE()
+})
+onUnmounted(teardownSSE)
 </script>
 
 <template>
@@ -222,7 +347,7 @@ onMounted(refresh)
           <el-button v-if="canPause(currentTask.status)" size="small" type="warning" plain @click="pauseTask(currentTask.id)">暂停</el-button>
           <el-button v-if="canStop(currentTask.status)" size="small" type="danger" plain @click="stopTask(currentTask.id)">终止</el-button>
           <el-button v-if="canRetry(currentTask.status)" size="small" type="warning" plain @click="retryTask(currentTask.id)">重试</el-button>
-          <el-button v-if="canReRun(currentTask.status)" size="small" plain @click="reRunTask(currentTask.id)">重新运行</el-button>
+          <el-button v-if="canReRun(currentTask.status)" size="small" plain @click="reRunTask(currentTask.id)">重新执行</el-button>
           <el-button v-if="canDelete(currentTask.status)" size="small" type="danger" plain @click="deleteTask(currentTask.id)">删除</el-button>
         </div>
       </div>
@@ -242,6 +367,7 @@ onMounted(refresh)
           <el-button
             v-for="f in [
               { k: 'all', l: '全部状态' },
+              { k: 'crawled', l: '已采集' },
               { k: 'pending', l: '待处理' },
               { k: 'downloaded', l: '已下载' },
               { k: 'transcoded', l: '已转码' },
@@ -261,18 +387,23 @@ onMounted(refresh)
     <div class="card-static">
       <el-table
         v-if="filteredItems.length"
-        :data="filteredItems"
+        :data="pagedItems"
         size="small"
         max-height="500"
         @selection-change="(rows: any) => selectedIds = rows.map((r: any) => r.id)"
       >
-        <el-table-column type="selection" width="40" />
-        <el-table-column label="所属任务" width="130" show-overflow-tooltip>
+        <el-table-column type="selection" width="40" fixed="left" :reserve-selection="true" />
+        <el-table-column type="index" label="序号" width="55" align="center" fixed="left" />
+        <el-table-column label="所属任务" width="130" show-overflow-tooltip fixed="left">
           <template #default="{ row }">
             <span class="text-xs text-gray-500">{{ taskNameMap[row.task_id] || row.task_id?.slice(0, 8) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="title" label="标题" show-overflow-tooltip min-width="160" />
+        <el-table-column label="标题" show-overflow-tooltip min-width="160" fixed="left">
+          <template #default="{ row }">
+            <span class="text-xs text-gray-300">{{ row.title || pickDisplayField(row) || '(无标题)' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="类型" width="80">
           <template #default="{ row }">
             <span class="text-xs" :class="row.media_type === 'video' ? 'text-blue-400' : row.media_type === 'audio' ? 'text-emerald-400' : 'text-gray-500'">
@@ -288,11 +419,12 @@ onMounted(refresh)
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <span class="text-xs" :class="{
+              'text-emerald-400': row.status === 'crawled' || row.status === 'downloaded' || row.status === 'transcoded',
               'text-yellow-400': row.status === 'pending',
-              'text-emerald-400': row.status === 'downloaded' || row.status === 'transcoded',
+              'text-blue-400': row.status === 'processing',
               'text-red-400': row.status === 'error',
               'text-gray-500': !row.status,
-            }">{{ row.status || 'pending' }}</span>
+            }">{{ itemStatusLabel(row.status) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="数据字段" min-width="140" show-overflow-tooltip>
@@ -305,23 +437,38 @@ onMounted(refresh)
             <span class="text-xs text-gray-500">{{ row.created_at }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="130" align="center">
+        <el-table-column label="操作" width="190" align="center" fixed="right">
           <template #default="{ row }">
             <div class="flex items-center justify-center gap-1">
               <el-button size="small" type="primary" plain @click="showDetail(row)">查看</el-button>
+              <el-button v-if="row.status === 'error'" size="small" type="warning" plain @click="retrySingleItem(row.id)">重试</el-button>
+              <el-button v-if="row.status === 'crawled'" size="small" plain @click="recrawlSingleItem(row.id)">重采</el-button>
               <el-button size="small" type="danger" plain @click="deleteItem(row.id)">删除</el-button>
             </div>
           </template>
         </el-table-column>
       </el-table>
-      <div v-else class="text-center py-16 text-gray-500 text-sm">
+      <div v-if="filteredItems.length > itemPageSize" class="flex justify-end mt-4">
+        <el-pagination
+          v-model:current-page="itemPage"
+          v-model:page-size="itemPageSize"
+          :page-sizes="itemPageSizes"
+          :total="itemTotal"
+          layout="total, sizes, prev, pager, next"
+          size="small"
+          background
+          @size-change="onItemPageSizeChange"
+          @current-change="onItemPageChange"
+        />
+      </div>
+      <div v-if="!filteredItems.length" class="text-center py-16 text-gray-500 text-sm">
         <i class="fas fa-table text-3xl mb-3 block opacity-30"></i>
         {{ selectedTaskId ? '该任务暂无采集结果' : '暂无采集数据，请先在任务列表中创建并运行采集任务' }}
       </div>
     </div>
 
     <!-- Detail Dialog -->
-    <el-dialog v-model="detailVisible" title="采集结果详情" width="700px" destroy-on-close>
+    <el-dialog v-model="detailVisible" title="采集结果详情" width="700px" destroy-on-close :close-on-click-modal="false">
       <div v-if="detailItem" class="space-y-4">
         <!-- Toolbar -->
         <div class="flex items-center justify-between">

@@ -286,7 +286,7 @@ onMounted(() => { checkFfmpeg(); refresh() })
     </div>
 
     <!-- Upload Dialog -->
-    <el-dialog v-model="uploadDialog" title="上传音视频文件" width="600px" destroy-on-close>
+    <el-dialog v-model="uploadDialog" title="上传音视频文件" width="600px" destroy-on-close :close-on-click-modal="false">
       <div class="space-y-4">
         <!-- File selector -->
         <label class="block border-2 border-dashed border-gray-600/40 rounded-xl p-8 text-center cursor-pointer hover:border-blue-500/40 hover:bg-gray-800/30 transition-all duration-200">

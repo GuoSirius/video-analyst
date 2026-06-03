@@ -83,7 +83,7 @@ onMounted(load)
       </div>
     </div>
 
-    <el-dialog v-model="dialogVisible" :title="isNew ? '添加提示词' : '编辑提示词'" width="560px" destroy-on-close>
+    <el-dialog v-model="dialogVisible" :title="isNew ? '添加提示词' : '编辑提示词'" width="560px" destroy-on-close :close-on-click-modal="false">
       <div class="space-y-4">
         <div>
           <div class="text-xs text-gray-400 mb-1.5">名称</div>

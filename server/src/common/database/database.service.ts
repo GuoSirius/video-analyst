@@ -22,7 +22,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('foreign_keys = ON')
     this.initTables()
+    this.migrate()
     this.seedDefaults()
+  }
+
+  /** Add columns added after initial release to existing databases */
+  private migrate() {
+    try { this.db.exec(`ALTER TABLE tasks ADD COLUMN started_at TEXT`) } catch { /* column exists */ }
+    try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN detail_url TEXT`) } catch { /* column exists */ }
   }
 
   onModuleDestroy() {
@@ -41,6 +48,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         progress INTEGER DEFAULT 0,
         retries INTEGER DEFAULT 0,
         max_retries INTEGER DEFAULT 3,
+        started_at TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -49,6 +57,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id TEXT PRIMARY KEY,
         task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         source_url TEXT,
+        detail_url TEXT,
         title TEXT,
         media_url TEXT,
         media_type TEXT,
