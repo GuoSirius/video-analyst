@@ -11,6 +11,60 @@ export interface CrawlRule {
   subRules?: CrawlRule[]
 }
 
+/** 字段指定：多个字段按顺序选一个(first) 还是全部收集(all) */
+export interface FieldSpec {
+  fields: string[]
+  mode: 'first' | 'all'
+}
+
+/** URL 转换规则：将提取到的字段值拼接为标准视频页面链接 */
+export interface UrlTransform {
+  /** 要转换的字段名 */
+  fieldName: string
+  /** 链接模板，{fieldName} 占位符会被实际值替换 */
+  urlTemplate: string
+  /** 下载方式：yt-dlp 或 file（文件直链） */
+  downloadMethod: 'yt-dlp' | 'file'
+  /** yt-dlp 下载参数（仅 downloadMethod='yt-dlp' 时有效，不同站点可配置不同参数） */
+  ytDlpOptions?: YtDlpOptions
+}
+
+/** yt-dlp 下载参数配置 */
+export interface YtDlpOptions {
+  /** 从浏览器读取 cookies（如 chrome、firefox、edge） */
+  cookiesFromBrowser?: string
+  /** cookies 文件路径 */
+  cookies?: string
+  /** 代理地址 */
+  proxy?: string
+  /** 下载速率限制（如 5M、500K） */
+  limitRate?: string
+  /** 自定义 User-Agent */
+  userAgent?: string
+  /** Referer 请求头 */
+  referer?: string
+  /** 站点登录用户名 */
+  username?: string
+  /** 站点登录密码 */
+  password?: string
+  /** 自定义请求头 */
+  addHeaders?: Record<string, string>
+  /** 绕过地域限制 */
+  geoBypass?: boolean
+  /** 跳过 HTTPS 证书校验 */
+  noCheckCertificates?: boolean
+  /** 请求间隔（秒） */
+  sleepInterval?: number
+  /** 重试次数 */
+  retries?: number
+  /** 自定义格式选择器（覆盖默认的 bv*+ba） */
+  format?: string
+  /** 提取器专属参数，如 { youtube: ['player_client=web'] } */
+  extractorArgs?: Record<string, string[]>
+  /** 额外的原始命令行参数（直接传递给 yt-dlp） */
+  rawArgs?: string[]
+}
+
 export interface CrawlPayload {
   name?: string
   url: string
@@ -30,24 +84,36 @@ export interface CrawlPayload {
   pageStart?: number
   /** CSS selector for a "load more" button/link (experimental, for simple link-based load-more) */
   loadMoreSelector?: string
-  detailLinkSelector?: string
   detailRules?: CrawlRule[]
-  /** If true, start crawling immediately after creation. Default false. */
+
+  // ── 执行开关 ──
+  /** 创建后自动执行爬取任务 */
   autoStart?: boolean
-  /** Field name from extracted rules to use as the item title. Falls back to auto-detection if not set. */
-  titleField?: string
-  /** Field name from extracted rules that contains the detail page URL. Takes priority over detailLinkSelector. */
-  detailLinkField?: string
-  /** Field name(s) from extracted rules that contain media URLs (comma-separated, first match wins). Falls back to auto-detection. */
-  mediaUrlField?: string
-  /** Field name that uniquely identifies each item (e.g. 'id', 'product_id'). Used for matching during retry/recrawl. */
-  idField?: string
-  /** Error handling mode: 'lenient' = skip all errors, 'standard' = retry then skip, 'strict' = fail on error */
-  errorMode?: 'lenient' | 'standard' | 'strict'
-  /** Whether to automatically import media resources to download queue after crawl */
+  /** 爬取完成后自动将媒体资源带入下载队列 */
   autoDownload?: boolean
-  /** Field names to download (comma-separated). Only these fields will be downloaded. If not set, all media fields are downloaded. */
-  downloadFields?: string
+  /** 下载完成后自动转码 */
+  autoTranscode?: boolean
+  /** 识别完成后自动 AI 分析 */
+  autoAI?: boolean
+  /** 一键全开：等效于 autoStart + autoDownload + autoTranscode + autoAI */
+  autoPipeline?: boolean
+
+  // ── 容错 ──
+  errorMode?: 'lenient' | 'standard' | 'strict'
+
+  // ── 字段指定 ──
+  /** 标题字段：mode 默认 'first' */
+  titleField?: FieldSpec
+  /** 详情链接字段：mode 默认 'first' */
+  detailLinkField?: FieldSpec
+  /** 媒体资源字段：mode 默认 'all'（收集所有指定字段的值） */
+  mediaUrlField?: FieldSpec
+  /** 唯一标识字段：mode 默认 'first' */
+  idField?: FieldSpec
+
+  // ── URL 转换 ──
+  /** 需要拼接转换的字段规则 */
+  urlTransforms?: UrlTransform[]
 }
 
 @Injectable()
@@ -88,7 +154,8 @@ export class CrawlerService {
         })
         item[rule.name] = listResults
       } else {
-        const el = $(rule.selector, root).first()
+        // 空 selector = 使用 root 元素本身，用于提取 itemSelector 选中元素上的属性（如 <a> 的 href）
+        const el = rule.selector ? $(rule.selector, root).first() : $(root)
         let value: string
         if (rule.attr) {
           value = el.attr(rule.attr) || ''
@@ -142,5 +209,26 @@ export class CrawlerService {
       return { type: 'link', source: new URL(url).hostname }
     }
     return { type: 'link', source: '' }
+  }
+
+  // ── 字段解析工具 ──
+
+  /** 按顺序选第一个有效值 */
+  pickFirst(item: Record<string, any>, fields: string[]): string {
+    for (const f of fields) {
+      const val = item[f]
+      if (val != null && val !== '') return String(val)
+    }
+    return ''
+  }
+
+  /** 收集所有指定字段的有效值 */
+  collectAll(item: Record<string, any>, fields: string[]): string[] {
+    const results: string[] = []
+    for (const f of fields) {
+      const val = item[f]
+      if (val != null && val !== '') results.push(String(val))
+    }
+    return results
   }
 }

@@ -118,11 +118,16 @@ pending ──→ running ──→ completed                │
 | `maxPages` | number | 最大页数（0=无限） |
 | `maxItems` | number | 最大条数（count 模式） |
 | `loadMoreSelector` | string | "加载更多"选择器（实验性） |
-| `detailLinkSelector` | string | 详情页链接选择器 |
+| `detailLinkField` | FieldSpec | 详情页 URL 字段指定（fields + mode） |
 | `detailRules` | CrawlRule[] | 详情页提取规则 |
-| `titleField` | string | 指定标题字段名（留空自动查找） |
+| `ytDlpOptions` | object | yt-dlp 参数（cookies、代理等），存于每个 UrlTransform 规则中 |
+| `titleField` | FieldSpec | 指定标题字段（fields + mode，留空自动查找） |
 | `errorMode` | `'lenient'` / `'standard'` / `'strict'` | 容错模式（默认 standard） |
 | `autoStart` | boolean | 创建后是否自动执行（默认 false） |
+| `autoDownload` | boolean | 采集完成后自动带入下载队列 |
+| `autoTranscode` | boolean | 下载完成后自动转码 |
+| `autoAI` | boolean | 识别完成后自动 AI 分析 |
+| `autoPipeline` | boolean | 一键全开上述四项 |
 
 **crawler result 结构**:
 ```json

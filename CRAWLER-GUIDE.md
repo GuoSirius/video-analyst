@@ -119,13 +119,13 @@ pageStart = 1
 ```
 列表页 → 提取每个 item（title, link, price…）
          │
-         ├─ 提取详情链接: $(detailLinkSelector).attr('href')
+         ├─ 提取详情链接: detailLinkField 字段指定 → 进入详情页
          │
          └─ 进入详情页 → parseHtml(detailRules) → 合并数据
 ```
 
 **配置**：
-- `detailLinkSelector`：从列表项中提取详情页链接的选择器（如 `a.title`）
+- `detailLinkField`：指定哪个提取字段的值是详情页 URL（如 `link`、`detailUrl`），支持多个字段按顺序取第一个有效值
 - `detailRules`：详情页的提取规则（如 content、tags、author_bio）
 
 **注意**：详情页数据与列表数据合并，同名字段以详情页为准。
@@ -139,7 +139,7 @@ pageStart = 1
 | 字段 | 配置项 | 作用 | 未指定时的行为 |
 |------|--------|------|---------------|
 | 标题字段 | `titleField` | 列表中每条数据的显示标题，支持逗号分隔的多个字段 | 自动查找：title → name → articleTitle → productName → heading → 最长文本 → (无标题) |
-| 详情链接字段 | `detailLinkField` | 进入详情页的 URL，支持逗号分隔的多个字段 | 使用 CSS 选择器 `detailLinkSelector` 从 DOM 提取 href |
+| 详情链接字段 | `detailLinkField` | 进入详情页的 URL，支持逗号分隔的多个字段 | 不进入详情页，仅使用列表页提取结果 |
 | 媒体资源字段 | `mediaUrlField` | 视频/音频/图片等媒体 URL，支持逗号分隔的多个字段 | 自动查找：videoUrl → audioUrl → mediaUrl → imageUrl → picUrl → thumbnail → image → url → link |
 | 唯一标识字段 | `idField` | 唯一标识每项的字段名（如 `id`、`itemId`），重采/重试时用于精确匹配 | 使用 link → title 匹配 |
 
@@ -258,7 +258,7 @@ HTTP 404 + URL模式 + 无限翻页 + 非首页 → 翻页结束（正常完成�
 | 字段 | 来源 | 用途 |
 |------|------|------|
 | `source_url` | 当前采集时的页面 URL | 定位列表页 |
-| `detail_url` | detailLinkSelector 从列表项提取 | 直接抓详情页 |
+| `detail_url` | detailLinkField 指定字段提取 | 直接抓详情页 |
 
 ### 重采流程
 

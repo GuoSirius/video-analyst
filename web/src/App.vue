@@ -1,11 +1,8 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
-import { computed, ref, onMounted } from 'vue'
-import { settingsAPI } from './api'
-import { ElMessage } from 'element-plus'
+import { computed } from 'vue'
 
 const route = useRoute()
-const autoMode = ref(true)
 
 interface NavChild {
   path: string
@@ -78,25 +75,6 @@ const defaultOpeneds = computed(() => {
   }
   return opens
 })
-
-async function loadSettings() {
-  try {
-    const { data } = await settingsAPI.getPipeline()
-    autoMode.value = data.autoMode
-  } catch {}
-}
-
-async function toggleAuto(value: boolean) {
-  try {
-    const { data } = await settingsAPI.setPipeline(value)
-    autoMode.value = data.autoMode
-  } catch {
-    autoMode.value = !value
-    ElMessage.error('设置失败')
-  }
-}
-
-onMounted(loadSettings)
 </script>
 
 <template>
@@ -160,12 +138,6 @@ onMounted(loadSettings)
       <header class="h-12 border-b border-[#1c1f26] flex items-center px-7 bg-[#0a0e14]/80 backdrop-blur-md sticky top-0 z-40">
         <h1 class="text-[13px] font-medium text-gray-300">{{ currentTitle }}</h1>
         <div class="flex-1"></div>
-        <div class="flex items-center gap-3">
-          <div class="flex items-center gap-2 px-3 py-1.5 rounded-md bg-white/[0.03] border border-[#1c1f26]">
-            <span class="text-[11px] text-gray-400 select-none">{{ autoMode ? '自动流水线' : '手动模式' }}</span>
-            <el-switch v-model="autoMode" size="small" @change="toggleAuto" />
-          </div>
-        </div>
       </header>
       <router-view />
     </div>

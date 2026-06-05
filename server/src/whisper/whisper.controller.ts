@@ -166,7 +166,7 @@ export class WhisperController {
     return this.sse.getTaskStream()
   }
 
-  private async processWhisperTask(taskId: string, filePath: string, itemId?: string, options?: any) {
+  private async processWhisperTask(taskId: string, filePath: string, itemId?: string, options?: any, crawlerTaskId?: string) {
     try {
       this.queue.updateTaskStatus(taskId, 'running')
       this.queue.updateTaskProgress(taskId, 30)
@@ -187,8 +187,9 @@ export class WhisperController {
       this.queue.updateTaskProgress(taskId, 100)
       this.queue.updateTaskResult(taskId, { transcriptionId, text: result.text })
 
-      // Auto-chain: whisper → AI
-      if (this.pipeline.isAutoMode()) {
+      // 任务级自动 AI：通过 itemId 追溯到爬虫任务，检查 autoAI / autoPipeline
+      const cTaskId = crawlerTaskId || (itemId ? this.pipeline.getCrawlerTaskIdFromItemId(itemId) : null)
+      if (cTaskId && this.pipeline.shouldAutoAI(cTaskId)) {
         const config = {
           provider: 'deepseek' as const,
           model: 'deepseek-chat',

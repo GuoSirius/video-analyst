@@ -148,7 +148,7 @@ export class TranscoderController {
     return this.sse.getTaskStream()
   }
 
-  private async processTranscodeTask(taskId: string, inputPath: string, outDir: string) {
+  private async processTranscodeTask(taskId: string, inputPath: string, outDir: string, crawlerTaskId?: string) {
     try {
       this.queue.updateTaskStatus(taskId, 'running')
       this.queue.updateTaskProgress(taskId, 0)
@@ -159,16 +159,17 @@ export class TranscoderController {
 
       this.queue.updateTaskResult(taskId, { outputPath })
 
-      if (this.pipeline.isAutoMode() && fs.existsSync(outputPath)) {
-        const whisperTask = this.queue.createTask('whisper', { filePath: outputPath })
-        this.processWhisperChain(whisperTask.id, outputPath)
+      // 任务级自动转码→识别：检查爬虫任务是否开启了 autoTranscode / autoPipeline
+      if (crawlerTaskId && this.pipeline.shouldAutoTranscode(crawlerTaskId) && fs.existsSync(outputPath)) {
+        const whisperTask = this.queue.createTask('whisper', { filePath: outputPath, crawlerTaskId })
+        this.processWhisperChain(whisperTask.id, outputPath, crawlerTaskId)
       }
     } catch (err: any) {
       this.queue.updateTaskError(taskId, err.message)
     }
   }
 
-  private async processWhisperChain(taskId: string, filePath: string) {
+  private async processWhisperChain(taskId: string, filePath: string, crawlerTaskId?: string) {
     try {
       this.queue.updateTaskStatus(taskId, 'running')
       this.queue.updateTaskProgress(taskId, 30)
@@ -180,6 +181,38 @@ export class TranscoderController {
       `).run(transcriptionId, filePath, result.text || JSON.stringify(result))
       this.queue.updateTaskProgress(taskId, 100)
       this.queue.updateTaskResult(taskId, { transcriptionId, text: result.text })
+
+      // 任务级自动 AI：检查是否开启了 autoAI / autoPipeline
+      if (crawlerTaskId && this.pipeline.shouldAutoAI(crawlerTaskId)) {
+        const config = {
+          provider: 'deepseek' as const,
+          model: 'deepseek-chat',
+          prompt: '请对以下文本进行总结，提取关键信息和关键词，用中文回复。',
+        }
+        const aiTask = this.queue.createTask('ai', { config, transcriptionId })
+        this.processAIChain(aiTask.id, config, transcriptionId)
+      }
+    } catch (err: any) {
+      this.queue.updateTaskError(taskId, err.message)
+    }
+  }
+
+  private async processAIChain(taskId: string, config: any, transcriptionId: string) {
+    try {
+      this.queue.updateTaskStatus(taskId, 'running')
+      this.queue.updateTaskProgress(taskId, 10)
+      const transcription = this.db.db.prepare('SELECT * FROM transcriptions WHERE id = ?').get(transcriptionId) as any
+      if (!transcription) throw new Error('Transcription not found')
+      this.queue.updateTaskProgress(taskId, 30)
+      const { text } = await this.whisper.inference(transcription.file_path)
+      this.queue.updateTaskProgress(taskId, 80)
+      const resultId = uuid()
+      this.db.db.prepare(`
+        INSERT INTO ai_results (id, transcription_id, model, prompt, result, status)
+        VALUES (?, ?, ?, ?, ?, 'completed')
+      `).run(resultId, transcriptionId, config.model, config.prompt, text)
+      this.queue.updateTaskProgress(taskId, 100)
+      this.queue.updateTaskResult(taskId, { resultId, text })
     } catch (err: any) {
       this.queue.updateTaskError(taskId, err.message)
     }

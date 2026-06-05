@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common'
 import { Observable, Subject } from 'rxjs'
 import { filter, map } from 'rxjs/operators'
-import { QueueService, TaskEvent } from '../queue/queue.service'
+import { QueueService } from '../queue/queue.service'
 
 @Injectable()
 export class SseService {

@@ -1,18 +1,18 @@
 import { Controller, Get, Post, Body } from '@nestjs/common'
-import { PipelineService } from '../common/pipeline/pipeline.service'
 
 @Controller('api/settings')
 export class SettingsController {
-  constructor(private readonly pipeline: PipelineService) {}
+  constructor() {}
 
+  /** @deprecated 流水线控制已改为任务级别，此接口仅返回固定值兼容前端 */
   @Get('pipeline')
   getPipeline() {
-    return this.pipeline.getStatus()
+    return { autoMode: false }
   }
 
+  /** @deprecated 流水线控制已改为任务级别 */
   @Post('pipeline')
-  setPipeline(@Body() body: { autoMode: boolean }) {
-    this.pipeline.setAutoMode(body.autoMode)
-    return this.pipeline.getStatus()
+  setPipeline(@Body() _body: { autoMode: boolean }) {
+    return { autoMode: false }
   }
 }

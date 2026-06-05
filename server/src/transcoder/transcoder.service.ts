@@ -59,15 +59,6 @@ export class TranscoderService {
     }
 
     return new Promise((resolve, reject) => {
-      const args = [
-        '-i', `"${inputPath}"`,
-        '-ar', '16000',
-        '-ac', '1',
-        '-c:a', 'pcm_s16le',
-        '-y',
-        `"${outputPath}"`,
-      ]
-
       // Probe for duration more reliably
       const probeArgs = [
         '-i', `"${inputPath}"`,

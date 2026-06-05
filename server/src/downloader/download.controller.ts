@@ -193,6 +193,13 @@ export class DownloadController {
     if (!task) return { error: 'Task not found' }
     if (!task.file_path || !fs.existsSync(task.file_path)) return { error: '文件不存在' }
 
+    // 追溯到爬虫任务 ID，用于流水线自动触发判断
+    let crawlerTaskId: string | undefined
+    if (task.item_id) {
+      const item = this.db.db.prepare('SELECT task_id FROM crawl_items WHERE id = ?').get(task.item_id) as any
+      crawlerTaskId = item?.task_id || undefined
+    }
+
     const outputDir = path.resolve(process.cwd(), '..', 'data', 'transcoded')
     const fileName = task.filename || path.basename(task.file_path)
     const queueTask = this.queue.createTask('transcode', {
@@ -200,15 +207,16 @@ export class DownloadController {
       outputDir,
       source: 'download',
       fileName,
+      crawlerTaskId,
     })
 
     // Process the transcode task
-    this.processTranscodeTask(queueTask.id, task.file_path, outputDir)
+    this.processTranscodeTask(queueTask.id, task.file_path, outputDir, crawlerTaskId)
 
     return { ok: true, taskId: queueTask.id }
   }
 
-  private async processTranscodeTask(taskId: string, inputPath: string, outputDir: string) {
+  private async processTranscodeTask(taskId: string, inputPath: string, outputDir: string, _crawlerTaskId?: string) {
     try {
       this.queue.updateTaskStatus(taskId, 'running')
       this.queue.updateTaskProgress(taskId, 0)

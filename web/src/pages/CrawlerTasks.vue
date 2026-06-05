@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { crawlerAPI } from '../api'
+import { usePagination } from '../composables/usePagination'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
@@ -12,15 +13,32 @@ const statusFilter = ref('all')
 const keyword = ref('')
 const loading = ref(false)
 const selectedIds = ref<string[]>([])
+const selectedItemsMeta = reactive<Record<string, any>>({})
+const tableRef = ref<any>(null)
+let syncingSelection = false
 let sseConnection: EventSource | null = null
 
 // --- Dialog state ---
 const dialogVisible = ref(false)
 const dialogTitle = ref('新建任务')
 const editingTaskId = ref<string | null>(null)
+
+// Step 1: 采集模式
+const formMode = ref<'single' | 'list'>('single')
+
+// Step 2: 基本配置
 const formName = ref('')
 const formUrl = ref('')
-const formMode = ref<'single' | 'list'>('single')
+
+// Step 3: 执行选项
+const formErrorMode = ref<'lenient' | 'standard' | 'strict'>('standard')
+const formAutoPipeline = ref(false)
+const formAutoStart = ref(false)
+const formAutoDownload = ref(false)
+const formAutoTranscode = ref(false)
+const formAutoAI = ref(false)
+
+// Step 4: 列表配置
 const formItemSelector = ref('')
 const formPaginationMode = ref<'none' | 'page' | 'count'>('none')
 const formNextPageSelector = ref('')
@@ -29,19 +47,70 @@ const formMaxItems = ref(20)
 const formLoadMoreSelector = ref('')
 const formUrlPattern = ref('')
 const formPageStart = ref(1)
-const formAutoStart = ref(false)
-const formTitleField = ref<string[]>([])
-const formDetailLinkField = ref<string[]>([])
-const formMediaUrlField = ref<string[]>([])
-const formIdField = ref<string[]>([])
-const formErrorMode = ref<'lenient' | 'standard' | 'strict'>('standard')
-const formAutoDownload = ref(false)
+
+// Step 5: 提取规则
 const formRules = ref([
   { name: 'title', selector: 'h1,.title,[class*="title"]', attr: '', regex: '' },
   { name: 'content', selector: '.content,.article-body,[class*="content"]', attr: '', regex: '' },
 ])
-const formDetailLinkSelector = ref('')
 const formDetailRules = ref<{ name: string; selector: string; attr: string; regex: string }[]>([])
+
+// Step 6: 字段指定
+const formTitleField = ref<string[]>([])
+const formDetailLinkField = ref<string[]>([])
+const formMediaUrlField = ref<string[]>([])
+const formIdField = ref<string[]>([])
+const formTitleFieldAll = ref(false)
+const formDetailLinkFieldAll = ref(false)
+const formMediaUrlFieldAll = ref(true)
+const formIdFieldAll = ref(false)
+
+// URL 转换规则（含 yt-dlp 选项）
+interface TransformRow {
+  fieldName: string
+  urlTemplate: string
+  downloadMethod: 'yt-dlp' | 'file'
+  // yt-dlp 参数（仅 downloadMethod='yt-dlp' 时有效）
+  ytDlpCookiesFromBrowser: string
+  ytDlpCookies: string
+  ytDlpProxy: string
+  ytDlpFormat: string
+  ytDlpUserAgent: string
+  ytDlpReferer: string
+  ytDlpLimitRate: string
+  ytDlpUsername: string
+  ytDlpPassword: string
+  ytDlpRetries: number | null
+  ytDlpSleepInterval: number | null
+  ytDlpGeoBypass: boolean
+  ytDlpNoCheckCert: boolean
+  ytDlpRawArgs: string
+  _showOptions: boolean
+}
+
+function emptyTransform(): TransformRow {
+  return {
+    fieldName: '', urlTemplate: '', downloadMethod: 'yt-dlp',
+    ytDlpCookiesFromBrowser: '', ytDlpCookies: '', ytDlpProxy: '',
+    ytDlpFormat: '', ytDlpUserAgent: '', ytDlpReferer: '', ytDlpLimitRate: '',
+    ytDlpUsername: '', ytDlpPassword: '', ytDlpRetries: null, ytDlpSleepInterval: null,
+    ytDlpGeoBypass: false, ytDlpNoCheckCert: false, ytDlpRawArgs: '',
+    _showOptions: false,
+  }
+}
+
+const formUrlTransforms = ref<TransformRow[]>([])
+
+// --- Pagination ---
+const { page, pageSize, total, pageSizes, onPageChange, onPageSizeChange } = usePagination({
+  defaultPageSize: 20,
+  onFetch: () => refresh(),
+})
+const itemCounts = ref<Record<string, number>>({})
+
+// Dynamic duration timer
+const durationTick = ref(0)
+let durationTimer: ReturnType<typeof setInterval> | null = null
 
 // Preset rule templates
 const presetRules: Record<string, { name: string; selector: string; attr: string; regex: string }[]> = {
@@ -68,77 +137,53 @@ const presetRules: Record<string, { name: string; selector: string; attr: string
   ],
 }
 
-// --- Step tracking for dialog ---
-const activeStep = ref(0)
-
-// --- Pagination ---
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-
-const itemCounts = ref<Record<string, number>>({})
-
-// 从提取规则获取可选字段名（仅从已建规则中获取）
 const availableFieldNames = computed(() => {
   const fields = new Set<string>()
-  formRules.value.forEach((r: any) => {
-    if (r.name) fields.add(r.name)
-  })
-  formDetailRules.value.forEach((r: any) => {
-    if (r.name) fields.add(r.name)
-  })
+  formRules.value.forEach((r: any) => { if (r.name) fields.add(r.name) })
+  formDetailRules.value.forEach((r: any) => { if (r.name) fields.add(r.name) })
   return Array.from(fields)
 })
 
-// Pagination handlers
-function onPageChange(p: number) {
-  page.value = p
-  refresh()
-}
+const pipelineLocked = computed(() => formAutoPipeline.value)
 
-function onPageSizeChange(s: number) {
-  pageSize.value = s
-  page.value = 1
-  refresh()
-}
-
-// Tasks eligible for batch delete
-const deletableSelected = computed(() => {
-  return selectedIds.value.filter(id => {
-    const t = tasks.value.find((x: any) => x.id === id)
-    return t && canDelete(t.status)
-  })
+watch(formAutoPipeline, (on) => {
+  if (on) {
+    formAutoStart.value = true
+    formAutoDownload.value = true
+    formAutoTranscode.value = true
+    formAutoAI.value = true
+  } else {
+    // 取消流水线时同步取消所有子项，保证干净的状态切换
+    formAutoStart.value = false
+    formAutoDownload.value = false
+    formAutoTranscode.value = false
+    formAutoAI.value = false
+  }
 })
 
 // --- Actions ---
 async function refresh() {
-  const params: any = {}
+  const params: any = { page: page.value, pageSize: pageSize.value }
   if (statusFilter.value !== 'all') params.status = statusFilter.value
   if (keyword.value.trim()) params.keyword = keyword.value.trim()
   const { data } = await crawlerAPI.getTasksWithPagination(params)
   tasks.value = data.tasks
   total.value = data.total
-  // Load item counts
-  const { data: itemsResp } = await crawlerAPI.getItems({ pageSize: 10000 })
-  const items = itemsResp.data || itemsResp
-  const counts: Record<string, number> = {}
-  items.forEach((i: any) => {
-    counts[i.task_id] = (counts[i.task_id] || 0) + 1
-  })
-  itemCounts.value = counts
+  await nextTick()
+  syncTableSelection()
+  refreshItemCounts()
 }
 
-// SSE real-time updates — must use full backend URL (EventSource doesn't go through axios)
 const SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'}/crawler/events`
 
 async function refreshItemCounts() {
-  const { data: itemsResp } = await crawlerAPI.getItems({ pageSize: 10000 })
-  const items = itemsResp.data || itemsResp
-  const counts: Record<string, number> = {}
-  items.forEach((i: any) => {
-    counts[i.task_id] = (counts[i.task_id] || 0) + 1
-  })
-  itemCounts.value = counts
+  try {
+    const { data: itemsResp } = await crawlerAPI.getItems({ pageSize: 10000 })
+    const items = itemsResp.data || itemsResp
+    const counts: Record<string, number> = {}
+    items.forEach((i: any) => { counts[i.task_id] = (counts[i.task_id] || 0) + 1 })
+    itemCounts.value = counts
+  } catch { /* ignore */ }
 }
 
 function setupSSE() {
@@ -148,14 +193,13 @@ function setupSSE() {
     try {
       const evt = JSON.parse(e.data)
       if (evt.type === 'crawl') {
-        // Patch the matching task in-place for instant UI update
         const idx = tasks.value.findIndex((t: any) => t.id === evt.taskId)
         if (idx !== -1) {
           if (evt.status === 'deleted') {
             tasks.value.splice(idx, 1)
             selectedIds.value = selectedIds.value.filter(id => id !== evt.taskId)
+            delete selectedItemsMeta[evt.taskId]
           } else {
-            // Merge new fields into the existing task object
             Object.assign(tasks.value[idx], {
               status: evt.status,
               progress: evt.progress,
@@ -164,37 +208,36 @@ function setupSSE() {
               started_at: evt.started_at || tasks.value[idx].started_at,
               updated_at: evt.updated_at || new Date().toISOString().replace('T', ' ').slice(0, 19),
             })
-            // Refresh item counts when task reaches a state that has data
             if (['completed', 'failed', 'cancelled', 'paused'].includes(evt.status)) {
               refreshItemCounts()
             }
           }
         } else if (evt.status !== 'deleted') {
-          // New task created — refresh full list
           refresh()
         }
       }
-    } catch { /* ignore parse errors */ }
+    } catch { /* ignore */ }
   }
   sseConnection.onerror = () => {
-    // Reconnect after 3s on error
     sseConnection?.close()
     setTimeout(setupSSE, 3000)
   }
 }
 
-function teardownSSE() {
-  sseConnection?.close()
-  sseConnection = null
-}
+function teardownSSE() { sseConnection?.close(); sseConnection = null }
 
-function openCreateDialog() {
-  dialogTitle.value = '新建任务'
-  editingTaskId.value = null
-  activeStep.value = 0
+// ── Dialog helpers ──
+
+function resetForm() {
+  formMode.value = 'single'
   formName.value = ''
   formUrl.value = ''
-  formMode.value = 'single'
+  formErrorMode.value = 'standard'
+  formAutoPipeline.value = false
+  formAutoStart.value = false
+  formAutoDownload.value = false
+  formAutoTranscode.value = false
+  formAutoAI.value = false
   formItemSelector.value = ''
   formPaginationMode.value = 'none'
   formNextPageSelector.value = ''
@@ -203,19 +246,26 @@ function openCreateDialog() {
   formLoadMoreSelector.value = ''
   formUrlPattern.value = ''
   formPageStart.value = 1
-  formAutoStart.value = false
-  formTitleField.value = []
-  formErrorMode.value = 'standard'
-  formDetailLinkField.value = []
-  formMediaUrlField.value = []
-  formIdField.value = []
   formRules.value = [
     { name: 'title', selector: 'h1,.title,[class*="title"]', attr: '', regex: '' },
     { name: 'content', selector: '.content,.article-body,[class*="content"]', attr: '', regex: '' },
   ]
-  formDetailLinkSelector.value = ''
   formDetailRules.value = []
-  formAutoDownload.value = false
+  formTitleField.value = []
+  formDetailLinkField.value = []
+  formMediaUrlField.value = []
+  formIdField.value = []
+  formTitleFieldAll.value = false
+  formDetailLinkFieldAll.value = false
+  formMediaUrlFieldAll.value = true
+  formIdFieldAll.value = false
+  formUrlTransforms.value = []
+}
+
+function openCreateDialog() {
+  dialogTitle.value = '新建任务'
+  editingTaskId.value = null
+  resetForm()
   dialogVisible.value = true
 }
 
@@ -223,10 +273,17 @@ function openEditDialog(task: any) {
   const p = task.payload
   dialogTitle.value = '编辑任务'
   editingTaskId.value = task.id
-  activeStep.value = 0
+
+  formMode.value = p.mode || (p.itemSelector ? 'list' : 'single')
   formName.value = p.name || ''
   formUrl.value = p.url || ''
-  formMode.value = p.mode || (p.itemSelector ? 'list' : 'single')
+  formErrorMode.value = p.errorMode || 'standard'
+  formAutoPipeline.value = p.autoPipeline ?? false
+  formAutoStart.value = p.autoStart ?? false
+  formAutoDownload.value = p.autoDownload ?? false
+  formAutoTranscode.value = p.autoTranscode ?? false
+  formAutoAI.value = p.autoAI ?? false
+
   formItemSelector.value = p.itemSelector || ''
   formPaginationMode.value = p.paginationMode || (p.nextPageSelector ? 'page' : 'none')
   formNextPageSelector.value = p.nextPageSelector || ''
@@ -235,19 +292,51 @@ function openEditDialog(task: any) {
   formLoadMoreSelector.value = p.loadMoreSelector || ''
   formUrlPattern.value = p.urlPattern || ''
   formPageStart.value = p.pageStart ?? 1
-  formTitleField.value = p.titleField ? p.titleField.split(',').map((s: string) => s.trim()).filter(Boolean) : []
-  formErrorMode.value = p.errorMode || 'standard'
-  formDetailLinkField.value = p.detailLinkField ? p.detailLinkField.split(',').map((s: string) => s.trim()).filter(Boolean) : []
-  formMediaUrlField.value = p.mediaUrlField ? p.mediaUrlField.split(',').map((s: string) => s.trim()).filter(Boolean) : []
-  formIdField.value = p.idField ? p.idField.split(',').map((s: string) => s.trim()).filter(Boolean) : []
-  formAutoDownload.value = p.autoDownload ?? false
+
   formRules.value = p.rules?.length ? [...p.rules] : [
     { name: 'title', selector: 'h1,.title,[class*="title"]', attr: '' },
     { name: 'content', selector: '.content,.article-body,[class*="content"]', attr: '' },
   ]
-  formDetailLinkSelector.value = p.detailLinkSelector || ''
   formDetailRules.value = p.detailRules?.length ? [...p.detailRules] : []
+
+  formTitleField.value = p.titleField?.fields || []
+  formDetailLinkField.value = p.detailLinkField?.fields || []
+  formMediaUrlField.value = p.mediaUrlField?.fields || []
+  formIdField.value = p.idField?.fields || []
+  formTitleFieldAll.value = p.titleField?.mode === 'all'
+  formDetailLinkFieldAll.value = p.detailLinkField?.mode === 'all'
+  formMediaUrlFieldAll.value = p.mediaUrlField?.mode !== 'first'
+  formIdFieldAll.value = p.idField?.mode === 'all'
+
+  const rawTransforms = p.urlTransforms || []
+  formUrlTransforms.value = rawTransforms.length
+    ? rawTransforms.map((t: any) => {
+        const row = { ...emptyTransform(), fieldName: t.fieldName, urlTemplate: t.urlTemplate, downloadMethod: t.downloadMethod }
+        parseYtDlpOptionsToRow(row, t.ytDlpOptions)
+        return row
+      })
+    : []
+
   dialogVisible.value = true
+}
+
+function setMode(mode: 'single' | 'list') {
+  formMode.value = mode
+  if (mode === 'single') {
+    if (formRules.value.length <= 2 && formRules.value[0]?.name === 'title') {
+      formRules.value = [...presetRules.article]
+    }
+    formItemSelector.value = ''
+    formPaginationMode.value = 'none'
+    formNextPageSelector.value = ''
+    formLoadMoreSelector.value = ''
+    formDetailRules.value = []
+  } else {
+    if (formRules.value.length <= 2 && formRules.value[0]?.name === 'title') {
+      formRules.value = [...presetRules.listBasic]
+    }
+    formItemSelector.value = ''
+  }
 }
 
 function addRule(target: 'list' | 'detail') {
@@ -270,26 +359,51 @@ function applyPreset(n: string) {
   if (presetRules[n]) formRules.value = [...presetRules[n]]
 }
 
-function setMode(mode: 'single' | 'list') {
-  formMode.value = mode
-  if (mode === 'single') {
-    // Default to article preset for single page
-    if (formRules.value.length <= 2 && formRules.value[0]?.name === 'title') {
-      formRules.value = [...presetRules.article]
-    }
-    formItemSelector.value = ''
-    formPaginationMode.value = 'none'
-    formNextPageSelector.value = ''
-    formLoadMoreSelector.value = ''
-    formDetailLinkSelector.value = ''
-    formDetailRules.value = []
-  } else {
-    // Default to list preset
-    if (formRules.value.length <= 2 && formRules.value[0]?.name === 'title') {
-      formRules.value = [...presetRules.listBasic]
-    }
-    formItemSelector.value = ''
+function addUrlTransform() {
+  formUrlTransforms.value.push(emptyTransform())
+}
+
+function removeUrlTransform(i: number) {
+  formUrlTransforms.value.splice(i, 1)
+}
+
+function buildYtDlpOptionsFromRow(t: TransformRow): any | undefined {
+  const opts: any = {}
+  if (t.ytDlpCookiesFromBrowser) opts.cookiesFromBrowser = t.ytDlpCookiesFromBrowser
+  if (t.ytDlpCookies) opts.cookies = t.ytDlpCookies
+  if (t.ytDlpProxy) opts.proxy = t.ytDlpProxy
+  if (t.ytDlpFormat) opts.format = t.ytDlpFormat
+  if (t.ytDlpUserAgent) opts.userAgent = t.ytDlpUserAgent
+  if (t.ytDlpReferer) opts.referer = t.ytDlpReferer
+  if (t.ytDlpLimitRate) opts.limitRate = t.ytDlpLimitRate
+  if (t.ytDlpUsername) opts.username = t.ytDlpUsername
+  if (t.ytDlpPassword) opts.password = t.ytDlpPassword
+  if (t.ytDlpRetries != null) opts.retries = t.ytDlpRetries
+  if (t.ytDlpSleepInterval != null) opts.sleepInterval = t.ytDlpSleepInterval
+  if (t.ytDlpGeoBypass) opts.geoBypass = true
+  if (t.ytDlpNoCheckCert) opts.noCheckCertificates = true
+  if (t.ytDlpRawArgs.trim()) {
+    opts.rawArgs = t.ytDlpRawArgs.split('\n').map(s => s.trim()).filter(Boolean)
   }
+  return Object.keys(opts).length > 0 ? opts : undefined
+}
+
+function parseYtDlpOptionsToRow(t: TransformRow, opts: any) {
+  if (!opts) return
+  t.ytDlpCookiesFromBrowser = opts.cookiesFromBrowser || ''
+  t.ytDlpCookies = opts.cookies || ''
+  t.ytDlpProxy = opts.proxy || ''
+  t.ytDlpFormat = opts.format || ''
+  t.ytDlpUserAgent = opts.userAgent || ''
+  t.ytDlpReferer = opts.referer || ''
+  t.ytDlpLimitRate = opts.limitRate || ''
+  t.ytDlpUsername = opts.username || ''
+  t.ytDlpPassword = opts.password || ''
+  t.ytDlpRetries = opts.retries ?? null
+  t.ytDlpSleepInterval = opts.sleepInterval ?? null
+  t.ytDlpGeoBypass = opts.geoBypass ?? false
+  t.ytDlpNoCheckCert = opts.noCheckCertificates ?? false
+  t.ytDlpRawArgs = opts.rawArgs?.join('\n') || ''
 }
 
 async function submitForm() {
@@ -300,7 +414,7 @@ async function submitForm() {
     name: formName.value || formUrl.value.slice(0, 60),
     url: formUrl.value,
     mode: formMode.value,
-    rules: formRules.value.filter(r => r.name && r.selector),
+    rules: formRules.value.filter(r => r.name),
     itemSelector: formMode.value === 'list' ? (formItemSelector.value || undefined) : undefined,
     paginationMode: formMode.value === 'list' ? formPaginationMode.value : 'none',
     nextPageSelector: formNextPageSelector.value || undefined,
@@ -309,16 +423,37 @@ async function submitForm() {
     loadMoreSelector: formLoadMoreSelector.value || undefined,
     urlPattern: formUrlPattern.value || undefined,
     pageStart: formUrlPattern.value ? formPageStart.value : undefined,
-    detailLinkSelector: formDetailLinkSelector.value || undefined,
-    detailRules: formDetailRules.value.filter(r => r.name && r.selector).length
-      ? formDetailRules.value.filter(r => r.name && r.selector) : undefined,
+    detailRules: formDetailRules.value.filter(r => r.name).length
+      ? formDetailRules.value.filter(r => r.name) : undefined,
+
     autoStart: editingTaskId.value ? undefined : formAutoStart.value,
-    titleField: formTitleField.value.length ? formTitleField.value.join(',') : undefined,
-    detailLinkField: formDetailLinkField.value.length ? formDetailLinkField.value.join(',') : undefined,
-    mediaUrlField: formMediaUrlField.value.length ? formMediaUrlField.value.join(',') : undefined,
-    idField: formIdField.value.length ? formIdField.value.join(',') : undefined,
-    errorMode: formErrorMode.value,
     autoDownload: formAutoDownload.value || undefined,
+    autoTranscode: formAutoTranscode.value || undefined,
+    autoAI: formAutoAI.value || undefined,
+    autoPipeline: formAutoPipeline.value || undefined,
+    errorMode: formErrorMode.value,
+
+    titleField: formTitleField.value.length
+      ? { fields: formTitleField.value, mode: formTitleFieldAll.value ? 'all' : 'first' }
+      : undefined,
+    detailLinkField: formDetailLinkField.value.length
+      ? { fields: formDetailLinkField.value, mode: formDetailLinkFieldAll.value ? 'all' : 'first' }
+      : undefined,
+    mediaUrlField: formMediaUrlField.value.length
+      ? { fields: formMediaUrlField.value, mode: formMediaUrlFieldAll.value ? 'all' : 'first' }
+      : undefined,
+    idField: formIdField.value.length
+      ? { fields: formIdField.value, mode: formIdFieldAll.value ? 'all' : 'first' }
+      : undefined,
+
+    urlTransforms: formUrlTransforms.value.filter(t => t.fieldName && t.urlTemplate).length
+      ? formUrlTransforms.value.filter(t => t.fieldName && t.urlTemplate).map(t => ({
+          fieldName: t.fieldName,
+          urlTemplate: t.urlTemplate,
+          downloadMethod: t.downloadMethod,
+          ytDlpOptions: t.downloadMethod === 'yt-dlp' ? buildYtDlpOptionsFromRow(t) : undefined,
+        }))
+      : undefined,
   }
 
   loading.value = true
@@ -336,125 +471,175 @@ async function submitForm() {
   loading.value = false
 }
 
-async function startTask(id: string) {
-  try {
-    await crawlerAPI.startTask(id)
-    ElMessage.success('任务已开始')
-    refresh()
-  } catch { ElMessage.error('操作失败') }
-}
+// ── Task actions ──
+async function startTask(id: string) { try { await crawlerAPI.startTask(id); ElMessage.success('任务已开始'); refresh() } catch { ElMessage.error('操作失败') } }
+async function pauseTask(id: string) { try { await crawlerAPI.pauseTask(id); ElMessage.success('任务已暂停'); refresh() } catch { ElMessage.error('操作失败') } }
+async function stopTask(id: string) { try { await ElMessageBox.confirm('确定要终止此任务吗？已采集的数据会保留。', '确认', { type: 'warning' }); await crawlerAPI.stopTask(id); ElMessage.success('任务已终止'); refresh() } catch { /* cancelled */ } }
+async function retryTask(id: string) { try { await crawlerAPI.retryTask(id); ElMessage.success('已重新加入队列'); refresh() } catch { ElMessage.error('操作失败') } }
+async function reRunTask(id: string) { try { await ElMessageBox.confirm('重新运行将清除已有的采集数据并从头开始，确定继续？', '确认', { type: 'warning' }); await crawlerAPI.reRunTask(id); ElMessage.success('任务已重新运行'); refresh() } catch { /* cancelled */ } }
+async function deleteTask(id: string) { try { await ElMessageBox.confirm('确定要删除此任务吗？相关的采集数据也会被删除。', '确认删除', { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' }); await crawlerAPI.deleteTask(id); ElMessage.success('任务已删除'); selectedIds.value = selectedIds.value.filter(sid => sid !== id); delete selectedItemsMeta[id]; refresh() } catch { /* cancelled */ } }
+async function clearItems(id: string) { try { const task = tasks.value.find((t: any) => t.id === id); const name = task?.payload?.name || task?.payload?.url || id.slice(0, 8); await ElMessageBox.confirm(`确定要清空任务「${name}」下的所有采集项吗？采集任务本身不会被删除。`, '清空采集项', { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }); await crawlerAPI.clearItems(id); ElMessage.success('已清空所有采集项'); refresh() } catch { /* cancelled */ } }
+async function batchDelete() { const ids = deletableSelected.value; if (!ids.length) { ElMessage.warning('所选任务中没有可删除的（只能删除已完成/失败/已终止/未开始的任务）'); return; } try { await ElMessageBox.confirm(`确定要删除选中的 ${ids.length} 个任务吗？相关的采集数据也会被删除。`, '批量删除确认', { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' }); const res = await crawlerAPI.batchDeleteTasks(ids); const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0; const failCount = res.data?.filter?.((r: any) => !r.ok)?.length ?? 0; if (failCount) { ElMessage.warning(`成功删除 ${okCount} 个，${failCount} 个失败`); } else { ElMessage.success(`已删除 ${okCount} 个任务`); } for (const id of selectedIds.value) delete selectedItemsMeta[id]; selectedIds.value = []; refresh() } catch { /* cancelled */ } }
 
-async function pauseTask(id: string) {
-  try {
-    await crawlerAPI.pauseTask(id)
-    ElMessage.success('任务已暂停')
-    refresh()
-  } catch { ElMessage.error('操作失败') }
-}
+// Batch operations — use selectedItemsMeta as fallback for items not in current view
+function findSelected(id: string) { return tasks.value.find((x: any) => x.id === id) || selectedItemsMeta[id] }
+const startableSelected = computed(() => selectedIds.value.filter(id => { const t = findSelected(id); return t && canStart(t.status) }))
+const retryableSelected = computed(() => selectedIds.value.filter(id => { const t = findSelected(id); return t && canRetry(t.status) }))
+const rerunnableSelected = computed(() => selectedIds.value.filter(id => { const t = findSelected(id); return t && canReRun(t.status) }))
+const clearableSelected = computed(() => selectedIds.value.filter(id => { const t = findSelected(id); return t && canDelete(t.status) }))
+const pipelineableSelected = computed(() => selectedIds.value.filter(id => { const t = findSelected(id); return t && (t.status === 'pending' || t.status === 'paused' || t.status === 'failed' || t.status === 'completed' || t.status === 'cancelled') }))
 
-async function stopTask(id: string) {
+async function batchStart() {
+  const ids = startableSelected.value
+  if (!ids.length) { ElMessage.warning('所选任务中没有可执行的（只能执行未开始/已暂停的任务）'); return }
   try {
-    await ElMessageBox.confirm('确定要终止此任务吗？已采集的数据会保留。', '确认', { type: 'warning' })
-    await crawlerAPI.stopTask(id)
-    ElMessage.success('任务已终止')
-    refresh()
-  } catch { /* cancelled */ }
-}
-
-async function retryTask(id: string) {
-  try {
-    await crawlerAPI.retryTask(id)
-    ElMessage.success('已重新加入队列')
-    refresh()
-  } catch { ElMessage.error('操作失败') }
-}
-
-async function reRunTask(id: string) {
-  try {
-    await ElMessageBox.confirm('重新运行将清除已有的采集数据并从头开始，确定继续？', '确认', { type: 'warning' })
-    await crawlerAPI.reRunTask(id)
-    ElMessage.success('任务已重新运行')
+    await ElMessageBox.confirm(`确定要执行选中的 ${ids.length} 个任务吗？`, '批量执行确认', { type: 'info', confirmButtonText: '确定执行', cancelButtonText: '取消' })
+    const res = await crawlerAPI.batchStartTasks(ids)
+    const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
+    ElMessage.success(`已启动 ${okCount} 个任务`)
     refresh()
   } catch { /* cancelled */ }
 }
 
-async function deleteTask(id: string) {
+async function batchRetry() {
+  const ids = retryableSelected.value
+  if (!ids.length) { ElMessage.warning('所选任务中没有可重试的（只能重试失败状态的任务）'); return }
   try {
-    await ElMessageBox.confirm('确定要删除此任务吗？相关的采集数据也会被删除。', '确认删除', {
-      type: 'warning',
-      confirmButtonText: '确定删除',
-      cancelButtonText: '取消',
-    })
-    await crawlerAPI.deleteTask(id)
-    ElMessage.success('任务已删除')
-    selectedIds.value = selectedIds.value.filter(sid => sid !== id)
+    await ElMessageBox.confirm(`确定要重试选中的 ${ids.length} 个任务吗？`, '批量重试确认', { type: 'info', confirmButtonText: '确定重试', cancelButtonText: '取消' })
+    const res = await crawlerAPI.batchRetryTasks(ids)
+    const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
+    ElMessage.success(`已重试 ${okCount} 个任务`)
     refresh()
   } catch { /* cancelled */ }
 }
 
-async function clearItems(id: string) {
-  try {
-    const task = tasks.value.find((t: any) => t.id === id)
-    const name = task?.payload?.name || task?.payload?.url || id.slice(0, 8)
-    await ElMessageBox.confirm(`确定要清空任务「${name}」下的所有采集项吗？采集任务本身不会被删除。`, '清空采集项', {
-      type: 'warning',
-      confirmButtonText: '清空',
-      cancelButtonText: '取消',
-    })
-    await crawlerAPI.clearItems(id)
-    ElMessage.success('已清空所有采集项')
-    refresh()
-  } catch { /* cancelled */ }
-}
-
-async function batchDelete() {
-  const ids = deletableSelected.value
-  if (!ids.length) { ElMessage.warning('所选任务中没有可删除的（只能删除已完成/失败/已终止/未开始的任务）'); return }
+async function batchReRun() {
+  const ids = rerunnableSelected.value
+  if (!ids.length) { ElMessage.warning('所选任务中没有可重新执行的（只能重新执行已完成/已取消/失败状态的任务）'); return }
   try {
     await ElMessageBox.confirm(
-      `确定要删除选中的 ${ids.length} 个任务吗？相关的采集数据也会被删除。`,
-      '批量删除确认',
-      { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' },
+      `确定要重新执行选中的 ${ids.length} 个任务吗？已有的采集数据将被清除并从头开始。`,
+      '批量重新执行确认',
+      { type: 'warning', confirmButtonText: '确定重新执行', cancelButtonText: '取消' },
     )
-    const res = await crawlerAPI.batchDeleteTasks(ids)
+    const res = await crawlerAPI.batchRerunTasks(ids)
     const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
     const failCount = res.data?.filter?.((r: any) => !r.ok)?.length ?? 0
-    if (failCount) {
-      ElMessage.warning(`成功删除 ${okCount} 个，${failCount} 个失败`)
-    } else {
-      ElMessage.success(`已删除 ${okCount} 个任务`)
-    }
-    selectedIds.value = []
+    if (failCount) { ElMessage.warning(`成功启动 ${okCount} 个，${failCount} 个失败`) }
+    else { ElMessage.success(`已重新执行 ${okCount} 个任务`) }
     refresh()
   } catch { /* cancelled */ }
 }
 
-function viewResults(task: any) {
-  router.push({ path: '/crawler/items', query: { taskId: task.id } })
+async function batchClear() {
+  const ids = clearableSelected.value
+  if (!ids.length) { ElMessage.warning('所选任务中没有可清空的'); return }
+  try {
+    await ElMessageBox.confirm(`确定要清空选中的 ${ids.length} 个任务下的所有采集项吗？采集任务本身不会被删除。`, '批量清空确认', { type: 'warning', confirmButtonText: '确定清空', cancelButtonText: '取消' })
+    await crawlerAPI.batchClearItems(ids)
+    ElMessage.success(`已清空 ${ids.length} 个任务的采集项`)
+    refresh()
+  } catch { /* cancelled */ }
 }
+
+async function batchAutoPipeline() {
+  const ids = pipelineableSelected.value
+  if (!ids.length) { ElMessage.warning('所选任务中没有可执行流水线的'); return }
+  try {
+    await ElMessageBox.confirm(
+      `将对选中的 ${ids.length} 个任务一键自动执行完整流水线：\n\n① 采集爬取 → ② 下载资源 → ③ FFmpeg转码(16kHz WAV) → ④ Whisper语音识别 → ⑤ AI分析总结\n\n系统将自动开启任务的全自动模式，各环节按顺序自动流转，无需人工干预。`,
+      '一键自动执行后续流程',
+      { type: 'info', confirmButtonText: '开始执行', cancelButtonText: '取消', dangerouslyUseHTMLString: false },
+    )
+    const res = await crawlerAPI.batchAutoPipeline(ids)
+    const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
+    const failCount = res.data?.filter?.((r: any) => !r.ok)?.length ?? 0
+    if (failCount) { ElMessage.warning(`成功启动 ${okCount} 个，${failCount} 个失败`) }
+    else { ElMessage.success(`已启动 ${okCount} 个任务的完整流水线`) }
+    refresh()
+  } catch { /* cancelled */ }
+}
+
+// --- Export ---
+const exportDialogVisible = ref(false)
+const exportFormat = ref<'json' | 'yaml' | 'csv' | 'excel'>('excel')
+const exportMultiFile = ref(false)
+const exportIncludeTranscriptions = ref(false)
+const exportIncludeAIResults = ref(false)
+const exportFields = ref<{ key: string; alias: string; selected: boolean }[]>([])
+const exportFieldGroups = ref<{ dbFields: any[]; transcriptionFields: any[]; aiFields: any[]; extraFields: any[] }>({ dbFields: [], transcriptionFields: [], aiFields: [], extraFields: [] })
+const exportLoading = ref(false)
+
+function openExportDialog() {
+  const ids = selectedIds.value
+  if (!ids.length) { ElMessage.warning('请先勾选要导出的任务'); return }
+  exportDialogVisible.value = true
+  exportFormat.value = 'excel'
+  exportMultiFile.value = false
+  exportIncludeTranscriptions.value = false
+  exportIncludeAIResults.value = false
+  loadExportFields(ids)
+}
+
+async function loadExportFields(taskIds: string[]) {
+  try {
+    const { data } = await crawlerAPI.getExportFields(taskIds)
+    exportFieldGroups.value = data
+    // Build field list: select all by default
+    const all: { key: string; alias: string; selected: boolean }[] = []
+    for (const g of [data.dbFields, data.extraFields, data.transcriptionFields, data.aiFields]) {
+      for (const f of (g || [])) {
+        all.push({ key: f.key, alias: '', selected: true })
+      }
+    }
+    exportFields.value = all
+  } catch { /* ignore */ }
+}
+
+function toggleAllExportFields(selected: boolean) {
+  exportFields.value.forEach(f => { f.selected = selected })
+}
+
+async function doExport() {
+  const selectedFields = exportFields.value.filter(f => f.selected)
+  if (!selectedFields.length) { ElMessage.warning('请至少选择一个导出字段'); return }
+  const taskIds = selectedIds.value
+  exportLoading.value = true
+  try {
+    const res = await crawlerAPI.exportData({
+      taskIds,
+      format: exportFormat.value,
+      fields: selectedFields.map(f => ({ key: f.key, alias: f.alias || f.key })),
+      includeTranscriptions: exportIncludeTranscriptions.value,
+      includeAIResults: exportIncludeAIResults.value,
+      multiFile: exportMultiFile.value,
+    })
+    // Handle blob download
+    const blob = res.data
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const extMap: Record<string, string> = { json: 'json', yaml: 'yaml', csv: 'csv', excel: 'xlsx' }
+    a.download = `export_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${extMap[exportFormat.value]}`
+    a.click()
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('导出成功')
+    exportDialogVisible.value = false
+  } catch { ElMessage.error('导出失败') }
+  exportLoading.value = false
+}
+
+function viewResults(task: any) { router.push({ path: '/crawler/items', query: { taskId: task.id } }) }
 
 // --- Status helpers ---
 function statusLabel(s: string) {
-  const map: Record<string, string> = {
-    pending: '未开始', running: '进行中', completed: '已完成',
-    failed: '执行失败', cancelled: '用户终止', paused: '已暂停',
-  }
+  const map: Record<string, string> = { pending: '未开始', running: '进行中', completed: '已完成', failed: '执行失败', cancelled: '用户终止', paused: '已暂停' }
   return map[s] || s
 }
-
 function statusClass(s: string) {
-  const map: Record<string, string> = {
-    completed: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/25',
-    running: 'bg-blue-500/15 text-blue-300 border-blue-500/25',
-    failed: 'bg-red-500/15 text-red-300 border-red-500/25',
-    cancelled: 'bg-gray-500/15 text-gray-400 border-gray-500/25',
-    paused: 'bg-yellow-500/15 text-yellow-300 border-yellow-500/25',
-    pending: 'bg-purple-500/15 text-purple-300 border-purple-500/25',
-  }
+  const map: Record<string, string> = { completed: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/25', running: 'bg-blue-500/15 text-blue-300 border-blue-500/25', failed: 'bg-red-500/15 text-red-300 border-red-500/25', cancelled: 'bg-gray-500/15 text-gray-400 border-gray-500/25', paused: 'bg-yellow-500/15 text-yellow-300 border-yellow-500/25', pending: 'bg-purple-500/15 text-purple-300 border-purple-500/25' }
   return map[s] || ''
 }
-
-// Action visibility per status
 function canStart(s: string) { return s === 'pending' || s === 'paused' }
 function canPause(s: string) { return s === 'running' }
 function canStop(s: string) { return s === 'running' || s === 'paused' }
@@ -463,33 +648,65 @@ function canReRun(s: string) { return s === 'completed' || s === 'cancelled' }
 function canEdit(s: string) { return s !== 'running' }
 function canDelete(s: string) { return s === 'pending' || s === 'completed' || s === 'failed' || s === 'cancelled' }
 function canViewResults(s: string) { return s === 'completed' }
-
 function formatDuration(task: any): string {
   if (!task.started_at) return '-'
+  void durationTick.value  // reactivity: re-compute every tick for running tasks
   const start = new Date(task.started_at + 'Z').getTime()
-  const end = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
-    ? new Date(task.updated_at + 'Z').getTime()
-    : Date.now()
+  const end = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled' ? new Date(task.updated_at + 'Z').getTime() : Date.now()
   if (isNaN(start) || isNaN(end) || end <= start) return '-'
   const sec = Math.floor((end - start) / 1000)
   if (sec < 60) return `${sec}秒`
   if (sec < 3600) return `${Math.floor(sec / 60)}分${sec % 60}秒`
   return `${Math.floor(sec / 3600)}时${Math.floor((sec % 3600) / 60)}分`
 }
-
 function handleSelectionChange(rows: any[]) {
-  selectedIds.value = rows.map((r: any) => r.id)
+  if (syncingSelection) return
+  const visibleIds = new Set(tasks.value.map((t: any) => t.id))
+  const newSelected = new Map(rows.map((r: any) => [r.id, r]))
+  // Remove deselected visible rows
+  for (const id of visibleIds) {
+    if (!newSelected.has(id)) {
+      selectedIds.value = selectedIds.value.filter(x => x !== id)
+      delete selectedItemsMeta[id]
+    }
+  }
+  // Add newly selected visible rows
+  for (const [id, row] of newSelected) {
+    if (!selectedIds.value.includes(id)) {
+      selectedIds.value.push(id)
+    }
+    selectedItemsMeta[id] = { id, status: row.status }
+  }
 }
-
-function isRowSelectable(row: any) {
-  return canDelete(row.status)
+async function clearAllSelections() {
+  try {
+    await ElMessageBox.confirm(`确定要清空全部 ${selectedIds.value.length} 个选择吗？`, '清空选择', { type: 'warning', confirmButtonText: '确定清空', cancelButtonText: '取消' })
+    for (const id of selectedIds.value) delete selectedItemsMeta[id]
+    selectedIds.value = []
+    tableRef.value?.clearSelection()
+  } catch { /* cancelled */ }
 }
-
-onMounted(() => {
+function syncTableSelection() {
+  if (!tableRef.value) return
+  syncingSelection = true
+  tasks.value.forEach((row: any) => {
+    if (selectedIds.value.includes(row.id)) {
+      tableRef.value.toggleRowSelection(row, true)
+    }
+  })
+  syncingSelection = false
+}
+function resetFilters() {
+  keyword.value = ''
+  statusFilter.value = 'all'
+  page.value = 1
   refresh()
-  setupSSE()
-})
-onUnmounted(teardownSSE)
+}
+function isRowSelectable(_row: any) { return true }
+const deletableSelected = computed(() => selectedIds.value.filter(id => { const t = findSelected(id); return t && canDelete(t.status) }))
+
+onMounted(() => { refresh(); setupSSE(); durationTimer = setInterval(() => { durationTick.value++ }, 1000) })
+onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTimer); durationTimer = null } })
 </script>
 
 <template>
@@ -500,13 +717,36 @@ onUnmounted(teardownSSE)
         <p class="text-[13px] text-gray-500">管理采集任务配置，查看任务执行状态与采集结果</p>
       </div>
       <div class="flex items-center gap-2">
-        <el-button
-          v-if="deletableSelected.length"
-          type="danger" size="small" plain
-          @click="batchDelete"
-        >
-          <i class="fas fa-trash-can mr-1.5"></i>批量删除 ({{ deletableSelected.length }})
+        <el-button v-if="pipelineableSelected.length" type="success" size="small" plain @click="batchAutoPipeline">
+          <i class="fas fa-forward-step mr-1.5"></i>一键自动执行后续流程 ({{ pipelineableSelected.length }})
         </el-button>
+        <el-button v-if="startableSelected.length" type="primary" size="small" plain @click="batchStart">
+          <i class="fas fa-play mr-1.5"></i>批量执行 ({{ startableSelected.length }})
+        </el-button>
+        <el-button v-if="retryableSelected.length" type="warning" size="small" plain @click="batchRetry">
+          <i class="fas fa-rotate-right mr-1.5"></i>批量重试 ({{ retryableSelected.length }})
+        </el-button>
+        <el-button v-if="rerunnableSelected.length" size="small" plain @click="batchReRun">
+          <i class="fas fa-repeat mr-1.5"></i>批量重新执行 ({{ rerunnableSelected.length }})
+        </el-button>
+        <el-dropdown v-if="clearableSelected.length || deletableSelected.length || selectedIds.length" trigger="click">
+          <el-button size="small" plain>
+            更多 <i class="fas fa-chevron-down ml-1 text-[10px]"></i>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-if="clearableSelected.length" @click="batchClear">
+                <i class="fas fa-eraser mr-1.5"></i>批量清空采集项 ({{ clearableSelected.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="selectedIds.length" @click="openExportDialog">
+                <i class="fas fa-download mr-1.5"></i>导出 ({{ selectedIds.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="deletableSelected.length" divided @click="batchDelete">
+                <i class="fas fa-trash-can mr-1.5 text-red-400"></i><span class="text-red-400">批量删除 ({{ deletableSelected.length }})</span>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button type="primary" size="small" @click="openCreateDialog">
           <i class="fas fa-plus mr-1.5"></i>新建任务
         </el-button>
@@ -516,8 +756,13 @@ onUnmounted(teardownSSE)
     <!-- Filters -->
     <div class="flex items-center justify-between mb-4 card-static">
       <div class="flex items-center gap-2 flex-wrap">
-        <span class="text-xs text-gray-400">状态筛选：</span>
-        <el-select v-model="statusFilter" size="small" class="!w-28">
+        <span class="inline-flex items-center gap-1">
+          <span class="text-xs text-gray-400 flex-shrink-0">搜索：</span>
+          <el-input v-model="keyword" size="small" placeholder="搜索任务名称/URL" clearable @keyup.enter="page=1;refresh()" @clear="page=1;refresh()" class="!w-52" />
+        </span>
+        <span class="inline-flex items-center gap-1">
+          <span class="text-xs text-gray-400 flex-shrink-0">状态筛选：</span>
+          <el-select v-model="statusFilter" size="small" class="!w-28" @change="page=1;refresh()">
           <el-option label="全部" value="all" />
           <el-option label="未开始" value="pending" />
           <el-option label="进行中" value="running" />
@@ -525,38 +770,26 @@ onUnmounted(teardownSSE)
           <el-option label="已完成" value="completed" />
           <el-option label="执行失败" value="failed" />
           <el-option label="用户终止" value="cancelled" />
-        </el-select>
-        <div class="relative !w-48">
-          <el-input
-            v-model="keyword"
-            size="small"
-            placeholder="搜索任务名/URL"
-            clearable
-          >
-            <template #prefix>
-              <i class="fas fa-magnifying-glass text-gray-500 text-[12px]"></i>
-            </template>
-          </el-input>
-        </div>
+          </el-select>
+        </span>
+        <span class="inline-flex items-center gap-1">
+          <el-button size="small" plain @click="page=1;refresh()"><i class="fas fa-search mr-1"></i>搜索</el-button>
+          <el-button size="small" plain @click="resetFilters"><i class="fas fa-undo mr-1"></i>重置</el-button>
+          <el-button size="small" plain @click="refresh()"><i class="fas fa-sync-alt mr-1"></i>刷新</el-button>
+          <el-button v-if="selectedIds.length" size="small" plain type="warning" @click="clearAllSelections"><i class="fas fa-times-circle mr-1"></i>清空选择 ({{ selectedIds.length }})</el-button>
+        </span>
       </div>
     </div>
 
     <!-- Task Table -->
     <div class="card-static">
-      <el-table
-        v-if="tasks.length"
-        :data="tasks"
-        size="small"
-        row-key="id"
-        @selection-change="handleSelectionChange"
-      >
+      <el-table v-if="tasks.length" ref="tableRef" :data="tasks" size="small" row-key="id" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="40" :selectable="isRowSelectable" fixed="left" :reserve-selection="true" />
         <el-table-column type="index" label="序号" width="55" align="center" fixed="left" />
         <el-table-column label="任务名称" min-width="140" show-overflow-tooltip fixed="left">
           <template #default="{ row }">
             <div class="flex items-center gap-2">
-              <i v-if="(row.payload?.mode || (row.payload?.itemSelector ? 'list' : 'single')) === 'single'"
-                class="fas fa-file-lines text-[11px] text-blue-400" title="单页采集"></i>
+              <i v-if="(row.payload?.mode || (row.payload?.itemSelector ? 'list' : 'single')) === 'single'" class="fas fa-file-lines text-[11px] text-blue-400" title="单页采集"></i>
               <i v-else class="fas fa-list text-[11px] text-amber-400" title="列表采集"></i>
               <span class="text-xs text-gray-300">{{ row.payload?.name || row.payload?.url || row.id.slice(0, 12) + '...' }}</span>
             </div>
@@ -576,19 +809,14 @@ onUnmounted(teardownSSE)
         </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border"
-              :class="statusClass(row.status)">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border" :class="statusClass(row.status)">
               {{ statusLabel(row.status) }}
             </span>
           </template>
         </el-table-column>
         <el-table-column label="进度" width="140">
           <template #default="{ row }">
-            <el-progress
-              :percentage="row.progress"
-              :stroke-width="6"
-              :status="row.status === 'failed' ? 'exception' : row.status === 'completed' ? 'success' : undefined"
-            />
+            <el-progress :percentage="row.progress" :stroke-width="6" :status="row.status === 'failed' ? 'exception' : row.status === 'completed' ? 'success' : undefined" />
           </template>
         </el-table-column>
         <el-table-column label="采集数" width="80" align="center">
@@ -613,57 +841,27 @@ onUnmounted(teardownSSE)
         </el-table-column>
         <el-table-column label="执行时长" width="90" align="center">
           <template #default="{ row }">
-            <span class="text-xs" :class="row.status === 'running' ? 'text-blue-400' : 'text-gray-500'">
-              {{ formatDuration(row) }}
-            </span>
+            <span class="text-xs" :class="row.status === 'running' ? 'text-blue-400' : 'text-gray-500'">{{ formatDuration(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" min-width="280" align="center" fixed="right">
           <template #default="{ row }">
             <div class="flex items-center justify-center gap-1 flex-wrap">
-              <el-button v-if="canStart(row.status)" size="small" type="primary" plain @click="startTask(row.id)">
-                {{ row.status === 'paused' ? '继续' : '开始' }}
-              </el-button>
-              <el-button v-if="canPause(row.status)" size="small" type="warning" plain @click="pauseTask(row.id)">
-                暂停
-              </el-button>
-              <el-button v-if="canStop(row.status)" size="small" type="danger" plain @click="stopTask(row.id)">
-                终止
-              </el-button>
-              <el-button v-if="canRetry(row.status)" size="small" type="warning" plain @click="retryTask(row.id)">
-                重试
-              </el-button>
-              <el-button v-if="canReRun(row.status)" size="small" plain @click="reRunTask(row.id)">
-                重新执行
-              </el-button>
-              <el-button v-if="canEdit(row.status)" size="small" plain @click="openEditDialog(row)">
-                编辑
-              </el-button>
-              <el-button v-if="canViewResults(row.status)" size="small" type="success" plain @click="viewResults(row)">
-                查看结果
-              </el-button>
-              <el-button v-if="canDelete(row.status)" size="small" type="danger" plain @click="deleteTask(row.id)">
-                删除
-              </el-button>
-              <el-button v-if="canDelete(row.status)" size="small" plain @click="clearItems(row.id)">
-                清空采集项
-              </el-button>
+              <el-button v-if="canStart(row.status)" size="small" type="primary" plain @click="startTask(row.id)">{{ row.status === 'paused' ? '继续' : '开始' }}</el-button>
+              <el-button v-if="canPause(row.status)" size="small" type="warning" plain @click="pauseTask(row.id)">暂停</el-button>
+              <el-button v-if="canStop(row.status)" size="small" type="danger" plain @click="stopTask(row.id)">终止</el-button>
+              <el-button v-if="canRetry(row.status)" size="small" type="warning" plain @click="retryTask(row.id)">重试</el-button>
+              <el-button v-if="canReRun(row.status)" size="small" plain @click="reRunTask(row.id)">重新执行</el-button>
+              <el-button v-if="canEdit(row.status)" size="small" plain @click="openEditDialog(row)">编辑</el-button>
+              <el-button v-if="canViewResults(row.status)" size="small" type="success" plain @click="viewResults(row)">查看结果</el-button>
+              <el-button v-if="canDelete(row.status)" size="small" type="danger" plain @click="deleteTask(row.id)">删除</el-button>
+              <el-button v-if="canDelete(row.status)" size="small" plain @click="clearItems(row.id)">清空采集项</el-button>
             </div>
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="total > pageSize" class="flex justify-end mt-4">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="total"
-          layout="total, sizes, prev, pager, next"
-          size="small"
-          background
-          @size-change="onPageSizeChange"
-          @current-change="onPageChange"
-        />
+      <div v-if="total > 0" class="flex justify-end mt-4">
+        <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizes" :total="total" layout="total, sizes, prev, pager, next" size="small" background @size-change="onPageSizeChange" @current-change="onPageChange" />
       </div>
       <div v-if="!tasks.length" class="text-center py-12 text-gray-500 text-sm">
         <i class="fas fa-bug text-3xl mb-3 block opacity-30"></i>暂无任务
@@ -671,302 +869,183 @@ onUnmounted(teardownSSE)
     </div>
 
     <!-- Create/Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="820px" destroy-on-close top="3vh" :close-on-click-modal="false">
-      <!-- Step 1: Mode & Basic Info -->
-      <div class="space-y-5">
-        <!-- === Step 1: 采集模式 === -->
-        <div>
-          <h4 class="text-sm font-semibold mb-3 flex items-center gap-2">
-            <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[11px] font-bold">1</span>
-            <span>采集模式</span>
-          </h4>
-          <div class="flex gap-3">
-            <div
-              class="flex-1 p-4 rounded-lg border cursor-pointer transition-all"
-              :class="formMode === 'single'
-                ? 'border-blue-500/50 bg-blue-500/8'
-                : 'border-gray-700/40 bg-gray-900/30 hover:border-gray-600/50'"
-              @click="setMode('single')"
-            >
-              <div class="flex items-center gap-2 mb-2">
-                <i class="fas fa-file-lines text-blue-400"></i>
-                <span class="text-sm font-semibold">单页采集</span>
-              </div>
-              <p class="text-[11px] text-gray-500 leading-relaxed">
-                抓取单个页面内容，如新闻详情页、文章页。<br />
-                结果为一个结构化对象，包含标题、正文、日期等字段。
-              </p>
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="860px" destroy-on-close top="3vh" :close-on-click-modal="false">
+      <div class="flex flex-col gap-5">
+
+        <!-- 1. 采集模式 -->
+        <div class="section">
+          <div class="text-[13px] font-semibold text-gray-300 mb-2.5">采集模式</div>
+          <el-radio-group v-model="formMode" size="small" @change="setMode">
+            <el-radio-button value="single">📄 单页采集</el-radio-button>
+            <el-radio-button value="list">📋 列表采集</el-radio-button>
+          </el-radio-group>
+          <div class="text-[11px] text-gray-500 mt-1.5">
+            {{ formMode === 'single' ? '抓取单个页面内容，如新闻详情页、文章页，结果为一个结构化对象。' : '抓取列表页面中的所有条目，如产品列表、文章列表，结果为一个数组。' }}
+          </div>
+        </div>
+
+        <!-- 2. 基本配置 -->
+        <div class="section">
+          <div class="text-[13px] font-semibold text-gray-300 mb-2.5">基本配置</div>
+          <div class="flex gap-4">
+            <div class="flex-1">
+              <div class="text-xs text-gray-400 mb-1">任务名称 <span class="text-gray-600">（可选）</span></div>
+              <el-input v-model="formName" placeholder="留空则截取 URL 前60字符" size="small" />
             </div>
-            <div
-              class="flex-1 p-4 rounded-lg border cursor-pointer transition-all"
-              :class="formMode === 'list'
-                ? 'border-blue-500/50 bg-blue-500/8'
-                : 'border-gray-700/40 bg-gray-900/30 hover:border-gray-600/50'"
-              @click="setMode('list')"
-            >
-              <div class="flex items-center gap-2 mb-2">
-                <i class="fas fa-list text-amber-400"></i>
-                <span class="text-sm font-semibold">列表采集</span>
-              </div>
-              <p class="text-[11px] text-gray-500 leading-relaxed">
-                抓取列表页面中的所有条目，如产品列表、文章列表。<br />
-                结果为一个数组，每项包含标题、价格、图片等字段。
-              </p>
+            <div class="flex-1">
+              <div class="text-xs text-gray-400 mb-1">页面地址 <span class="text-red-400">*</span></div>
+              <el-input v-model="formUrl" placeholder="https://example.com/articles/123" size="small" />
             </div>
           </div>
         </div>
 
-        <!-- === Step 2: 基本配置 === -->
-        <div>
-          <h4 class="text-sm font-semibold mb-3 flex items-center gap-2">
-            <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[11px] font-bold">2</span>
-            <span>基本配置</span>
-          </h4>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <div class="text-xs text-gray-400 mb-1.5">
-                任务名称
-                <span class="text-gray-600">（可选）</span>
-              </div>
-              <el-input v-model="formName" placeholder="留空则截取 URL 前60字符" size="small" />
-            </div>
-            <div>
-              <div class="text-xs text-gray-400 mb-1.5">
-                页面地址
-                <span class="text-red-400">*</span>
-              </div>
-              <el-input v-model="formUrl" placeholder="https://example.com/articles/123" size="small" />
-            </div>
+        <!-- 3. 执行选项 -->
+        <div class="section">
+          <div class="text-[13px] font-semibold text-gray-300 mb-2.5">执行选项</div>
+
+          <div class="flex items-center gap-4 mb-1">
+            <span class="text-xs text-gray-400 flex-shrink-0">容错级别</span>
+            <el-radio-group v-model="formErrorMode" size="small">
+              <el-radio-button value="lenient">宽松</el-radio-button>
+              <el-radio-button value="standard">标准</el-radio-button>
+              <el-radio-button value="strict">严格</el-radio-button>
+            </el-radio-group>
+            <el-tooltip :content="formErrorMode === 'lenient' ? '列表页或详情页访问失败均跳过，尽可能多地采集数据' : formErrorMode === 'standard' ? '失败自动重试 1-2 次，仍失败则跳过该项继续（推荐）' : '任何页面或详情页访问失败立即终止任务'" placement="top">
+              <i class="fas fa-circle-question text-gray-600 cursor-help text-[12px]"></i>
+            </el-tooltip>
           </div>
-          <div class="mt-4 space-y-3">
-            <div class="grid grid-cols-2 gap-4">
-              <div>
-                <div class="text-xs text-gray-400 mb-1.5">
-                  标题字段
-                  <el-tooltip placement="top" effect="dark" content="采集列表中每条数据显示的标题，填入提取规则中的字段名。留空自动智能查找；可添加多个字段，按顺序匹配">
-                    <i class="fas fa-circle-question text-gray-600 cursor-help ml-1"></i>
-                  </el-tooltip>
-                </div>
-                <el-select v-model="formTitleField" multiple filterable allow-create default-first-option placeholder="留空自动查找" size="small" class="!w-full">
-                  <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
-                </el-select>
-              </div>
-              <div>
-                <div class="text-xs text-gray-400 mb-1.5">
-                  详情链接字段
-                  <el-tooltip placement="top" effect="dark" content="提取规则中哪个字段的值是详情页 URL；可添加多个字段，按顺序匹配">
-                    <i class="fas fa-circle-question text-gray-600 cursor-help ml-1"></i>
-                  </el-tooltip>
-                </div>
-                <el-select v-model="formDetailLinkField" multiple filterable allow-create default-first-option placeholder="如: link" size="small" class="!w-full">
-                  <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
-                </el-select>
-              </div>
-              <div>
-                <div class="text-xs text-gray-400 mb-1.5">
-                  媒体资源字段
-                  <el-tooltip placement="top" effect="dark" content="存放视频/音频/图片 URL 的字段名；可添加多个字段，按顺序匹配，留空自动查找">
-                    <i class="fas fa-circle-question text-gray-600 cursor-help ml-1"></i>
-                  </el-tooltip>
-                </div>
-                <el-select v-model="formMediaUrlField" multiple filterable allow-create default-first-option placeholder="如: videoUrl" size="small" class="!w-full">
-                  <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
-                </el-select>
-              </div>
-              <div>
-                <div class="text-xs text-gray-400 mb-1.5">
-                  唯一标识字段
-                  <el-tooltip placement="top" effect="dark" content="能唯一标识每一项的字段名（如 id）；可添加多个字段，按顺序匹配。重试/重采时优先用该字段匹配">
-                    <i class="fas fa-circle-question text-gray-600 cursor-help ml-1"></i>
-                  </el-tooltip>
-                </div>
-                <el-select v-model="formIdField" multiple filterable allow-create default-first-option placeholder="如: id" size="small" class="!w-full">
-                  <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
-                </el-select>
-              </div>
-            </div>
+          <div class="text-[11px] text-gray-500 mb-3 ml-14">
+            {{ formErrorMode === 'lenient' ? '所有错误跳过不中断，适合对数据完整性要求不高的快速采集。' : formErrorMode === 'standard' ? '失败自动重试 1-2 次，仍失败则跳过该项继续。推荐日常使用。' : '任何错误立即终止任务，适合对数据质量要求极高的场景。' }}
           </div>
 
-          <div class="mt-4">
-            <div class="text-xs text-gray-400 mb-1.5">容错级别</div>
-            <div class="flex gap-2">
-              <el-button
-                v-for="opt in [
-                  { k: 'lenient', l: '宽松', icon: 'fa-circle-check', desc: '所有错误跳过不中断' },
-                  { k: 'standard', l: '标准', icon: 'fa-circle-half-stroke', desc: '重试后跳过（推荐）' },
-                  { k: 'strict', l: '严格', icon: 'fa-circle-xmark', desc: '任何错误立即终止' },
-                ]" :key="opt.k"
-                size="small"
-                :type="formErrorMode === opt.k ? 'primary' : 'default'"
-                :plain="formErrorMode !== opt.k"
-                @click="formErrorMode = opt.k as any"
-              >
-                <i :class="'fas ' + opt.icon + ' mr-1'"></i>{{ opt.l }}
-              </el-button>
-            </div>
-            <div class="text-[11px] text-gray-600 mt-1">
-              {{ formErrorMode === 'lenient' ? '列表页或详情页访问失败均跳过，尽可能多地采集数据。404 视为翻页结束。' :
-                 formErrorMode === 'standard' ? '失败自动重试 1-2 次，仍失败则跳过该项继续；404 视为翻页结束。' :
-                 '任何页面或详情页访问失败立即终止任务，适合对数据完整性要求高的场景。' }}
-            </div>
+          <div class="flex items-center gap-2 mb-2">
+            <el-checkbox v-model="formAutoPipeline" size="small" />
+            <span class="text-xs text-gray-300">自动流水线（一键全开）</span>
+            <el-tooltip content="勾选后自动开启全部环节：爬取 → 下载 → 转码 → AI 总结，一条线自动执行。下方四个子开关会被强制勾选。" placement="top">
+              <i class="fas fa-circle-question text-gray-600 cursor-help text-[12px]"></i>
+            </el-tooltip>
           </div>
 
-          <!-- 自动下载配置 -->
-          <div class="mt-4">
-            <el-checkbox v-model="formAutoDownload">
-              <span class="text-xs text-gray-300">自动下载媒体资源</span>
-              <el-tooltip placement="top" effect="dark" content="开启后，采集完成会自动将媒体资源字段中的 URL 加入下载队列。下载范围由上方'媒体资源字段'决定，留空则扫描所有 URL 字段" class="ml-1">
-                <i class="fas fa-circle-question text-gray-600 cursor-help"></i>
+          <div class="flex items-center gap-6 ml-5">
+            <el-checkbox v-model="formAutoStart" size="small" :disabled="pipelineLocked">自动执行爬取
+              <el-tooltip content="创建任务后立即开始采集，无需手动点击开始" placement="top">
+                <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
               </el-tooltip>
             </el-checkbox>
-            <div v-if="formAutoDownload" class="mt-3 ml-6">
-              <div class="text-[11px] text-gray-500">
-                下载范围由上方 <strong class="text-gray-400">媒体资源字段</strong> 决定。
-                <template v-if="formMediaUrlField.length">
-                  已配置: {{ formMediaUrlField.join('、') }}
-                </template>
-                <template v-else>
-                  未指定，将自动扫描所有包含 URL 的字段进行下载。
-                </template>
-              </div>
+            <el-checkbox v-model="formAutoDownload" size="small" :disabled="pipelineLocked">自动下载资源
+              <el-tooltip content="采集完成后自动将媒体资源 URL 带入下载队列开始下载" placement="top">
+                <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+              </el-tooltip>
+            </el-checkbox>
+            <el-checkbox v-model="formAutoTranscode" size="small" :disabled="pipelineLocked">自动转码
+              <el-tooltip content="下载完成后自动调用 FFmpeg 转为 16kHz 单声道 WAV 格式" placement="top">
+                <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+              </el-tooltip>
+            </el-checkbox>
+            <el-checkbox v-model="formAutoAI" size="small" :disabled="pipelineLocked">自动 AI 总结
+              <el-tooltip content="语音识别完成后自动调用 AI 模型进行总结分析" placement="top">
+                <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+              </el-tooltip>
+            </el-checkbox>
+          </div>
+        </div>
+
+        <!-- 4. 列表配置（仅列表模式） -->
+        <div v-if="formMode === 'list'" class="section">
+          <div class="text-[13px] font-semibold text-gray-300 mb-2.5">列表配置</div>
+
+          <div class="mb-3">
+            <div class="text-xs text-gray-400 mb-1">
+              列表项选择器 <span class="text-red-400">*</span>
+              <el-tooltip content="CSS 选择器，用于定位列表中的每一项。例如 .news-item、li.article、.product-card" placement="top">
+                <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-1"></i>
+              </el-tooltip>
+            </div>
+            <el-input v-model="formItemSelector" placeholder=".article-item, li.post, .product-card" size="small" />
+          </div>
+
+          <div class="mb-3">
+            <div class="text-xs text-gray-400 mb-2">
+              翻页方式
+              <el-tooltip content="不翻页：仅抓取当前页。按页数：抓取指定数量页面。按条数：抓取指定数量的条目后停止。" placement="top">
+                <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-1"></i>
+              </el-tooltip>
+            </div>
+            <el-radio-group v-model="formPaginationMode" size="small">
+              <el-radio-button value="none">不翻页</el-radio-button>
+              <el-radio-button value="page">按页数</el-radio-button>
+              <el-radio-button value="count">按条数</el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <div v-if="formPaginationMode === 'page'" class="ml-2 mb-3 space-y-2">
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16">抓取页数</span>
+              <el-input-number v-model="formMaxPages" :min="0" :max="9999" size="small" />
+              <span class="text-[11px] text-gray-500">0 = 全部</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16">下一页选择器</span>
+              <el-input v-model="formNextPageSelector" placeholder=".pagination .next, a[rel='next']" size="small" class="flex-1" />
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16">
+                URL 模板
+                <el-tooltip content="用 {page} 表示页码，程序会自动替换为实际数字。例如：?page={page} → ?page=1, ?page=2...；/page/{page}/ → /page/1/, /page/2/...。留空则用「下一页选择器」自动翻页。" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+                </el-tooltip>
+              </span>
+              <el-input v-model="formUrlPattern" placeholder="https://example.com/list?page={page}" size="small" class="flex-1" />
+              <span class="text-xs text-gray-400 flex-shrink-0">起始页</span>
+              <el-input-number v-model="formPageStart" :min="1" :max="9999" size="small" />
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 flex-shrink-0 w-16">
+                加载更多
+                <el-tooltip content="实验性：点击加载更多按钮的选择器，用于无限滚动类页面" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+                </el-tooltip>
+              </span>
+              <el-input v-model="formLoadMoreSelector" placeholder=".load-more, button.more" size="small" class="flex-1" />
             </div>
           </div>
 
-          <!-- List mode: item selector + pagination -->
-          <template v-if="formMode === 'list'">
-            <div class="mt-4 p-4 rounded-lg bg-gray-900/30 border border-gray-700/30 space-y-4">
-              <div class="flex items-center gap-2 text-xs text-gray-400 mb-2">
-                <i class="fas fa-list-check text-amber-400"></i>
-                <span class="font-medium">列表配置</span>
-              </div>
-
-              <div>
-                <div class="text-xs text-gray-400 mb-1.5">
-                  列表项选择器
-                  <span class="text-red-400">*</span>
-                </div>
-                <el-input v-model="formItemSelector" placeholder=".article-item, li.post, .product-card" size="small" />
-                <div class="text-[11px] text-gray-600 mt-1">
-                  CSS 选择器，用于定位列表中的每一项。例如 <code class="text-gray-500">.news-item</code>、<code class="text-gray-500">li.article</code>
-                </div>
-              </div>
-
-              <!-- Pagination config -->
-              <div>
-                <div class="text-xs text-gray-400 mb-2">翻页 / 加载方式</div>
-                <div class="flex gap-2 mb-3">
-                  <el-button
-                    v-for="opt in [
-                      { k: 'none', l: '不翻页', icon: 'fa-ban' },
-                      { k: 'page', l: '按页数', icon: 'fa-file' },
-                      { k: 'count', l: '按条数', icon: 'fa-hashtag' },
-                    ]" :key="opt.k"
-                    size="small"
-                    :type="formPaginationMode === opt.k ? 'primary' : 'default'"
-                    :plain="formPaginationMode !== opt.k"
-                    @click="formPaginationMode = opt.k as any"
-                  >
-                    <i :class="'fas ' + opt.icon + ' mr-1'"></i>{{ opt.l }}
-                  </el-button>
-                </div>
-
-                <!-- Page-based -->
-                <div v-if="formPaginationMode === 'page'" class="space-y-4">
-                  <div class="flex items-center gap-3">
-                    <div class="text-xs text-gray-400">抓取页数</div>
-                    <el-input-number v-model="formMaxPages" :min="0" :max="9999" size="small" />
-                    <span class="text-[11px]" :class="formMaxPages === 0 ? 'text-emerald-400' : 'text-gray-600'">
-                      {{ formMaxPages === 0 ? '抓取全部页面' : '页' }}
-                    </span>
-                  </div>
-                  <!-- Method 1: CSS selector -->
-                  <div class="p-3 rounded-lg bg-gray-900/40 border border-gray-700/20">
-                    <div class="text-[11px] text-gray-500 mb-2 font-medium">方式一：CSS 选择器翻页</div>
-                    <div>
-                      <div class="text-xs text-gray-400 mb-1.5">下一页选择器</div>
-                      <el-input v-model="formNextPageSelector" placeholder=".pagination .next, a[rel='next']" size="small" />
-                    </div>
-                    <div class="text-[11px] text-gray-600 mt-2">在页面中找到"下一页"链接并跟随，适用于有独立 .next 按钮的站点</div>
-                  </div>
-                  <!-- Method 2: URL pattern -->
-                  <div class="p-3 rounded-lg bg-gray-900/40 border border-gray-700/20">
-                    <div class="text-[11px] text-gray-500 mb-2 font-medium">方式二：URL 模式翻页（推荐）</div>
-                    <div class="grid grid-cols-3 gap-3">
-                      <div class="col-span-2">
-                        <div class="text-xs text-gray-400 mb-1.5">URL 模板</div>
-                        <el-input v-model="formUrlPattern" placeholder="https://example.com/list?page={page}" size="small" />
-                      </div>
-                      <div>
-                        <div class="text-xs text-gray-400 mb-1.5">起始页码</div>
-                        <el-input-number v-model="formPageStart" :min="1" :max="9999" size="small" class="!w-full" />
-                      </div>
-                    </div>
-                    <div class="text-[11px] text-gray-600 mt-2">
-                      用 <code class="text-gray-400">{page}</code> 表示页码。起始页码配合上方"抓取页数"可指定从第几页开始抓多少页
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Count-based -->
-                <div v-if="formPaginationMode === 'count'" class="space-y-4">
-                  <div class="flex items-center gap-3">
-                    <div class="text-xs text-gray-400">抓取条数</div>
-                    <el-input-number v-model="formMaxItems" :min="1" :max="99999" size="small" />
-                    <span class="text-[11px] text-gray-600">条</span>
-                  </div>
-                  <!-- Method 1: CSS selector -->
-                  <div class="p-3 rounded-lg bg-gray-900/40 border border-gray-700/20">
-                    <div class="text-[11px] text-gray-500 mb-2 font-medium">方式一：CSS 选择器翻页</div>
-                    <div>
-                      <div class="text-xs text-gray-400 mb-1.5">下一页选择器</div>
-                      <el-input v-model="formNextPageSelector" placeholder=".pagination .next, a[rel='next']" size="small" />
-                    </div>
-                  </div>
-                  <!-- Method 2: URL pattern -->
-                  <div class="p-3 rounded-lg bg-gray-900/40 border border-gray-700/20">
-                    <div class="text-[11px] text-gray-500 mb-2 font-medium">方式二：URL 模式翻页（推荐）</div>
-                    <div class="grid grid-cols-3 gap-3">
-                      <div class="col-span-2">
-                        <div class="text-xs text-gray-400 mb-1.5">URL 模板</div>
-                        <el-input v-model="formUrlPattern" placeholder="https://example.com/list?page={page}" size="small" />
-                      </div>
-                      <div>
-                        <div class="text-xs text-gray-400 mb-1.5">起始页码</div>
-                        <el-input-number v-model="formPageStart" :min="1" :max="9999" size="small" class="!w-full" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- No pagination -->
-                <div v-if="formPaginationMode === 'none'" class="text-[11px] text-gray-600">
-                  仅抓取当前页面内容，不进行翻页
-                </div>
-              </div>
-
-              <!-- Load more selector (experimental) -->
-              <div>
-                <div class="text-xs text-gray-400 mb-1.5">
-                  加载更多选择器
-                  <span class="text-gray-600">（实验性，适用于链接型"加载更多"）</span>
-                </div>
-                <el-input v-model="formLoadMoreSelector" placeholder=".load-more, button.more, a.more-btn" size="small" />
-                <div class="text-[11px] text-gray-600 mt-1">
-                  部分站点使用"加载更多"按钮而非分页，填写按钮/链接的 CSS 选择器可尝试抓取。
-                  纯 JS 滚动加载的站点暂不支持。
-                </div>
-              </div>
+          <div v-if="formPaginationMode === 'count'" class="ml-2 mb-3 space-y-2">
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16">抓取条数</span>
+              <el-input-number v-model="formMaxItems" :min="1" :max="99999" size="small" />
             </div>
-            </template>
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16">下一页选择器</span>
+              <el-input v-model="formNextPageSelector" placeholder=".pagination .next, a[rel='next']" size="small" class="flex-1" />
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16">
+                URL 模板
+                <el-tooltip content="用 {page} 表示页码，程序会自动替换为实际数字。例如：?page={page} → ?page=1, ?page=2...；/page/{page}/ → /page/1/, /page/2/...。留空则用「下一页选择器」自动翻页。" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+                </el-tooltip>
+              </span>
+              <el-input v-model="formUrlPattern" placeholder="https://example.com/list?page={page}" size="small" class="flex-1" />
+              <span class="text-xs text-gray-400 flex-shrink-0">起始页</span>
+              <el-input-number v-model="formPageStart" :min="1" :max="9999" size="small" />
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 flex-shrink-0 w-16">
+                加载更多
+                <el-tooltip content="实验性：点击加载更多按钮的选择器，用于无限滚动类页面" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+                </el-tooltip>
+              </span>
+              <el-input v-model="formLoadMoreSelector" placeholder=".load-more, button.more" size="small" class="flex-1" />
+            </div>
           </div>
+        </div>
 
-        <!-- === Step 3: 提取规则 === -->
-        <div>
+        <!-- 5. 提取规则 -->
+        <div class="section">
           <div class="flex items-center justify-between mb-3">
-            <h4 class="text-sm font-semibold flex items-center gap-2">
-              <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[11px] font-bold">3</span>
-              <span>提取规则</span>
-            </h4>
+            <div class="text-[13px] font-semibold text-gray-300 !mb-0">提取规则</div>
             <div class="flex gap-1.5">
               <template v-if="formMode === 'single'">
                 <el-button size="small" @click="applyPreset('article')">文章模板</el-button>
@@ -976,120 +1055,314 @@ onUnmounted(teardownSSE)
                 <el-button size="small" @click="applyPreset('product')">商品模板</el-button>
                 <el-button size="small" @click="applyPreset('listBasic')">基础列表</el-button>
               </template>
-              <el-button size="small" @click="addRule('list')"><i class="fas fa-plus mr-1"></i>添加字段</el-button>
+              <el-button size="small" type="primary" plain @click="addRule('list')"><i class="fas fa-plus mr-1"></i>添加字段</el-button>
             </div>
           </div>
 
-          <div class="p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
-            <div class="space-y-2">
-              <div v-for="(rule, i) in formRules" :key="i"
-                class="flex items-center gap-3 p-2.5 rounded-lg bg-gray-900/60 border border-gray-700/30">
-                <span class="text-[11px] text-gray-600 w-5 text-center font-mono">{{ i + 1 }}</span>
-                <div class="w-28">
-                  <div class="text-[10px] text-gray-500 mb-0.5">字段名</div>
-                  <el-input v-model="rule.name" placeholder="如: title" size="small" />
-                </div>
-                <div class="flex-1">
-                  <div class="text-[10px] text-gray-500 mb-0.5">CSS 选择器</div>
-                  <el-input v-model="rule.selector" placeholder="如: h1, .title, [class*='headline']" size="small" />
-                </div>
-                <div class="w-28">
-                  <div class="text-[10px] text-gray-500 mb-0.5">
-                    提取方式
-                    <el-tooltip placement="top" effect="dark" content="留空 = 提取标签内文本；填写 = 提取标签属性值（如 src、href、data-url）">
-                      <i class="fas fa-circle-question text-gray-600 cursor-help ml-0.5"></i>
-                    </el-tooltip>
-                  </div>
-                  <el-input v-model="rule.attr" placeholder="属性名(可选)" size="small" />
-                </div>
-                <div class="w-32">
-                  <div class="text-[10px] text-gray-500 mb-0.5">
-                    正则截取
-                    <el-tooltip placement="top" effect="dark" content="用正则捕获组截取部分内容，如从 URL 提取 ID：/product/(\d+) — 留空取完整值">
-                      <i class="fas fa-circle-question text-gray-600 cursor-help ml-0.5"></i>
-                    </el-tooltip>
-                  </div>
-                  <el-input v-model="rule.regex" placeholder="如: (\d+)" size="small" />
-                </div>
-                <el-button v-if="formRules.length > 1" size="small" type="danger" circle plain @click="removeRule('list', i)">
-                  <i class="fas fa-xmark"></i>
-                </el-button>
-              </div>
+          <div class="space-y-1.5">
+            <div v-for="(rule, i) in formRules" :key="i" class="flex items-center gap-2">
+              <span class="text-[11px] text-gray-600 w-4 text-center flex-shrink-0">{{ i + 1 }}</span>
+              <el-input v-model="rule.name" placeholder="字段名" size="small" class="!w-21" />
+              <el-input v-model="rule.selector" placeholder="CSS 选择器（留空=元素自身）" size="small" class="flex-1" />
+              <el-input v-model="rule.attr" placeholder="属性(可选)" size="small" class="!w-18" />
+              <el-input v-model="rule.regex" placeholder="正则(可选)" size="small" class="!w-18" />
+              <el-button v-if="formRules.length > 1" size="small" type="danger" circle plain @click="removeRule('list', i)"><i class="fas fa-xmark"></i></el-button>
             </div>
+          </div>
+          <div class="text-[11px] text-gray-500 mt-2">
+            💡 <b>字段名</b>=存储的 key；<b>CSS 选择器</b>=定位元素（<b class="text-amber-400">留空 = 列表项元素本身</b>，配合属性提取 href/src 等）；
+            <b>属性</b>=留空取文本/填属性名取值；<b>正则</b>=可选截取（如 <code class="text-amber-400 bg-amber-500/10 px-1 rounded">(\d+)</code>）
+          </div>
 
-            <div class="mt-3 p-2.5 rounded-lg bg-gray-800/40 border border-gray-700/20">
-              <div class="text-[11px] text-gray-500 leading-relaxed">
-                <strong class="text-gray-400">💡 提取说明：</strong>
-                每条规则包含四个部分 ——
-                <span class="text-gray-400">字段名</span>（存储时的 key）、
-                <span class="text-gray-400">CSS 选择器</span>（定位目标元素）、
-                <span class="text-gray-400">提取方式</span>（留空取<strong>文本</strong>，填写属性名取<strong>属性值</strong>）、
-                <span class="text-gray-400">正则截取</span>（可选，用捕获组截取部分内容。如链接 <code>/product/12345</code> 用正则 <code>/product/(\d+)</code> 只提取出 <code>12345</code>）
+          <!-- Detail rules (list mode) -->
+          <div v-if="formMode === 'list'" class="mt-4">
+            <div class="flex items-center justify-between mb-3">
+              <div class="text-sm font-semibold text-gray-300">详情页提取 <span class="text-[11px] text-gray-500 font-normal">（可选）</span></div>
+              <el-button size="small" type="primary" plain @click="addRule('detail')"><i class="fas fa-plus mr-1"></i>添加字段</el-button>
+            </div>
+            <div v-if="formDetailRules.length" class="space-y-1.5">
+              <div v-for="(rule, i) in formDetailRules" :key="i" class="flex items-center gap-2">
+                <span class="text-[11px] text-gray-600 w-4 text-center flex-shrink-0">{{ i + 1 }}</span>
+                <el-input v-model="rule.name" placeholder="字段名" size="small" class="!w-21" />
+                <el-input v-model="rule.selector" placeholder="CSS 选择器（留空=元素自身）" size="small" class="flex-1" />
+                <el-input v-model="rule.attr" placeholder="属性" size="small" class="!w-18" />
+                <el-input v-model="rule.regex" placeholder="正则" size="small" class="!w-18" />
+                <el-button size="small" type="danger" circle plain @click="removeRule('detail', i)"><i class="fas fa-xmark"></i></el-button>
               </div>
             </div>
+            <p v-if="formDetailRules.length" class="text-[11px] text-gray-500 mt-2">
+              💡 详情页规则与列表规则语法相同。<b class="text-amber-400">选择器留空 = 页面根元素</b>，配合属性可提取 <code class="text-amber-400 bg-amber-500/10 px-1 rounded">&lt;title&gt;</code> 等顶层节点内容。
+            </p>
           </div>
         </div>
 
-        <!-- === Step 4: 详情页配置（列表模式可选）=== -->
-        <div v-if="formMode === 'list'">
-          <div class="flex items-center justify-between mb-3">
-            <h4 class="text-sm font-semibold flex items-center gap-2">
-              <span class="w-5 h-5 rounded-full bg-gray-500/20 text-gray-400 flex items-center justify-center text-[11px] font-bold">4</span>
-              <span>详情页提取 <span class="text-[11px] text-gray-600 font-normal">（可选）</span></span>
-            </h4>
-            <el-button size="small" @click="addRule('detail')"><i class="fas fa-plus mr-1"></i>添加字段</el-button>
-          </div>
+        <!-- 6. 字段指定 -->
+        <div class="section">
+          <div class="text-[13px] font-semibold text-gray-300 mb-2.5">字段指定</div>
 
-          <div class="mb-3">
-            <div class="text-xs text-gray-400 mb-1.5">详情页链接选择器</div>
-            <el-input v-model="formDetailLinkSelector" placeholder="从列表项中提取详情页链接，如: a.title, h2 a" size="small" class="!w-96" />
-            <div class="text-[11px] text-gray-600 mt-1">
-              填写后，程序会进入每个列表项的详情页，按下方规则提取更多字段（如正文、标签等）
+          <div class="space-y-2">
+            <!-- 标题字段 -->
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16 flex-shrink-0">
+                标题字段
+                <el-tooltip :content="formTitleFieldAll ? '当前：收集所有指定字段的值作为标题列表' : '当前：按顺序选第一个非空值。勾选「取全部」改为收集全部字段值'" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+                </el-tooltip>
+              </span>
+              <el-select v-model="formTitleField" multiple filterable allow-create default-first-option placeholder="留空自动" size="small" class="flex-1">
+                <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+              </el-select>
+              <el-checkbox v-model="formTitleFieldAll" size="small" class="!mr-0 flex-shrink-0">取全部</el-checkbox>
+            </div>
+
+            <!-- 详情链接 -->
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16 flex-shrink-0">
+                详情链接
+                <el-tooltip content="哪个字段的值是详情页 URL。列表模式下，程序用这个 URL 进入每个条目的详情页提取更多字段。多个字段时按顺序选第一个有效值。如需从链接元素的 href 属性提取，请在「提取规则」中添加一个 attr='href' 的规则。" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+                </el-tooltip>
+              </span>
+              <el-select v-model="formDetailLinkField" multiple filterable allow-create default-first-option placeholder="如: link" size="small" class="flex-1">
+                <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+              </el-select>
+              <el-checkbox v-model="formDetailLinkFieldAll" size="small" class="!mr-0 flex-shrink-0">取全部</el-checkbox>
+            </div>
+
+            <!-- 媒体资源 -->
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16 flex-shrink-0">
+                媒体资源
+                <el-tooltip content="存放视频/音频/图片 URL 的字段名。默认「取全部」表示收集所有指定字段的值作为独立下载资源。取消勾选则只取第一个。" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+                </el-tooltip>
+              </span>
+              <el-select v-model="formMediaUrlField" multiple filterable allow-create default-first-option placeholder="如: videoUrl" size="small" class="flex-1">
+                <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+              </el-select>
+              <el-checkbox v-model="formMediaUrlFieldAll" size="small" class="!mr-0 flex-shrink-0">取全部</el-checkbox>
+            </div>
+
+            <!-- 唯一标识 -->
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-16 flex-shrink-0">
+                唯一标识
+                <el-tooltip content="能唯一标识每条记录的字段名（如数据库 ID）。重试/重采时用于去重匹配，防止重复插入。" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+                </el-tooltip>
+              </span>
+              <el-select v-model="formIdField" multiple filterable allow-create default-first-option placeholder="如: id" size="small" class="flex-1">
+                <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+              </el-select>
+              <el-checkbox v-model="formIdFieldAll" size="small" class="!mr-0 flex-shrink-0">取全部</el-checkbox>
             </div>
           </div>
 
-          <div v-if="formDetailRules.length" class="space-y-2 p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
-            <div v-for="(rule, i) in formDetailRules" :key="i"
-              class="flex items-center gap-3 p-2.5 rounded-lg bg-gray-900/60 border border-gray-700/30">
-              <span class="text-[11px] text-gray-600 w-5 text-center font-mono">{{ i + 1 }}</span>
-              <div class="w-28">
-                <div class="text-[10px] text-gray-500 mb-0.5">字段名</div>
-                <el-input v-model="rule.name" placeholder="字段名" size="small" />
+          <!-- URL 转换规则 -->
+          <div class="mt-4">
+            <div class="flex items-center justify-between mb-3">
+              <div class="text-sm font-semibold text-gray-300">
+                URL 转换规则 <span class="text-[11px] text-gray-500 font-normal">（可选）</span>
+                <el-tooltip content="将提取到的字段值转换为标准页面 URL。模板中用 {字段名} 引用任意提取字段的值，如 https://v.qq.com/x/page/{videoId}?title={title}。下载方式：yt-dlp 适用视频站点，文件直链适用普通下载。" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-1"></i>
+                </el-tooltip>
               </div>
-              <div class="flex-1">
-                <div class="text-[10px] text-gray-500 mb-0.5">CSS 选择器</div>
-                <el-input v-model="rule.selector" placeholder="CSS 选择器" size="small" />
+              <el-button size="small" type="primary" plain @click="addUrlTransform"><i class="fas fa-plus mr-1"></i>添加规则</el-button>
+            </div>
+
+            <div v-if="formUrlTransforms.length" class="space-y-2">
+              <div v-for="(t, i) in formUrlTransforms" :key="i" class="rounded-lg bg-gray-900/30 border border-gray-700/30 p-2.5">
+                <!-- Main row -->
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-gray-600 w-4 text-center flex-shrink-0">{{ i + 1 }}</span>
+                  <el-select v-model="t.fieldName" filterable allow-create default-first-option placeholder="字段" size="small" class="!w-28">
+                    <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+                  </el-select>
+                  <span class="text-gray-600 text-xs flex-shrink-0">→</span>
+                  <el-input v-model="t.urlTemplate" placeholder="https://v.qq.com/x/page/{field}.html" size="small" class="flex-1" />
+                  <el-select v-model="t.downloadMethod" size="small" class="!w-24">
+                    <el-option label="yt-dlp" value="yt-dlp" />
+                    <el-option label="文件直链" value="file" />
+                  </el-select>
+                  <el-button v-if="t.downloadMethod === 'yt-dlp'" size="small" text @click="t._showOptions = !t._showOptions">
+                    <i :class="t._showOptions ? 'fas fa-gear text-blue-400' : 'fas fa-gear text-gray-500'" class="text-xs" :title="t._showOptions ? '收起选项' : 'yt-dlp 选项'"></i>
+                  </el-button>
+                  <el-button size="small" type="danger" circle plain @click="removeUrlTransform(i)"><i class="fas fa-xmark"></i></el-button>
+                </div>
+
+                <!-- yt-dlp options (per-transform, only when method is yt-dlp) -->
+                <div v-if="t.downloadMethod === 'yt-dlp' && t._showOptions" class="mt-2.5 pt-2.5 border-t border-gray-700/30 space-y-2">
+                  <!-- 登录认证 -->
+                  <div class="text-[11px] text-gray-400 font-semibold">登录认证</div>
+                  <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">Cookies from browser</div>
+                      <el-input v-model="t.ytDlpCookiesFromBrowser" placeholder="chrome" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">Cookies 文件</div>
+                      <el-input v-model="t.ytDlpCookies" placeholder="/path/to/cookies.txt" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">用户名</div>
+                      <el-input v-model="t.ytDlpUsername" placeholder="站点登录用户名" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">密码</div>
+                      <el-input v-model="t.ytDlpPassword" type="password" placeholder="站点登录密码" size="small" />
+                    </div>
+                  </div>
+
+                  <!-- 网络 & 格式 -->
+                  <div class="text-[11px] text-gray-400 font-semibold pt-1">网络 &amp; 格式</div>
+                  <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">代理地址</div>
+                      <el-input v-model="t.ytDlpProxy" placeholder="http://127.0.0.1:7890 或 socks5://" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">限速</div>
+                      <el-input v-model="t.ytDlpLimitRate" placeholder="5M / 500K" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">格式选择器</div>
+                      <el-input v-model="t.ytDlpFormat" placeholder="bv*+ba" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">重试次数</div>
+                      <el-input-number v-model="t.ytDlpRetries" :min="0" :max="99" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">User-Agent</div>
+                      <el-input v-model="t.ytDlpUserAgent" placeholder="自定义 UA" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">Referer</div>
+                      <el-input v-model="t.ytDlpReferer" placeholder="https://example.com/" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">请求间隔（秒）</div>
+                      <el-input-number v-model="t.ytDlpSleepInterval" :min="0" :max="3600" size="small" />
+                    </div>
+                    <div class="flex items-end gap-3 pb-px">
+                      <el-checkbox v-model="t.ytDlpGeoBypass" size="small">
+                        <span class="text-[11px] text-gray-500">绕过地域限制</span>
+                      </el-checkbox>
+                      <el-checkbox v-model="t.ytDlpNoCheckCert" size="small">
+                        <span class="text-[11px] text-gray-500">跳过证书校验</span>
+                      </el-checkbox>
+                    </div>
+                  </div>
+
+                  <!-- 高级 -->
+                  <div class="text-[11px] text-gray-400 font-semibold pt-1">高级</div>
+                  <div>
+                    <div class="text-[11px] text-gray-500 mb-1">额外命令行参数</div>
+                    <el-input v-model="t.ytDlpRawArgs" type="textarea" :rows="2" placeholder="--extractor-args youtube:player_client=web&#10;--add-header Referer:https://www.youtube.com/" size="small" />
+                  </div>
+                </div>
               </div>
-              <div class="w-28">
-                <div class="text-[10px] text-gray-500 mb-0.5">提取方式</div>
-                <el-input v-model="rule.attr" placeholder="属性(可选)" size="small" />
-              </div>
-              <div class="w-32">
-                <div class="text-[10px] text-gray-500 mb-0.5">正则截取</div>
-                <el-input v-model="rule.regex" placeholder="如: (\d+)" size="small" />
-              </div>
-              <el-button size="small" type="danger" circle plain @click="removeRule('detail', i)">
-                <i class="fas fa-xmark"></i>
-              </el-button>
+            </div>
+
+            <p v-if="!formUrlTransforms.length" class="text-[11px] text-gray-600 mt-1">
+              无需转换时留空。需要转换时添加规则，如 <code class="text-amber-400 bg-amber-500/10 px-1 rounded">videoId → https://v.qq.com/x/page/{videoId}?title={title} → yt-dlp</code>。选择 yt-dlp 方式后，点击 <i class="fas fa-gear text-gray-500 text-[10px]"></i> 图标可配置该站点的下载参数。
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!formUrl || loading" :loading="loading" @click="submitForm">
+          {{ editingTaskId ? '保存修改' : (formAutoStart ? '创建并执行' : '创建任务') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Export Dialog -->
+    <el-dialog v-model="exportDialogVisible" title="导出采集数据" width="650px" destroy-on-close top="5vh">
+      <div class="space-y-4">
+        <!-- Format selection -->
+        <div>
+          <div class="text-xs text-gray-400 mb-2">导出格式</div>
+          <el-radio-group v-model="exportFormat" size="small">
+            <el-radio-button value="excel">Excel (.xlsx)</el-radio-button>
+            <el-radio-button value="csv">CSV</el-radio-button>
+            <el-radio-button value="json">JSON</el-radio-button>
+            <el-radio-button value="yaml">YAML</el-radio-button>
+          </el-radio-group>
+        </div>
+
+        <!-- Single/Multi file (only when multiple tasks selected) -->
+        <div v-if="selectedIds.length > 1 && exportFormat !== 'csv'">
+          <div class="text-xs text-gray-400 mb-2">导出方式</div>
+          <el-radio-group v-model="exportMultiFile" size="small">
+            <el-radio-button :value="false">单文件 {{ exportFormat === 'excel' ? '(多Sheet)' : '(分组)' }}</el-radio-button>
+            <el-radio-button :value="true">多文件 (ZIP压缩包)</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div v-if="selectedIds.length > 1 && exportFormat === 'csv'" class="text-[11px] text-gray-500 mt-1">
+          CSV 多任务时将自动打包为 ZIP
+        </div>
+
+        <!-- Include related data -->
+        <div class="flex items-center gap-6">
+          <el-checkbox v-model="exportIncludeTranscriptions" size="small" @change="loadExportFields(selectedIds)">包含识别文本</el-checkbox>
+          <el-checkbox v-model="exportIncludeAIResults" size="small" @change="loadExportFields(selectedIds)">包含AI分析结果</el-checkbox>
+        </div>
+
+        <!-- Field selection -->
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400">导出字段 <span class="text-gray-600">（勾选要导出的字段，可自定义别名）</span></span>
+            <div class="flex gap-2">
+              <el-button size="small" text @click="toggleAllExportFields(true)">全选</el-button>
+              <el-button size="small" text @click="toggleAllExportFields(false)">全不选</el-button>
+            </div>
+          </div>
+          <div class="max-h-60 overflow-y-auto space-y-1 border border-gray-700/30 rounded-lg p-3">
+            <div v-if="exportFieldGroups.dbFields.length" class="text-[11px] text-gray-500 font-semibold mb-1.5 mt-0.5">数据库字段</div>
+            <div v-for="f in exportFields.filter(x => exportFieldGroups.dbFields.some(d => d.key === x.key))" :key="f.key" class="flex items-center gap-2 py-0.5">
+              <el-checkbox v-model="f.selected" size="small" />
+              <span class="text-xs text-gray-400 w-32 flex-shrink-0 font-mono">{{ exportFieldGroups.dbFields.find(d => d.key === f.key)?.label || f.key }}</span>
+              <el-input v-model="f.alias" size="small" :placeholder="f.key" class="flex-1" />
+            </div>
+            <div v-if="exportFields.filter(x => exportFieldGroups.extraFields?.some(d => d.key === x.key)).length" class="text-[11px] text-gray-500 font-semibold mb-1.5 mt-2">提取规则字段</div>
+            <div v-for="f in exportFields.filter(x => exportFieldGroups.extraFields?.some(d => d.key === x.key))" :key="f.key" class="flex items-center gap-2 py-0.5">
+              <el-checkbox v-model="f.selected" size="small" />
+              <span class="text-xs text-gray-400 w-32 flex-shrink-0 font-mono">{{ exportFieldGroups.extraFields?.find(d => d.key === f.key)?.label || f.key }}</span>
+              <el-input v-model="f.alias" size="small" :placeholder="f.key" class="flex-1" />
+            </div>
+            <div v-if="exportIncludeTranscriptions && exportFields.filter(x => exportFieldGroups.transcriptionFields?.some(d => d.key === x.key)).length" class="text-[11px] text-gray-500 font-semibold mb-1.5 mt-2">识别结果字段</div>
+            <div v-for="f in exportFields.filter(x => exportIncludeTranscriptions && exportFieldGroups.transcriptionFields?.some(d => d.key === x.key))" :key="f.key" class="flex items-center gap-2 py-0.5">
+              <el-checkbox v-model="f.selected" size="small" />
+              <span class="text-xs text-gray-400 w-32 flex-shrink-0 font-mono">{{ exportFieldGroups.transcriptionFields?.find(d => d.key === f.key)?.label || f.key }}</span>
+              <el-input v-model="f.alias" size="small" :placeholder="f.key" class="flex-1" />
+            </div>
+            <div v-if="exportIncludeAIResults && exportFields.filter(x => exportFieldGroups.aiFields?.some(d => d.key === x.key)).length" class="text-[11px] text-gray-500 font-semibold mb-1.5 mt-2">AI分析字段</div>
+            <div v-for="f in exportFields.filter(x => exportIncludeAIResults && exportFieldGroups.aiFields?.some(d => d.key === x.key))" :key="f.key" class="flex items-center gap-2 py-0.5">
+              <el-checkbox v-model="f.selected" size="small" />
+              <span class="text-xs text-gray-400 w-32 flex-shrink-0 font-mono">{{ exportFieldGroups.aiFields?.find(d => d.key === f.key)?.label || f.key }}</span>
+              <el-input v-model="f.alias" size="small" :placeholder="f.key" class="flex-1" />
             </div>
           </div>
         </div>
       </div>
 
       <template #footer>
-        <div class="flex items-center justify-between">
-          <el-checkbox v-if="!editingTaskId" v-model="formAutoStart" size="small">
-            <span class="text-xs text-gray-400">创建后自动执行</span>
-          </el-checkbox>
-          <span v-else></span>
-          <div class="flex gap-2">
-            <el-button @click="dialogVisible = false">取消</el-button>
-            <el-button type="primary" :disabled="!formUrl || loading" :loading="loading" @click="submitForm">
-              {{ editingTaskId ? '保存修改' : (formAutoStart ? '创建并执行' : '创建任务') }}
-            </el-button>
-          </div>
-        </div>
+        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exportLoading" @click="doExport">
+          <i class="fas fa-download mr-1.5"></i>导出
+        </el-button>
       </template>
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+:deep(.el-dialog__body) {
+  max-height: 65vh;
+  overflow-y: auto;
+}
+</style>

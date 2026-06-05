@@ -7,6 +7,7 @@ import { YtDlp } from 'ytdlp-nodejs'
 import { DatabaseService } from '../common/database/database.service'
 import { SseService } from '../common/sse/sse.service'
 import { v4 as uuid } from 'uuid'
+import type { YtDlpOptions } from '../crawler/crawler.service'
 
 /** 内部使用的视频信息结构 */
 export interface VideoInfo {
@@ -74,17 +75,29 @@ export class DownloadService {
       this.db.db.prepare(`UPDATE download_queue SET status = 'downloading', updated_at = datetime('now') WHERE id = ?`).run(taskId)
       this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress: 0 })
 
-      const site = this.detectSite(url)
+      // 根据 download_method 字段选择下载方式
+      const method = task.download_method  // NULL | 'yt-dlp' | 'file'
 
-      if (site === 'direct') {
-        // 直链：走 HTTP 下载
+      if (method === 'file') {
+        // 强制 HTTP 直链下载
         await this.downloadFile(url, filePath, (progress) => {
           this.db.db.prepare(`UPDATE download_queue SET progress = ? WHERE id = ?`).run(progress, taskId)
           this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress })
         })
-      } else {
-        // 站点链接：用 ytdlp-nodejs 下载
+      } else if (method === 'yt-dlp') {
+        // 强制 yt-dlp 下载
         await this.downloadWithYtDlpLib(url, filePath, taskId, itemId)
+      } else {
+        // NULL：自动检测（兼容旧数据 + 手动添加的链接）
+        const site = this.detectSite(url)
+        if (site === 'direct') {
+          await this.downloadFile(url, filePath, (progress) => {
+            this.db.db.prepare(`UPDATE download_queue SET progress = ? WHERE id = ?`).run(progress, taskId)
+            this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress })
+          })
+        } else {
+          await this.downloadWithYtDlpLib(url, filePath, taskId, itemId)
+        }
       }
 
       this.db.db.prepare(`UPDATE download_queue SET status = 'completed', file_path = ?, progress = 100, updated_at = datetime('now') WHERE id = ?`).run(filePath, taskId)
@@ -106,10 +119,12 @@ export class DownloadService {
     const outputDir = path.dirname(filePath)
     const baseName = path.basename(filePath, path.extname(filePath))
 
-    const result = await this.ytDlp
+    // 读取 yt-dlp 配置选项
+    const task = this.db.db.prepare('SELECT yt_dlp_options FROM download_queue WHERE id = ?').get(taskId) as any
+    const opts: YtDlpOptions = task?.yt_dlp_options ? JSON.parse(task.yt_dlp_options) : {}
+
+    let dl = this.ytDlp
       .download(url)
-      .filter('mergevideo')
-      .type('mp4')
       .output(path.join(outputDir, baseName + '.%(ext)s'))
       .on('progress', (progress) => {
         if (progress.percentage !== undefined) {
@@ -123,7 +138,30 @@ export class DownloadService {
           })
         }
       })
-      .run()
+
+    // 应用用户配置的 yt-dlp 选项
+    if (opts.format) {
+      dl = dl.format(opts.format)
+    } else {
+      dl = dl.filter('mergevideo').type('mp4')
+    }
+    if (opts.cookiesFromBrowser) dl = dl.cookiesFromBrowser(opts.cookiesFromBrowser)
+    if (opts.cookies) dl = dl.cookies(opts.cookies)
+    if (opts.proxy) dl = dl.proxy(opts.proxy)
+    if (opts.limitRate) dl = dl.rateLimit(opts.limitRate)
+    if (opts.username) dl = dl.username(opts.username)
+    if (opts.password) dl = dl.password(opts.password)
+    if (opts.retries !== undefined) dl = dl.addOption('retries', opts.retries)
+    if (opts.noCheckCertificates) dl = dl.addOption('noCheckCertificates', true)
+    if (opts.geoBypass) dl = dl.addOption('geoBypass', true)
+    if (opts.userAgent) dl = dl.addOption('userAgent', opts.userAgent)
+    if (opts.referer) dl = dl.addOption('referer', opts.referer)
+    if (opts.sleepInterval !== undefined) dl = dl.addOption('sleepInterval', opts.sleepInterval)
+    if (opts.addHeaders) dl = dl.options({ addHeaders: opts.addHeaders })
+    if (opts.extractorArgs) dl = dl.options({ extractorArgs: opts.extractorArgs })
+    if (opts.rawArgs && opts.rawArgs.length > 0) dl = dl.addArgs(...opts.rawArgs)
+
+    const result = await dl.run()
 
     // 如果下载的文件名与预期不同，重命名
     if (result.filePaths && result.filePaths.length > 0) {

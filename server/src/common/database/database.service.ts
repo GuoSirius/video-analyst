@@ -33,6 +33,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN download_status TEXT DEFAULT 'pending'`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN download_tasks TEXT`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN media_fields TEXT`) } catch { /* column exists */ }
+    try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN download_method TEXT`) } catch { /* column exists */ }
+    try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN yt_dlp_options TEXT`) } catch { /* column exists */ }
+    // Fix legacy default: download_status should be NULL (not imported) instead of 'pending'
+    try { this.db.exec(`UPDATE crawl_items SET download_status = NULL WHERE download_status = 'pending'`) } catch { /* ignore */ }
   }
 
   onModuleDestroy() {
@@ -66,7 +70,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         media_type TEXT,
         media_source TEXT,
         status TEXT DEFAULT 'pending',
-        download_status TEXT DEFAULT 'pending',
+        download_status TEXT DEFAULT NULL,
         download_tasks TEXT,
         media_fields TEXT,
         extra_data TEXT,

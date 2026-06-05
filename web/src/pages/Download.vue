@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import api from '../api/client'
+import { usePagination } from '../composables/usePagination'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { downloadAPI } from '../api/modules/download'
 
@@ -16,9 +17,10 @@ const loading = ref(false)
 let sseConnection: EventSource | null = null
 
 // Pagination
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
+const { page, pageSize, total, pageSizes, onPageChange, onPageSizeChange } = usePagination({
+  defaultPageSize: 20,
+  onFetch: () => fetchItems(),
+})
 
 // Upload dialog
 const uploadDialog = ref(false)
@@ -84,22 +86,11 @@ async function fetchItems() {
 
 const refresh = fetchItems
 
-// Watch filters and reset page
+// Watch filters — reset page then fetch
 watch([statusFilter, typeFilter, sourceFilter, taskFilter, keyword], () => {
   page.value = 1
   fetchItems()
 })
-
-function onPageChange(p: number) {
-  page.value = p
-  fetchItems()
-}
-
-function onPageSizeChange(s: number) {
-  pageSize.value = s
-  page.value = 1
-  fetchItems()
-}
 
 // --- Actions ---
 async function startDownload(id: string) {
@@ -286,7 +277,6 @@ async function confirmLink() {
 }
 
 // --- Computed ---
-const deletableSelected = computed(() => selectedIds.value)
 
 function statusLabel(s: string) {
   const map: Record<string, string> = {
@@ -318,10 +308,6 @@ function fileTypeIcon(type: string) {
 function sourceIcon(fieldName: string) {
   if (fieldName === 'upload') return 'text-emerald-400'
   return 'text-blue-400'
-}
-
-function sourceLabel(fieldName: string) {
-  return fieldName === 'upload' ? '上传' : '下载'
 }
 
 // Action visibility per status:
@@ -550,7 +536,7 @@ onUnmounted(teardownSSE)
         <el-pagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
-          :page-sizes="[10, 20, 50, 100]"
+          :page-sizes="pageSizes"
           :total="total"
           layout="total, sizes, prev, pager, next"
           size="small"

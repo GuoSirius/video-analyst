@@ -64,8 +64,54 @@ html.dark { color-scheme: dark; }
 .el-select-dropdown__item.hover, .el-select-dropdown__item:hover { background-color: rgba(55, 65, 81, 0.5); }
 .el-select-dropdown__item.selected { color: #93c5fd; }
 
-/* Checkbox */
-.el-checkbox__label { color: #d1d5db; }
+/* Dialog */
+.el-dialog {
+  --el-dialog-bg-color: #111827;
+  border-radius: 12px;
+}
+.el-dialog__header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 16px 20px;
+}
+.el-dialog__body {
+  padding: 20px;
+}
+.el-dialog__footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 12px 20px;
+}
+.el-dialog__headerbtn .el-dialog__close {
+  color: #6b7280;
+}
+.el-dialog__headerbtn:hover .el-dialog__close {
+  color: #d1d5db;
+}
+
+/* Radio button */
+.el-radio-button__inner {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  color: #9ca3af;
+  font-size: 12px;
+}
+.el-radio-button__inner:hover {
+  color: #d1d5db;
+}
+.el-radio-button.is-active .el-radio-button__inner {
+  background: rgba(59, 130, 246, 0.15) !important;
+  border-color: rgba(59, 130, 246, 0.4) !important;
+  color: #93c5fd !important;
+}
+
+/* Checkbox inner */
+.el-checkbox__inner {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.el-checkbox__input.is-checked .el-checkbox__inner {
+  background-color: #3b82f6;
+  border-color: #3b82f6;
+}
 
 /* Pagination */
 .el-pagination button, .el-pager li { color: #d1d5db; background-color: transparent; }
