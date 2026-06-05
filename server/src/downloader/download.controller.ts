@@ -12,6 +12,15 @@ import { TranscoderService } from '../transcoder/transcoder.service'
 const projectRoot = path.resolve(process.cwd(), '..')
 const mediaDir = path.resolve(projectRoot, 'data', 'media')
 
+/** 修复 multer 上传中文文件名的编码问题 */
+function fixUploadFilename(name: string): string {
+  try {
+    return decodeURIComponent(escape(name))
+  } catch {
+    return name
+  }
+}
+
 /** 将绝对路径转为相对于项目根的路径（用于持久化存储） */
 function toRelative(absolutePath: string): string {
   return path.relative(projectRoot, absolutePath).replace(/\\/g, '/')
@@ -145,15 +154,16 @@ export class DownloadController {
 
     for (const file of files) {
       try {
-        const fileType = this.getFileType(file.originalname)
+        const decodedName = fixUploadFilename(file.originalname)
+        const fileType = this.getFileType(decodedName)
         const taskId = uuid()
         this.db.db.prepare(`
           INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, file_path)
           VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)
-        `).run(taskId, null, `upload://${file.originalname}`, file.originalname, fileType, 'upload', toRelative(file.path))
-        results.push({ filename: file.originalname, ok: true, taskId })
+        `).run(taskId, null, `upload://${decodedName}`, decodedName, fileType, 'upload', toRelative(file.path))
+        results.push({ filename: decodedName, ok: true, taskId })
       } catch (err: any) {
-        results.push({ filename: file.originalname, ok: false, error: err.message })
+        results.push({ filename: fixUploadFilename(file.originalname), ok: false, error: err.message })
       }
     }
 

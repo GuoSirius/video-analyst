@@ -712,6 +712,72 @@ function downloadMethodLabel(task: any): string {
 
 function isRowSelectable(_row: any) { return true }
 
+// ── Download error detail dialog ──
+const errorDialog = ref(false)
+const errorTask = ref<any>(null)
+
+function buildDownloadCommand(task: any): string {
+  if (task.field_name === 'upload') {
+    return `# 上传文件，无命令行\n# 文件名: ${task.filename}`
+  }
+
+  const method = task.download_method
+  const url = task.url
+  const filename = task.filename || 'download'
+
+  if (method === 'file' || (!method && isDirectUrl(url))) {
+    // HTTP 直链
+    return `curl -L -o "${filename}" "${url}"`
+  }
+
+  // yt-dlp
+  const parts = ['yt-dlp']
+  let opts: any = null
+  try { opts = task.yt_dlp_options ? JSON.parse(task.yt_dlp_options) : null } catch { /* ignore */ }
+
+  if (opts) {
+    if (opts.cookiesFromBrowser) parts.push(`--cookies-from-browser ${opts.cookiesFromBrowser}`)
+    if (opts.cookies) parts.push(`--cookies "${opts.cookies}"`)
+    if (opts.proxy) parts.push(`--proxy "${opts.proxy}"`)
+    if (opts.format) parts.push(`--format "${opts.format}"`)
+    if (opts.limitRate) parts.push(`--limit-rate ${opts.limitRate}`)
+    if (opts.userAgent) parts.push(`--user-agent "${opts.userAgent}"`)
+    if (opts.referer) parts.push(`--referer "${opts.referer}"`)
+    if (opts.username) parts.push(`--username "${opts.username}"`)
+    if (opts.password) parts.push(`--password "${opts.password}"`)
+    if (opts.retries !== undefined && opts.retries !== null) parts.push(`--retries ${opts.retries}`)
+    if (opts.sleepInterval !== undefined && opts.sleepInterval !== null) parts.push(`--sleep-interval ${opts.sleepInterval}`)
+    if (opts.geoBypass) parts.push('--geo-bypass')
+    if (opts.noCheckCertificates) parts.push('--no-check-certificates')
+    if (opts.rawArgs && opts.rawArgs.length > 0) {
+      for (const a of opts.rawArgs) parts.push(a)
+    }
+  }
+
+  const baseName = filename.includes('.') ? filename.slice(0, filename.lastIndexOf('.')) : filename
+  parts.push(`-o "${baseName}.%(ext)s"`)
+  parts.push(`"${url}"`)
+
+  return parts.join(' \\\n  ')
+}
+
+function isDirectUrl(url: string): boolean {
+  const ext = url.split('?')[0].split('.').pop()?.toLowerCase() || ''
+  return ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v', 'mp3', 'wav', 'ogg', 'aac', 'pdf', 'jpg', 'png', 'gif'].includes(ext)
+}
+
+function showErrorDetail(task: any) {
+  errorTask.value = task
+  errorDialog.value = true
+}
+
+function copyCommand() {
+  if (!errorTask.value) return
+  const cmd = buildDownloadCommand(errorTask.value)
+  navigator.clipboard.writeText(cmd)
+  ElMessage.success('已复制命令到剪贴板')
+}
+
 // ── SSE ──
 const SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'}/crawler/events`
 
@@ -960,8 +1026,9 @@ onUnmounted(teardownSSE)
               <template v-else-if="row.status === 'downloading'">
                 <el-button size="small" type="danger" plain @click="stopDownload(row.id)">终止</el-button>
               </template>
-              <!-- 下载失败: 重试、删除 -->
+              <!-- 下载失败: 查看异常、重试、删除 -->
               <template v-else-if="row.status === 'failed'">
+                <el-button size="small" plain @click="showErrorDetail(row)">查看异常</el-button>
                 <el-button size="small" type="warning" plain @click="retryDownload(row.id)">重试</el-button>
                 <el-button size="small" type="danger" plain @click="deleteSingle(row.id)">删除</el-button>
               </template>
@@ -1326,6 +1393,66 @@ onUnmounted(teardownSSE)
         <el-button @click="linkDialog = false">取消</el-button>
         <el-button type="primary" :disabled="!linkPreview" :loading="linking" @click="confirmLink">
           <i class="fas fa-download mr-1.5"></i>创建下载任务
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Error Detail Dialog -->
+    <el-dialog v-model="errorDialog" title="下载异常详情" width="720px" destroy-on-close>
+      <div v-if="errorTask" class="space-y-4">
+        <!-- Error message -->
+        <div>
+          <div class="text-xs text-gray-400 mb-2">错误信息</div>
+          <div class="rounded-lg bg-red-500/5 border border-red-500/15 p-3">
+            <pre class="text-xs text-red-400 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ errorTask.error || '(无详细信息)' }}</pre>
+          </div>
+        </div>
+
+        <!-- Download info -->
+        <div class="grid grid-cols-3 gap-3 text-xs">
+          <div>
+            <span class="text-gray-500">文件名</span>
+            <div class="text-gray-300 mt-0.5 truncate" :title="errorTask.filename">{{ errorTask.filename || '-' }}</div>
+          </div>
+          <div>
+            <span class="text-gray-500">下载方式</span>
+            <div class="text-gray-300 mt-0.5">{{ errorTask.download_method || '自动' }}</div>
+          </div>
+          <div>
+            <span class="text-gray-500">类型</span>
+            <div class="text-gray-300 mt-0.5">{{ errorTask.file_type || '-' }}</div>
+          </div>
+        </div>
+
+        <!-- URL -->
+        <div>
+          <div class="text-xs text-gray-400 mb-1">目标 URL</div>
+          <div class="rounded-lg bg-gray-900/60 border border-gray-700/40 p-2.5">
+            <pre class="text-[11px] text-gray-300 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ errorTask.url }}</pre>
+          </div>
+        </div>
+
+        <!-- Reconstructed command -->
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400">等效命令行</span>
+            <el-button size="small" plain @click="copyCommand">
+              <i class="fas fa-copy mr-1.5"></i>复制命令
+            </el-button>
+          </div>
+          <div class="rounded-lg bg-gray-900/60 border border-gray-700/40 p-3">
+            <pre class="text-[11px] text-emerald-300 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ buildDownloadCommand(errorTask) }}</pre>
+          </div>
+          <div v-if="errorTask.download_method === 'yt-dlp' || (!errorTask.download_method && errorTask.field_name !== 'upload')" class="text-[11px] text-gray-600 mt-1.5">
+            💡 复制命令后在终端执行可复现问题。如使用 Docker，请确保容器内已安装 yt-dlp。
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="errorDialog = false">关闭</el-button>
+        <el-button type="primary" plain @click="copyCommand">
+          <i class="fas fa-copy mr-1.5"></i>复制命令
         </el-button>
       </template>
     </el-dialog>
