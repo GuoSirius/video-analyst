@@ -755,7 +755,8 @@ function buildDownloadCommand(task: any): string {
   }
 
   const baseName = filename.includes('.') ? filename.slice(0, filename.lastIndexOf('.')) : filename
-  parts.push(`-o "${baseName}.%(ext)s"`)
+  const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : 'mp4'
+  parts.push(`-o "${baseName}.${ext}"`)
   parts.push(`"${url}"`)
 
   return parts.join(' \\\n  ')

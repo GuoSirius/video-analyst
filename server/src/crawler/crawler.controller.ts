@@ -1589,7 +1589,15 @@ export class CrawlerController {
     if (videoExts.includes(ext)) return 'video'
     if (audioExts.includes(ext)) return 'audio'
 
+    // URL 特征匹配
     if (url.includes('video') || url.includes('mp4') || url.includes('m3u8')) return 'video'
+    // 已知视频平台（URL 不含 .mp4 等视频扩展名也识别为视频）
+    const VIDEO_SITES = ['v.qq.com', 'bilibili.com', 'bilivideo.com', 'b23.tv',
+      'youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com',
+      'youku.com', 'iqiyi.com', 'vimeo.com', 'twitch.tv',
+      'twitter.com', 'x.com', 'instagram.com', 'tiktok.com']
+    if (VIDEO_SITES.some(s => url.includes(s))) return 'video'
+
     if (url.includes('audio') || url.includes('mp3') || url.includes('.wav')) return 'audio'
     return 'unknown'
   }
