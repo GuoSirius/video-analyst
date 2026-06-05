@@ -1,5 +1,5 @@
 import { Injectable, Controller, Post, Get, Delete, Put, Param, Body, Query, Sse, Res } from '@nestjs/common'
-import { Observable } from 'rxjs'
+import { Observable, merge } from 'rxjs'
 import { Response } from 'express'
 import * as cheerio from 'cheerio'
 import * as yaml from 'js-yaml'
@@ -1060,7 +1060,7 @@ export class CrawlerController {
 
   @Sse('events')
   events(): Observable<MessageEvent> {
-    return this.sse.getTaskStream()
+    return merge(this.sse.getTaskStream(), this.sse.getGenericStream())
   }
 
   // ════════════════════════════════════════════════════════════════

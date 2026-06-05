@@ -117,9 +117,9 @@ export class DownloadService {
     }
 
     if (fieldName === 'upload') {
-      // 本地上传：uploads/{YYYY-MM}/
-      const ym = new Date().toISOString().slice(0, 7)  // e.g. 2026-06
-      return path.join(this.downloadDir, 'uploads', ym)
+      // 本地上传：uploads/{YYYY-MM-DD}/
+      const dateStr = new Date().toISOString().slice(0, 10)  // e.g. 2026-06-06
+      return path.join(this.downloadDir, 'uploads', dateStr)
     }
 
     // 手动添加链接 / 其他：manual/{YYYY-MM-DD}/

@@ -798,7 +798,14 @@ function copyCommand() {
   if (!errorTask.value) return
   const cmd = buildDownloadCommand(errorTask.value)
   navigator.clipboard.writeText(cmd)
-  ElMessage.success('已复制命令到剪贴板')
+  ElMessage.success('已复制多行命令到剪贴板')
+}
+
+function copyCommandOneLine() {
+  if (!errorTask.value) return
+  const cmd = buildDownloadCommand(errorTask.value).replace(/ \\\n  /g, ' ')
+  navigator.clipboard.writeText(cmd)
+  ElMessage.success('已复制单行命令到剪贴板')
 }
 
 // ── SSE ──
@@ -1459,15 +1466,20 @@ onUnmounted(teardownSSE)
         <div>
           <div class="flex items-center justify-between mb-2">
             <span class="text-xs text-gray-400">等效命令行</span>
-            <el-button size="small" plain @click="copyCommand">
-              <i class="fas fa-copy mr-1.5"></i>复制命令
-            </el-button>
+            <div class="flex items-center gap-2">
+              <el-button size="small" plain @click="copyCommand">
+                <i class="fas fa-copy mr-1.5"></i>复制多行
+              </el-button>
+              <el-button size="small" plain @click="copyCommandOneLine">
+                <i class="fas fa-copy mr-1.5"></i>复制单行
+              </el-button>
+            </div>
           </div>
           <div class="rounded-lg bg-gray-900/60 border border-gray-700/40 p-3">
             <pre class="text-[11px] text-emerald-300 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ buildDownloadCommand(errorTask) }}</pre>
           </div>
           <div v-if="errorTask.download_method === 'yt-dlp' || (!errorTask.download_method && errorTask.field_name !== 'upload')" class="text-[11px] text-gray-600 mt-1.5">
-            💡 复制命令后在终端执行可复现问题。如使用 Docker，请确保容器内已安装 yt-dlp。
+            💡 复制后在终端执行可复现问题。多行版易阅读，单行版方便直接粘贴。
           </div>
         </div>
       </div>
@@ -1475,7 +1487,10 @@ onUnmounted(teardownSSE)
       <template #footer>
         <el-button @click="errorDialog = false">关闭</el-button>
         <el-button type="primary" plain @click="copyCommand">
-          <i class="fas fa-copy mr-1.5"></i>复制命令
+          <i class="fas fa-copy mr-1.5"></i>复制多行
+        </el-button>
+        <el-button type="primary" plain @click="copyCommandOneLine">
+          <i class="fas fa-copy mr-1.5"></i>复制单行
         </el-button>
       </template>
     </el-dialog>
