@@ -1604,7 +1604,9 @@ export class CrawlerController {
 
   private getFilename(url: string, fieldName: string, title?: string): string {
     const name = title?.replace(/[^\w一-龥]+/g, '_') || fieldName
-    const ext = url.split('?')[0].split('.').pop() || ''
+    // 只从 URL 最后一个 / 段提取扩展名，避免把域名中的 . 误判为扩展名分隔符
+    const lastSegment = url.split('?')[0].split('/').pop() || ''
+    const ext = lastSegment.includes('.') ? lastSegment.split('.').pop()?.toLowerCase() || '' : ''
     return ext ? `${name}.${ext}` : name
   }
 
