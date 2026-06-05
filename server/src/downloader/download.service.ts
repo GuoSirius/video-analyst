@@ -586,8 +586,11 @@ export class DownloadService {
     if (opts.format) {
       dl = dl.format(opts.format)
     } else {
-      dl = dl.filter('mergevideo').type('mp4')
+      // 默认格式：优先 mp4 视频+m4a 音频合并，兜底最佳 mp4 单文件，最后任意格式
+      dl = dl.format('bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best')
     }
+    // 关键：强制合并为 mp4 容器（ffmpeg 默认输出 mkv，mp4 兼容性更好）
+    dl = dl.addOption('mergeOutputFormat', 'mp4')
     if (opts.cookiesFromBrowser) dl = dl.cookiesFromBrowser(opts.cookiesFromBrowser)
     if (opts.cookies) dl = dl.cookies(opts.cookies)
     if (opts.proxy) dl = dl.proxy(opts.proxy)

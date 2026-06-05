@@ -735,11 +735,19 @@ function buildDownloadCommand(task: any): string {
   let opts: any = null
   try { opts = task.yt_dlp_options ? JSON.parse(task.yt_dlp_options) : null } catch { /* ignore */ }
 
+  // Format: custom or default
+  if (opts?.format) {
+    parts.push(`--format "${opts.format}"`)
+  } else {
+    parts.push(`--format "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"`)
+  }
+  // Always merge to mp4 (default behavior)
+  parts.push('--merge-output-format mp4')
+
   if (opts) {
     if (opts.cookiesFromBrowser) parts.push(`--cookies-from-browser ${opts.cookiesFromBrowser}`)
     if (opts.cookies) parts.push(`--cookies "${opts.cookies}"`)
     if (opts.proxy) parts.push(`--proxy "${opts.proxy}"`)
-    if (opts.format) parts.push(`--format "${opts.format}"`)
     if (opts.limitRate) parts.push(`--limit-rate ${opts.limitRate}`)
     if (opts.userAgent) parts.push(`--user-agent "${opts.userAgent}"`)
     if (opts.referer) parts.push(`--referer "${opts.referer}"`)
