@@ -35,6 +35,20 @@ const uploadFilterStatus = ref('all')
 const uploading = ref(false)
 const uploadResults = ref<Array<{ filename: string; ok: boolean; error?: string }>>([])
 const uploadDone = ref(false)
+
+// Computed: which selected items match which action
+const hasUnuploaded = computed(() => stagedFiles.value.some(f => f.status === 'ready' || f.status === 'error'))
+const hasFailed = computed(() => stagedFiles.value.some(f => f.status === 'error'))
+const selReadyOrError = computed(() => uploadSelectedIds.value.filter(id => {
+  const f = stagedFiles.value.find(s => s.id === id); return f && (f.status === 'ready' || f.status === 'error')
+}))
+const selFailed = computed(() => uploadSelectedIds.value.filter(id => {
+  const f = stagedFiles.value.find(s => s.id === id); return f && f.status === 'error'
+}))
+const selSuccess = computed(() => uploadSelectedIds.value.filter(id => {
+  const f = stagedFiles.value.find(s => s.id === id); return f && f.status === 'success'
+}))
+const hasAnySelected = computed(() => uploadSelectedIds.value.length > 0)
 const uploadSelectedIds = ref<string[]>([])
 const uploadTableRef = ref<any>(null)
 let syncingUploadSelection = false
@@ -473,6 +487,57 @@ function deleteSelectedStaged() {
   uploadSelectedIds.value = uploadSelectedIds.value.filter(id => !selIds.has(id))
 }
 
+/** Retry selected failed files */
+async function retrySelected() {
+  const selIds = new Set(uploadSelectedIds.value)
+  const target = stagedFiles.value.filter(f => selIds.has(f.id) && f.status === 'error')
+  if (!target.length) { ElMessage.warning('所选文件中没有上传失败的'); return }
+
+  for (const f of target) f.status = 'uploading'
+  uploading.value = true
+  try {
+    const fd = new FormData()
+    for (const f of target) fd.append('files', f.file)
+    const { data } = await api.post('/download/upload', fd)
+    if (data.results) {
+      for (const r of data.results) {
+        const staged = stagedFiles.value.find(f => f.name === r.filename && f.status === 'uploading')
+        if (staged) { staged.status = r.ok ? 'success' : 'error'; staged.error = r.error }
+      }
+    }
+    const okC = target.filter(f => f.status === 'success').length
+    const failC = target.filter(f => f.status === 'error').length
+    if (failC > 0) ElMessage.warning(`${okC} 个成功，${failC} 个仍失败`)
+    else ElMessage.success(`${okC} 个重试成功`)
+  } catch {
+    for (const f of target) f.status = 'error'
+    ElMessage.error('重试失败')
+  }
+  uploading.value = false
+}
+
+/** Import selected successfully uploaded files to main list (close dialog if no remaining failures) */
+async function importSelected() {
+  const selIds = new Set(uploadSelectedIds.value)
+  const target = stagedFiles.value.filter(f => selIds.has(f.id) && f.status === 'success')
+  if (!target.length) { ElMessage.warning('所选文件中没有已上传成功的'); return }
+
+  // Remove imported files from staged list
+  stagedFiles.value = stagedFiles.value.filter(f => !selIds.has(f.id))
+  uploadSelectedIds.value = uploadSelectedIds.value.filter(id => !selIds.has(id))
+
+  const remainingFail = stagedFiles.value.filter(f => f.status === 'error').length
+  const remainingReady = stagedFiles.value.filter(f => f.status === 'ready').length
+  if (remainingFail === 0 && remainingReady === 0 && stagedFiles.value.every(f => f.status === 'success')) {
+    ElMessage.success('全部文件已上传并带入列表')
+    uploadDialog.value = false
+    await refresh()
+  } else {
+    ElMessage.success(`已将 ${target.length} 个文件带入列表`)
+    await refresh()
+  }
+}
+
 /** Retry all failed files */
 async function retryAllFailed() {
   const failedFiles = stagedFiles.value.filter(f => f.status === 'error')
@@ -504,14 +569,6 @@ async function retryAllFailed() {
     ElMessage.error('重试失败')
   }
   uploading.value = false
-}
-
-async function ignoreFailedAndImport() {
-  const successCount = stagedFiles.value.filter(f => f.status === 'success').length
-  if (successCount === 0) { ElMessage.warning('没有成功上传的文件可以带入'); return }
-  ElMessage.success(`已将 ${successCount} 个成功上传的文件带入列表`)
-  uploadDialog.value = false
-  await refresh()
 }
 
 function buildYtDlpOptionsFromLink(): any | null {
@@ -946,29 +1003,45 @@ onUnmounted(teardownSSE)
     <!-- ════════════════════════════════════════════════════════ -->
     <el-dialog v-model="uploadDialog" title="上传文件" width="900px" destroy-on-close :close-on-click-modal="false">
       <div class="space-y-4">
-        <!-- Top bar: file selector + upload buttons -->
-        <div class="flex items-center gap-3 flex-wrap">
+        <!-- Top bar: file selector + action buttons -->
+        <div class="flex items-center gap-2 flex-wrap">
+          <!-- File selector -->
           <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-500/10 border border-blue-500/25 cursor-pointer hover:bg-blue-500/20 transition-all text-xs">
             <i class="fas fa-folder-open text-blue-400"></i>
             选择文件
             <input type="file" multiple accept="video/*,audio/*,image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.json,.yaml,.yml,.txt,.md,.ts,.m3u8" class="hidden" @change="handleUploadFileSelect" />
           </label>
-          <el-button type="primary" size="small" :disabled="!stagedFiles.filter(f => f.status !== 'success').length || uploading" :loading="uploading" @click="startUpload">
+
+          <!-- Global actions -->
+          <el-button type="primary" size="small" :disabled="!hasUnuploaded || uploading" :loading="uploading" @click="startUpload">
             <i class="fas fa-upload mr-1.5"></i>全部上传
           </el-button>
-          <el-button v-if="uploadSelectedIds.length" size="small" type="success" plain :disabled="uploading" @click="uploadSelected">
-            <i class="fas fa-check mr-1"></i>上传所选 ({{ uploadSelectedIds.length }})
+          <el-button v-if="hasFailed" size="small" type="warning" plain @click="retryAllFailed">
+            <i class="fas fa-rotate-right mr-1.5"></i>全部重试
           </el-button>
-          <el-button v-if="uploadDone && stagedFiles.some(f => f.status === 'error')" size="small" type="warning" plain @click="retryAllFailed">
-            <i class="fas fa-rotate-right mr-1"></i>全部重试
+
+          <!-- Separator -->
+          <span v-if="hasAnySelected" class="text-gray-700 mx-1">|</span>
+
+          <!-- Batch actions (only when selection exists) -->
+          <el-button v-if="hasAnySelected" size="small" type="danger" plain @click="deleteSelectedStaged">
+            <i class="fas fa-trash-can mr-1"></i>批量删除 ({{ uploadSelectedIds.length }})
           </el-button>
-          <el-button v-if="uploadSelectedIds.length" size="small" type="danger" plain @click="deleteSelectedStaged">
-            <i class="fas fa-trash-can mr-1"></i>删除所选 ({{ uploadSelectedIds.length }})
+          <el-button v-if="selReadyOrError.length" size="small" type="primary" plain :disabled="uploading" @click="uploadSelected">
+            <i class="fas fa-upload mr-1"></i>批量上传 ({{ selReadyOrError.length }})
           </el-button>
+          <el-button v-if="selFailed.length" size="small" type="warning" plain @click="retrySelected">
+            <i class="fas fa-rotate-right mr-1"></i>批量重试 ({{ selFailed.length }})
+          </el-button>
+          <el-button v-if="selSuccess.length" size="small" type="success" plain @click="importSelected">
+            <i class="fas fa-check mr-1"></i>带入 ({{ selSuccess.length }})
+          </el-button>
+
+          <!-- Status text -->
           <span v-if="stagedFiles.length" class="text-xs text-gray-500 ml-auto">
-            {{ stagedFiles.filter(f => f.status === 'success').length }}/{{ stagedFiles.length }} 个已上传
+            {{ stagedFiles.filter(f => f.status === 'success').length }}/{{ stagedFiles.length }} 已上传
           </span>
-          <span v-else class="text-xs text-gray-600 ml-auto">支持视频/音频/图片/文档/数据文件</span>
+          <span v-else class="text-xs text-gray-600 ml-auto">支持视频/音频/图片/文档</span>
         </div>
 
         <!-- File table -->
@@ -1059,21 +1132,16 @@ onUnmounted(teardownSSE)
             </el-table>
           </div>
 
-          <!-- Post-upload actions: ignore failures -->
-          <div v-if="uploadDone && stagedFiles.some(f => f.status === 'error') && stagedFiles.some(f => f.status === 'success')" class="flex items-center gap-2">
-            <div class="flex items-center gap-1 text-xs text-red-400">
-              <i class="fas fa-triangle-exclamation"></i>
-              {{ stagedFiles.filter(f => f.status === 'error').length }} 个上传失败
-            </div>
-            <el-button size="small" type="primary" plain @click="ignoreFailedAndImport">
-              <i class="fas fa-check mr-1"></i>忽略失败项，带入成功项
-            </el-button>
-          </div>
-
-          <!-- All done -->
-          <div v-if="uploadDone && !stagedFiles.some(f => f.status === 'error') && stagedFiles.some(f => f.status === 'success')" class="flex items-center gap-1 text-xs text-emerald-400">
-            <i class="fas fa-circle-check"></i>
-            全部上传成功，已自动带入列表
+          <!-- Post-upload status -->
+          <div v-if="uploadDone" class="flex items-center gap-2 text-xs" :class="hasFailed ? 'text-amber-400' : 'text-emerald-400'">
+            <i :class="hasFailed ? 'fas fa-triangle-exclamation' : 'fas fa-circle-check'"></i>
+            <template v-if="hasFailed">
+              {{ stagedFiles.filter(f => f.status === 'error').length }} 个上传失败，
+              {{ stagedFiles.filter(f => f.status === 'success').length }} 个成功 — 可选中后重试或带入
+            </template>
+            <template v-else>
+              全部上传成功，已自动带入列表
+            </template>
           </div>
         </div>
 
