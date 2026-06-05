@@ -582,21 +582,45 @@ export class DownloadService {
         }
       })
 
-    // 应用用户配置的 yt-dlp 选项
-    if (opts.format) {
-      dl = dl.format(opts.format)
-    } else {
-      // 默认格式：优先 mp4 视频+m4a 音频合并，兜底最佳 mp4 单文件，最后任意格式
-      dl = dl.format('bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best')
+    // ════════════════════════════════════════════════════════
+    // yt-dlp 参数（三层合并：硬编码安全默认 < 全局设置 < 任务配置）
+    // ════════════════════════════════════════════════════════
+
+    // 1. 硬编码安全默认（可被覆盖）
+    const mergedOpts: any = {
+      format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+      mergeOutputFormat: 'mp4',
+      noPlaylist: true,         // 防止意外下载整个播放列表
+      socketTimeout: 30,        // 避免连接挂起
+      extractorRetries: 3,      // 提取器错误重试
     }
-    // 关键：强制合并为 mp4 容器（ffmpeg 默认输出 mkv，mp4 兼容性更好）
-    dl = dl.addOption('mergeOutputFormat', 'mp4')
-    if (opts.cookiesFromBrowser) dl = dl.cookiesFromBrowser(opts.cookiesFromBrowser)
-    if (opts.cookies) dl = dl.cookies(opts.cookies)
-    if (opts.proxy) dl = dl.proxy(opts.proxy)
-    if (opts.limitRate) dl = dl.rateLimit(opts.limitRate)
-    if (opts.username) dl = dl.username(opts.username)
-    if (opts.password) dl = dl.password(opts.password)
+
+    // 2. 全局覆盖（settings 表 download_ytdlp_defaults，JSON 格式）
+    try {
+      const globalRow = this.db.db.prepare("SELECT value FROM settings WHERE key = 'download_ytdlp_defaults'").get() as any
+      if (globalRow?.value) {
+        const globalOpts = JSON.parse(globalRow.value)
+        Object.assign(mergedOpts, globalOpts)
+      }
+    } catch { /* ignore invalid JSON */ }
+
+    // 3. 任务级覆盖（download_queue.yt_dlp_options）
+    if (opts && Object.keys(opts).length > 0) {
+      Object.assign(mergedOpts, opts)
+    }
+
+    // 应用合并后的参数
+    dl = dl.format(mergedOpts.format)
+    dl = dl.addOption('mergeOutputFormat', mergedOpts.mergeOutputFormat)
+    if (mergedOpts.noPlaylist) dl = dl.addOption('noPlaylist', true)
+    if (mergedOpts.socketTimeout) dl = dl.addOption('socketTimeout', mergedOpts.socketTimeout)
+    if (mergedOpts.extractorRetries) dl = dl.addOption('extractorRetries', mergedOpts.extractorRetries)
+    if (mergedOpts.cookiesFromBrowser) dl = dl.cookiesFromBrowser(mergedOpts.cookiesFromBrowser)
+    if (mergedOpts.cookies) dl = dl.cookies(mergedOpts.cookies)
+    if (mergedOpts.proxy) dl = dl.proxy(mergedOpts.proxy)
+    if (mergedOpts.limitRate) dl = dl.rateLimit(mergedOpts.limitRate)
+    if (mergedOpts.username) dl = dl.username(mergedOpts.username)
+    if (mergedOpts.password) dl = dl.password(mergedOpts.password)
     if (opts.retries !== undefined) dl = dl.addOption('retries', opts.retries)
     if (opts.noCheckCertificates) dl = dl.addOption('noCheckCertificates', true)
     if (opts.geoBypass) dl = dl.addOption('geoBypass', true)

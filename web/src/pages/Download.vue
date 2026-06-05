@@ -735,14 +735,14 @@ function buildDownloadCommand(task: any): string {
   let opts: any = null
   try { opts = task.yt_dlp_options ? JSON.parse(task.yt_dlp_options) : null } catch { /* ignore */ }
 
-  // Format: custom or default
-  if (opts?.format) {
-    parts.push(`--format "${opts.format}"`)
-  } else {
-    parts.push(`--format "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"`)
-  }
-  // Always merge to mp4 (default behavior)
+  // Format (任务自定义 > 系统默认)
+  parts.push(`--format "${opts?.format || 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'}"`)
   parts.push('--merge-output-format mp4')
+
+  // 安全参数（任务可覆盖）
+  if (opts?.noPlaylist !== false) parts.push('--no-playlist')
+  parts.push(`--socket-timeout ${opts?.socketTimeout || 30}`)
+  parts.push(`--extractor-retries ${opts?.extractorRetries || 3}`)
 
   if (opts) {
     if (opts.cookiesFromBrowser) parts.push(`--cookies-from-browser ${opts.cookiesFromBrowser}`)
