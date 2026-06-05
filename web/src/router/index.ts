@@ -10,8 +10,12 @@ const router = createRouter({
     },
     {
       path: '/crawler',
-      redirect: '/crawler/tasks',
+      component: () => import('../layouts/CrawlerLayout.vue'),
       children: [
+        {
+          path: '',
+          redirect: '/crawler/tasks',
+        },
         {
           path: 'tasks',
           name: 'crawler-tasks',
@@ -25,14 +29,33 @@ const router = createRouter({
       ],
     },
     {
-      path: '/transcoder',
-      name: 'transcoder',
-      component: () => import('../pages/Transcoder.vue'),
+      path: '/media',
+      component: () => import('../layouts/MediaLayout.vue'),
+      children: [
+        {
+          path: '',
+          redirect: '/media/resources',
+        },
+        {
+          path: 'resources',
+          name: 'media-download',
+          component: () => import('../pages/Download.vue'),
+        },
+        {
+          path: 'transcode',
+          name: 'media-transcode',
+          component: () => import('../pages/Transcode.vue'),
+        },
+      ],
     },
     {
       path: '/ai',
-      redirect: '/ai/whisper',
+      component: () => import('../layouts/AiLayout.vue'),
       children: [
+        {
+          path: '',
+          redirect: '/ai/whisper',
+        },
         {
           path: 'whisper',
           name: 'ai-whisper',

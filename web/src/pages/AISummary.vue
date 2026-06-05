@@ -206,6 +206,7 @@ onMounted(refresh)
         v-if="transcriptions.length"
         :data="transcriptions"
         size="small"
+        row-key="id"
         max-height="250"
         @selection-change="(rows: any) => selectedTransIds = rows.map((r: any) => r.id)"
       >

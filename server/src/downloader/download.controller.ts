@@ -1,0 +1,343 @@
+import { Controller, Get, Post, Delete, Param, Body, Query, UploadedFiles, UseInterceptors } from '@nestjs/common'
+import { FilesInterceptor } from '@nestjs/platform-express'
+import { diskStorage } from 'multer'
+import * as path from 'path'
+import * as fs from 'fs'
+import { v4 as uuid } from 'uuid'
+import { DownloadService } from './download.service'
+import { DatabaseService } from '../common/database/database.service'
+import { QueueService } from '../common/queue/queue.service'
+import { TranscoderService } from '../transcoder/transcoder.service'
+
+const mediaDir = path.resolve(process.cwd(), '..', 'data', 'media')
+
+@Controller('api/download')
+export class DownloadController {
+  constructor(
+    private readonly download: DownloadService,
+    private readonly db: DatabaseService,
+    private readonly queue: QueueService,
+    private readonly transcoder: TranscoderService,
+  ) {}
+
+  @Get('queue')
+  getQueue(@Query() query: {
+    status?: string
+    file_type?: string
+    field_name?: string
+    item_id?: string
+    keyword?: string
+    page?: string
+    pageSize?: string
+  }) {
+    const { status, file_type, field_name, item_id, keyword, page, pageSize } = query
+    const pageNum = page ? parseInt(page, 10) : 1
+    const size = pageSize ? parseInt(pageSize, 10) : 20
+    const offset = (pageNum - 1) * size
+
+    let whereClause = ''
+    const params: any[] = []
+
+    if (status && status !== 'all') {
+      whereClause += 'WHERE status = ?'
+      params.push(status)
+    }
+
+    if (file_type && file_type !== 'all') {
+      whereClause += whereClause ? ' AND file_type = ?' : 'WHERE file_type = ?'
+      params.push(file_type)
+    }
+
+    if (field_name && field_name !== 'all') {
+      whereClause += ' AND field_name = ?'
+      params.push(field_name)
+    }
+
+    if (item_id && item_id !== 'all') {
+      whereClause += ' AND item_id = ?'
+      params.push(item_id)
+    }
+
+    if (keyword) {
+      whereClause += ' AND (filename LIKE ? OR url LIKE ? OR error LIKE ?)'
+      params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`)
+    }
+
+    // Get total count
+    const countRow = this.db.db.prepare(`SELECT COUNT(*) as count FROM download_queue ${whereClause}`).get(...params) as any
+    const total = countRow?.count || 0
+
+    // Get paginated data
+    const rows = this.db.db.prepare(`
+      SELECT * FROM download_queue ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, size, offset) as any[]
+
+    // Get stats (always from full dataset, not filtered)
+    const statsRow = this.db.db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'downloading' THEN 1 ELSE 0 END) as downloading,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+      FROM download_queue
+    `).get() as any
+
+    return {
+      data: rows,
+      total,
+      page: pageNum,
+      pageSize: size,
+      stats: {
+        total: statsRow?.total || 0,
+        completed: statsRow?.completed || 0,
+        downloading: statsRow?.downloading || 0,
+        pending: statsRow?.pending || 0,
+        failed: statsRow?.failed || 0,
+      }
+    }
+  }
+
+  @Get('files')
+  getUploadedFiles() {
+    const files = this.db.db.prepare(
+      "SELECT * FROM download_queue WHERE status = 'completed' AND file_path IS NOT NULL ORDER BY created_at DESC"
+    ).all() as any[]
+    return files
+  }
+
+  @Get('stats')
+  getStats() {
+    return this.download.getStats()
+  }
+
+  @Post('upload')
+  @UseInterceptors(FilesInterceptor('files', 20, {
+    storage: diskStorage({
+      destination: (_req, _file, cb) => {
+        if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true })
+        cb(null, mediaDir)
+      },
+      filename: (_req, file, cb) => {
+        const ext = path.extname(file.originalname)
+        cb(null, `${uuid()}${ext}`)
+      },
+    }),
+  }))
+  async uploadFiles(@UploadedFiles() files: Express.Multer.File[]) {
+    const createdTasks: string[] = []
+    for (const file of files) {
+      const fileType = this.getFileType(file.originalname)
+      const taskId = uuid()
+      this.db.db.prepare(`
+        INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, file_path)
+        VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)
+      `).run(taskId, null, `upload://${file.originalname}`, file.originalname, fileType, 'upload', file.path)
+      createdTasks.push(taskId)
+    }
+    return { ok: true, count: files.length, taskIds: createdTasks }
+  }
+
+  private getFileType(filename: string): string {
+    const ext = filename.split('.').pop()?.toLowerCase() || ''
+    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
+    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv']
+    const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma']
+    if (imageExts.includes(ext)) return 'image'
+    if (videoExts.includes(ext)) return 'video'
+    if (audioExts.includes(ext)) return 'audio'
+    return 'unknown'
+  }
+
+  @Post('queue/:id/start')
+  async startDownload(@Param('id') id: string) {
+    const result = await this.download.retryDownload(id)
+    return result
+  }
+
+  @Post('queue/process')
+  async processAll() {
+    await this.download.processDownloads()
+    return { ok: true }
+  }
+
+  @Post('queue/batch-delete')
+  batchDelete(@Body() body: { ids: string[] }) {
+    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
+      return { error: 'ids array is required' }
+    }
+    // Delete files first
+    const tasks = this.db.db.prepare('SELECT * FROM download_queue WHERE id IN (?)').all(body.ids) as any[]
+    for (const task of tasks) {
+      if (task.file_path && fs.existsSync(task.file_path)) {
+        try { fs.unlinkSync(task.file_path) } catch {}
+      }
+    }
+    const stmt = this.db.db.prepare('DELETE FROM download_queue WHERE id = ?')
+    for (const id of body.ids) {
+      stmt.run(id)
+    }
+    return { ok: true, count: body.ids.length }
+  }
+
+  @Delete('queue/:id')
+  deleteTask(@Param('id') id: string) {
+    return this.download.deleteTask(id)
+  }
+
+  @Post('queue/:id/transcode')
+  async startTranscode(@Param('id') id: string) {
+    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
+    if (!task) return { error: 'Task not found' }
+    if (!task.file_path || !fs.existsSync(task.file_path)) return { error: '文件不存在' }
+
+    const outputDir = path.resolve(process.cwd(), '..', 'data', 'transcoded')
+    const fileName = task.filename || path.basename(task.file_path)
+    const queueTask = this.queue.createTask('transcode', {
+      file: task.file_path,
+      outputDir,
+      source: 'download',
+      fileName,
+    })
+
+    // Process the transcode task
+    this.processTranscodeTask(queueTask.id, task.file_path, outputDir)
+
+    return { ok: true, taskId: queueTask.id }
+  }
+
+  private async processTranscodeTask(taskId: string, inputPath: string, outputDir: string) {
+    try {
+      this.queue.updateTaskStatus(taskId, 'running')
+      this.queue.updateTaskProgress(taskId, 0)
+      const outputPath = await this.transcoder.transcode(inputPath, outputDir, (pct) => {
+        this.queue.updateTaskProgress(taskId, pct)
+      })
+      this.queue.updateTaskResult(taskId, { outputPath })
+    } catch (err: any) {
+      this.queue.updateTaskError(taskId, err.message)
+    }
+  }
+
+  @Post('queue/:id/retry')
+  async retryDownload(@Param('id') id: string) {
+    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'failed' && task.status !== 'completed') {
+      return { error: '只有失败的任务可以重试' }
+    }
+    // For upload items, don't allow retry (no re-upload)
+    if (task.field_name === 'upload') {
+      return { error: '上传的文件不支持重新下载' }
+    }
+    // Reset status to pending (the existing service method handles the rest)
+    const result = await this.download.retryDownload(id)
+    return result
+  }
+
+  @Get('filters')
+  getFilters() {
+    // Get distinct file_type, field_name, and item_ids with their associated task_ids
+    const types = this.db.db.prepare(
+      "SELECT DISTINCT file_type FROM download_queue WHERE file_type IS NOT NULL ORDER BY file_type"
+    ).all() as { file_type: string }[]
+
+    const sources = this.db.db.prepare(
+      "SELECT DISTINCT field_name FROM download_queue WHERE field_name IS NOT NULL ORDER BY field_name"
+    ).all() as { field_name: string }[]
+
+    const tasks = this.db.db.prepare(
+      `SELECT DISTINCT dq.item_id, ci.title
+       FROM download_queue dq
+       LEFT JOIN crawl_items ci ON dq.item_id = ci.id
+       WHERE dq.item_id IS NOT NULL
+       ORDER BY dq.item_id`
+    ).all() as { item_id: string; title: string }[]
+
+    return {
+      types: types.map(t => t.file_type),
+      sources: sources.map(s => s.field_name),
+      tasks: tasks.map(t => ({
+        item_id: t.item_id,
+        label: t.title || t.item_id.slice(0, 8),
+      })),
+    }
+  }
+
+  // ==================== 新增强端：创建下载任务、测试链接 ====================
+
+  /**
+   * 测试视频链接能否获取信息
+   * POST /api/download/test
+   * body: { url: string, fieldName?: string }
+   */
+  @Post('test')
+  async testLink(@Body() body: { url: string; fieldName?: string }) {
+    if (!body.url) {
+      return { error: 'URL 不能为空' }
+    }
+
+    const info = await this.download.getVideoInfo(body.url)
+    return {
+      ok: true,
+      info: {
+        title: info.title,
+        ext: info.ext,
+        filesize: info.filesize,
+        filesizeHuman: info.filesize ? this.formatFileSize(info.filesize) : undefined,
+        width: info.width,
+        height: info.height,
+        duration: info.duration,
+        durationHuman: info.duration ? this.formatDuration(info.duration) : undefined,
+        site: this.download.detectSite(body.url),
+      },
+    }
+  }
+
+  /**
+   * 从 URL 创建下载任务
+   * POST /api/download/create
+   * body: { urls: [{url, fieldName?}], item_id?: string, filenamePrefix?: string }
+   */
+  @Post('create')
+  async createDownload(
+    @Body() body: { urls: Array<{ url: string; fieldName?: string }>; item_id?: string; filenamePrefix?: string },
+  ) {
+    if (!body.urls || !Array.isArray(body.urls) || body.urls.length === 0) {
+      return { error: 'urls 数组不能为空' }
+    }
+
+    // 验证每个 URL
+    for (const item of body.urls) {
+      if (!item.url) {
+        return { error: 'URL 不能为空' }
+      }
+    }
+
+    const taskIds = await this.download.createDownloadTask(body.urls, {
+      item_id: body.item_id,
+      filenamePrefix: body.filenamePrefix,
+    })
+
+    return { ok: true, taskIds }
+  }
+
+  // ==================== 工具方法 ====================
+
+  private formatFileSize(bytes: number): string {
+    if (bytes < 1024) return bytes + ' B'
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB'
+  }
+
+  private formatDuration(seconds: number): string {
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    const s = Math.floor(seconds % 60)
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    return `${m}:${String(s).padStart(2, '0')}`
+  }
+}

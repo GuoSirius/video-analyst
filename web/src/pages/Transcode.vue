@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 // --- State ---
 const ffmpegStatus = ref<any>(null)
 const tasks = ref<any[]>([])
+const selectedTasks = ref<any[]>([])
 const sourceFilter = ref('all')
 const statusFilter = ref('all')
 
@@ -114,6 +115,23 @@ async function deleteTask(id: string) {
   } catch { /* cancelled */ }
 }
 
+function handleSelectionChange(rows: any[]) {
+  selectedTasks.value = rows
+}
+
+async function batchDelete() {
+  if (!selectedTasks.value.length) { ElMessage.warning('请先选择要删除的任务'); return }
+  try {
+    await ElMessageBox.confirm(`确定要删除选中的 ${selectedTasks.value.length} 个转码任务吗？`, '批量删除确认', { type: 'warning' })
+    for (const task of selectedTasks.value) {
+      await transcoderAPI.deleteTask(task.id)
+    }
+    ElMessage.success(`已删除 ${selectedTasks.value.length} 个任务`)
+    selectedTasks.value = []
+    refresh()
+  } catch { /* cancelled */ }
+}
+
 // --- Computed ---
 const filteredTasks = computed(() => {
   let result = tasks.value
@@ -162,9 +180,17 @@ onMounted(() => { checkFfmpeg(); refresh() })
     <div class="flex items-center justify-between mb-5">
       <div>
         <h2 class="text-lg font-bold mb-1">转码处理</h2>
-        <p class="text-[13px] text-gray-500">音视频文件 → FFmpeg 转码 → 16kHz mono WAV</p>
+        <p class="text-[13px] text-gray-500">本地音视频文件 → FFmpeg 转码 → 16kHz mono WAV</p>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <span v-if="selectedTasks.length" class="text-xs text-gray-400">已选 {{ selectedTasks.length }} 项</span>
+        <el-button
+          v-if="selectedTasks.length"
+          type="danger" size="small" plain
+          @click="batchDelete"
+        >
+          <i class="fas fa-trash-can mr-1.5"></i>批量删除 ({{ selectedTasks.length }})
+        </el-button>
         <span v-if="ffmpegStatus?.found" class="text-xs text-emerald-400">
           <i class="fas fa-circle text-[5px] mr-1"></i>FFmpeg {{ ffmpegStatus.version?.split('-')[0] }}
         </span>
@@ -205,13 +231,20 @@ onMounted(() => { checkFfmpeg(); refresh() })
           >{{ f.l }}</el-button>
         </div>
       </div>
-      <span class="text-xs text-gray-500">共 {{ filteredTasks.length }} 个任务</span>
     </div>
 
     <!-- Task Table -->
     <div class="card-static">
-      <el-table v-if="filteredTasks.length" :data="filteredTasks" size="small" row-key="id">
-        <el-table-column label="文件名" min-width="180" show-overflow-tooltip>
+      <el-table
+        v-if="filteredTasks.length"
+        :data="filteredTasks"
+        size="small"
+        row-key="id"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="40" fixed="left" :reserve-selection="true" />
+        <el-table-column type="index" label="序号" width="55" align="center" fixed="left" />
+        <el-table-column label="文件名" min-width="180" show-overflow-tooltip fixed="left">
           <template #default="{ row }">
             <span class="text-xs text-gray-300">
               {{ row.payload?.fileName || row.payload?.file?.split(/[\\/]/).pop() || row.id.slice(0, 12) + '...' }}

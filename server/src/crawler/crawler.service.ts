@@ -44,6 +44,10 @@ export interface CrawlPayload {
   idField?: string
   /** Error handling mode: 'lenient' = skip all errors, 'standard' = retry then skip, 'strict' = fail on error */
   errorMode?: 'lenient' | 'standard' | 'strict'
+  /** Whether to automatically import media resources to download queue after crawl */
+  autoDownload?: boolean
+  /** Field names to download (comma-separated). Only these fields will be downloaded. If not set, all media fields are downloaded. */
+  downloadFields?: string
 }
 
 @Injectable()

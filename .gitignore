@@ -9,6 +9,7 @@ Thumbs.db
 .cache/
 
 # 数据：数据库提交，音视频/导出文件忽略
+data/downloads/
 data/media/
 data/transcoded/
 data/exports/

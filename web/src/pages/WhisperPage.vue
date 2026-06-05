@@ -128,6 +128,7 @@ onMounted(refresh)
         v-if="crawlItems.length"
         :data="crawlItems"
         size="small"
+        row-key="id"
         max-height="250"
         @selection-change="(rows: any) => selectedItemIds = rows.map((r: any) => r.id)"
       >

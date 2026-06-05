@@ -27,7 +27,13 @@ const navItems: NavItem[] = [
       { path: '/crawler/items', label: '采集列表' },
     ],
   },
-  { path: '/transcoder', label: '转码处理', icon: 'Switch' },
+  {
+    path: '/media', label: '媒体资源', icon: 'Folder',
+    children: [
+      { path: '/media/resources', label: '资源管理' },
+      { path: '/media/transcode', label: '转码处理' },
+    ],
+  },
   {
     path: '/ai', label: 'AI 处理', icon: 'Cpu',
     children: [

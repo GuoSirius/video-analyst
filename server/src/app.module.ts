@@ -11,6 +11,7 @@ import { WhisperModule } from './whisper/whisper.module'
 import { AIModule } from './ai/ai.module'
 import { ExportModule } from './export/export.module'
 import { SettingsModule } from './settings/settings.module'
+import { DownloadModule } from './downloader/download.module'
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { SettingsModule } from './settings/settings.module'
     PipelineModule,
     SettingsModule,
     CrawlerModule,
+    DownloadModule,
     TranscoderModule,
     WhisperModule,
     AIModule,

@@ -27,24 +27,130 @@ export class CrawlerController {
     return { taskId: task.id }
   }
 
+  @Get('tasks/paginated')
+  getTasksPaginated(@Query() query: {
+    status?: string
+    keyword?: string
+    page?: string
+    pageSize?: string
+  }) {
+    const { status, keyword, page, pageSize } = query
+    const pageNum = page ? parseInt(page, 10) : 1
+    const size = pageSize ? parseInt(pageSize, 10) : 20
+    const offset = (pageNum - 1) * size
+
+    // Build WHERE from queue tasks
+    let tasks = this.queue.getTasksByType('crawl') as any[]
+
+    if (keyword) {
+      const kw = keyword.toLowerCase()
+      tasks = tasks.filter((t: any) => {
+        const name = (t.payload?.name || '').toLowerCase()
+        const url = (t.payload?.url || '').toLowerCase()
+        return name.includes(kw) || url.includes(kw)
+      })
+    }
+
+    if (status && status !== 'all') {
+      tasks = tasks.filter((t: any) => t.status === status)
+    }
+
+    const total = tasks.length
+    const paginated = tasks.slice(offset, offset + size)
+
+    return { tasks: paginated, total, page: pageNum, pageSize: size }
+  }
+
   @Get('tasks')
-  getTasks() {
-    return this.queue.getTasksByType('crawl')
+  getTasks(@Query() query: { status?: string; keyword?: string }) {
+    const { status, keyword } = query
+    let tasks = this.queue.getTasksByType('crawl') as any[]
+
+    if (keyword) {
+      const kw = keyword.toLowerCase()
+      tasks = tasks.filter((t: any) => {
+        const name = (t.payload?.name || '').toLowerCase()
+        const url = (t.payload?.url || '').toLowerCase()
+        return name.includes(kw) || url.includes(kw)
+      })
+    }
+
+    if (status && status !== 'all') {
+      tasks = tasks.filter((t: any) => t.status === status)
+    }
+
+    return tasks
   }
 
   @Get('items')
-  getItems(@Query('taskId') taskId?: string, @Query('status') status?: string) {
-    let rows: any[]
-    if (taskId && status) {
-      rows = this.db.db.prepare('SELECT * FROM crawl_items WHERE task_id = ? AND status = ? ORDER BY created_at DESC').all(taskId, status) as any[]
-    } else if (taskId) {
-      rows = this.db.db.prepare('SELECT * FROM crawl_items WHERE task_id = ? ORDER BY created_at DESC').all(taskId) as any[]
-    } else if (status) {
-      rows = this.db.db.prepare('SELECT * FROM crawl_items WHERE status = ? ORDER BY created_at DESC').all(status) as any[]
-    } else {
-      rows = this.db.db.prepare('SELECT * FROM crawl_items ORDER BY created_at DESC').all() as any[]
+  getItems(@Query() query: {
+    taskId?: string
+    status?: string
+    mediaType?: string
+    mediaSource?: string
+    keyword?: string
+    page?: string
+    pageSize?: string
+  }) {
+    const { taskId, status, mediaType, mediaSource, keyword, page, pageSize } = query
+    const pageNum = page ? parseInt(page, 10) : 1
+    const size = pageSize ? parseInt(pageSize, 10) : 20
+    const offset = (pageNum - 1) * size
+
+    // Build WHERE conditions
+    const conditions: string[] = []
+    const params: any[] = []
+
+    if (taskId) {
+      conditions.push('task_id = ?')
+      params.push(taskId)
     }
-    return rows
+    if (mediaType) {
+      conditions.push('media_type = ?')
+      params.push(mediaType)
+    }
+    if (mediaSource) {
+      conditions.push('media_source = ?')
+      params.push(mediaSource)
+    }
+
+    // Handle status filtering (including compound statuses)
+    if (status && status !== 'all') {
+      if (status === 'not_imported') {
+        conditions.push("(status = 'crawled' AND (download_status IS NULL OR download_status != 'imported'))")
+      } else if (status === 'imported') {
+        conditions.push("(status = 'crawled' AND download_status = 'imported')")
+      } else {
+        conditions.push('status = ?')
+        params.push(status)
+      }
+    }
+
+    if (keyword) {
+      const like = `%${keyword}%`
+      conditions.push('(title LIKE ? OR media_url LIKE ? OR source_url LIKE ? OR extra_data LIKE ?)')
+      params.push(like, like, like, like)
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+
+    // Get total count
+    const countRow = this.db.db.prepare(`SELECT COUNT(*) as count FROM crawl_items ${whereClause}`).get(...params) as any
+    const total = countRow?.count || 0
+
+    // Get paginated data
+    const rows = this.db.db.prepare(`
+      SELECT * FROM crawl_items ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, size, offset) as any[]
+
+    return {
+      data: rows,
+      total,
+      page: pageNum,
+      pageSize: size,
+    }
   }
 
   @Delete('items/:id')
@@ -61,6 +167,183 @@ export class CrawlerController {
   @Post('items/:id/recrawl')
   async recrawlItem(@Param('id') id: string) {
     return this.recrawlSingleItem(id)
+  }
+
+  @Post('items/:id/import-download')
+  async importToDownloadQueue(@Param('id') id: string, @Body() body?: { retry?: boolean }) {
+    const item = this.db.db.prepare('SELECT * FROM crawl_items WHERE id = ?').get(id) as any
+    if (!item) return { error: '采集项不存在' }
+
+    // 解析 extra_data
+    const extraData = safeJsonParse(item.extra_data)
+
+    // 获取任务配置中的 mediaUrlField（用于自动下载）
+    let fieldsToDownload: string[] = []
+    const task = this.queue.getTask(item.task_id)
+    if (task && task.payload && task.payload.mediaUrlField) {
+      fieldsToDownload = task.payload.mediaUrlField.split(',').map((s: string) => s.trim()).filter(Boolean)
+    }
+
+    // 判断是否是 URL（支持 http://, https://, // 开头）
+    const isUrl = (val: string) => val.startsWith('http://') || val.startsWith('https://') || val.startsWith('//')
+    // 规范化 URL（// 开头转换为 https://）
+    const normalizeUrl = (val: string) => val.startsWith('//') ? 'https:' + val : val
+
+    // 收集需要下载的 URL
+    const urlsToDownload: Array<{ url: string; fieldName: string; filename: string; fileType: string }> = []
+
+    // 如果配置了 mediaUrlField，只扫描这些字段；否则扫描 extra_data 中所有看起来像 URL 的字段
+    if (fieldsToDownload.length > 0) {
+      // 只扫描指定的字段
+      for (const fieldName of fieldsToDownload) {
+        const fieldValue = extraData[fieldName]
+        if (typeof fieldValue === 'string' && isUrl(fieldValue)) {
+          const normalizedUrl = normalizeUrl(fieldValue)
+          const ext = normalizedUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+          const fileType = this.getFileType(normalizedUrl, ext)
+          const filename = this.getFilename(normalizedUrl, fieldName, item.title)
+          urlsToDownload.push({ url: normalizedUrl, fieldName, filename, fileType })
+        }
+      }
+    } else {
+      // 扫描 extra_data 中所有以 http 或 // 开头的字段
+      for (const [fieldName, fieldValue] of Object.entries(extraData)) {
+        if (typeof fieldValue === 'string' && isUrl(fieldValue)) {
+          const normalizedUrl = normalizeUrl(fieldValue)
+          const ext = normalizedUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+          const fileType = this.getFileType(normalizedUrl, ext)
+          const filename = this.getFilename(normalizedUrl, fieldName, item.title)
+          urlsToDownload.push({ url: normalizedUrl, fieldName, filename, fileType })
+        }
+      }
+    }
+
+    // 如果没有找到，也检查 item 的 media_url 字段
+    if (urlsToDownload.length === 0 && item.media_url) {
+      const url = item.media_url
+      if (typeof url === 'string' && isUrl(url)) {
+        const normalizedUrl = normalizeUrl(url)
+        const ext = normalizedUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+        const fileType = this.getFileType(normalizedUrl, ext)
+        const filename = this.getFilename(normalizedUrl, 'media_url', item.title)
+        urlsToDownload.push({ url: normalizedUrl, fieldName: 'media_url', filename, fileType })
+      }
+    }
+
+    if (urlsToDownload.length === 0) {
+      return { error: '未找到需要下载的媒体资源' }
+    }
+
+    // 先删除该采集项旧的下载记录（避免重复点击带入增加数据）
+    this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
+
+    // 批量插入下载任务
+    const insertStmt = this.db.db.prepare(`
+      INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending')
+    `)
+
+    const createdTasks: string[] = []
+    for (const { url, fieldName, filename, fileType } of urlsToDownload) {
+      const taskId = uuid()
+      insertStmt.run(taskId, id, url, filename, fileType, fieldName)
+      createdTasks.push(taskId)
+    }
+
+    // 标记为已带入（与下载状态解耦）
+    this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
+
+    return { ok: true, count: createdTasks.length, taskIds: createdTasks }
+  }
+
+  private getFileType(url: string, ext: string): string {
+    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
+    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv']
+    const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma']
+
+    if (imageExts.includes(ext)) return 'image'
+    if (videoExts.includes(ext)) return 'video'
+    if (audioExts.includes(ext)) return 'audio'
+
+    // 根据 URL 关键词判断
+    if (url.includes('video') || url.includes('mp4') || url.includes('m3u8')) return 'video'
+    if (url.includes('audio') || url.includes('mp3') || url.includes('.wav')) return 'audio'
+    return 'unknown'
+  }
+
+  private getFilename(url: string, fieldName: string, title?: string): string {
+    const name = title?.replace(/[^\w一-龥]+/g, '_') || fieldName
+    const ext = url.split('?')[0].split('.').pop() || ''
+    return ext ? `${name}.${ext}` : name
+  }
+
+  /** 自动下载：将指定任务的所有采集项中的 URL 字段加入下载队列 */
+  private async autoDownloadItems(taskId: string, payload: CrawlPayload) {
+    try {
+    const mediaUrlField = payload.mediaUrlField
+      ? payload.mediaUrlField.split(',').map((s: string) => s.trim()).filter(Boolean)
+      : []
+
+    const isUrl = (val: string) => val.startsWith('http://') || val.startsWith('https://') || val.startsWith('//')
+    const normalizeUrl = (val: string) => val.startsWith('//') ? 'https:' + val : val
+
+    // 获取该任务的所有已采集项
+    const items = this.db.db.prepare(
+      "SELECT * FROM crawl_items WHERE task_id = ? AND status = 'crawled'"
+    ).all(taskId) as any[]
+
+    let createdCount = 0
+    for (const item of items) {
+      const extraData = safeJsonParse(item.extra_data)
+
+      // 先删除该采集项旧的下载记录
+      this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(item.id)
+
+      // 确定要扫描的字段
+      const fieldsToScan = mediaUrlField.length > 0 ? mediaUrlField : Object.keys(extraData)
+
+      for (const fieldName of fieldsToScan) {
+        const fieldValue = extraData[fieldName]
+        if (typeof fieldValue === 'string' && isUrl(fieldValue)) {
+          const normalizedUrl = normalizeUrl(fieldValue)
+          const ext = normalizedUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+          const fileType = this.getFileType(normalizedUrl, ext)
+          const filename = this.getFilename(normalizedUrl, fieldName, item.title)
+          const downloadTaskId = uuid()
+          this.db.db.prepare(`
+            INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+          `).run(downloadTaskId, item.id, normalizedUrl, filename, fileType, fieldName)
+          createdCount++
+        }
+      }
+
+      // 也检查 item 的 media_url 字段
+      if (item.media_url) {
+        const url = item.media_url
+        if (typeof url === 'string' && isUrl(url)) {
+          const normalizedUrl = normalizeUrl(url)
+          const ext = normalizedUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+          const fileType = this.getFileType(normalizedUrl, ext)
+          const filename = this.getFilename(normalizedUrl, 'media_url', item.title)
+          const downloadTaskId = uuid()
+          this.db.db.prepare(`
+            INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+          `).run(downloadTaskId, item.id, normalizedUrl, filename, fileType, 'media_url')
+          createdCount++
+        }
+      }
+
+      // 标记为已带入
+      this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(item.id)
+    }
+
+    console.log(`[autoDownload] Task ${taskId}: created ${createdCount} download tasks from ${items.length} items`)
+  } catch (err: any) {
+    // 任何异常不向外抛出，只记录日志
+    console.error(`[autoDownload] Task ${taskId} error:`, err.message)
+  }
   }
 
   @Post('tasks/:id/start')
@@ -117,6 +400,13 @@ export class CrawlerController {
     }
     this.queue.reRunTask(id)
     this.processCrawlTask(id, task.payload)
+    return { ok: true }
+  }
+
+  @Post('tasks/:id/clear-items')
+  async clearItems(@Param('id') id: string) {
+    this.db.db.prepare('DELETE FROM crawl_items WHERE task_id = ?').run(id)
+    this.db.db.prepare('DELETE FROM download_queue WHERE item_id IN (SELECT id FROM crawl_items WHERE task_id = ?)').run(id)
     return { ok: true }
   }
 
@@ -338,6 +628,13 @@ export class CrawlerController {
       if (errorCount > 0) result.skippedPages = errorCount
       if (skippedItems > 0) result.skippedItems = skippedItems
       this.queue.updateTaskResult(taskId, result)
+
+      // 自动下载：采集完成后触发（失败不影响任务状态）
+      if (payload.autoDownload) {
+        this.autoDownloadItems(taskId, payload).catch((err) => {
+          console.error(`[autoDownload] Task ${taskId} failed:`, err.message)
+        })
+      }
     } catch (err: any) {
       this.queue.updateTaskError(taskId, err.message)
     }

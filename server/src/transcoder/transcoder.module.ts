@@ -8,5 +8,6 @@ import { SseModule } from '../common/sse/sse.module'
   imports: [SseModule, WhisperModule],
   controllers: [TranscoderController],
   providers: [TranscoderService],
+  exports: [TranscoderService],
 })
 export class TranscoderModule {}

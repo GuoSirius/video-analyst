@@ -30,6 +30,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private migrate() {
     try { this.db.exec(`ALTER TABLE tasks ADD COLUMN started_at TEXT`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN detail_url TEXT`) } catch { /* column exists */ }
+    try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN download_status TEXT DEFAULT 'pending'`) } catch { /* column exists */ }
+    try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN download_tasks TEXT`) } catch { /* column exists */ }
+    try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN media_fields TEXT`) } catch { /* column exists */ }
   }
 
   onModuleDestroy() {
@@ -63,6 +66,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         media_type TEXT,
         media_source TEXT,
         status TEXT DEFAULT 'pending',
+        download_status TEXT DEFAULT 'pending',
+        download_tasks TEXT,
+        media_fields TEXT,
         extra_data TEXT,
         created_at TEXT DEFAULT (datetime('now'))
       );
@@ -120,6 +126,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS idx_crawl_items_task ON crawl_items(task_id);
       CREATE INDEX IF NOT EXISTS idx_transcriptions_item ON transcriptions(item_id);
       CREATE INDEX IF NOT EXISTS idx_ai_results_transcription ON ai_results(transcription_id);
+
+      CREATE TABLE IF NOT EXISTS download_queue (
+        id TEXT PRIMARY KEY,
+        item_id TEXT REFERENCES crawl_items(id) ON DELETE CASCADE,
+        url TEXT NOT NULL,
+        filename TEXT,
+        file_type TEXT,
+        field_name TEXT,
+        status TEXT DEFAULT 'pending',
+        file_path TEXT,
+        error TEXT,
+        progress INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_download_queue_item ON download_queue(item_id);
+      CREATE INDEX IF NOT EXISTS idx_download_queue_status ON download_queue(status);
     `)
   }
 

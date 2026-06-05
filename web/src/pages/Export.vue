@@ -48,7 +48,7 @@ onMounted(refresh)
 
       <div class="card-static">
         <h3 class="text-sm font-semibold mb-4 flex items-center gap-2"><i class="fas fa-table text-amber-400"></i>选择数据范围 <span class="text-xs text-gray-500 font-normal ml-2">留空导出全部</span></h3>
-        <el-table :data="items" size="small" max-height="300" @selection-change="(rows:any)=>selectedItemIds=rows.map((r:any)=>r.id)">
+        <el-table :data="items" row-key="id" size="small" max-height="300" @selection-change="(rows:any)=>selectedItemIds=rows.map((r:any)=>r.id)">
           <el-table-column type="selection" width="40"/>
           <el-table-column prop="title" label="标题" show-overflow-tooltip min-width="200"/>
           <el-table-column label="类型" width="80"><template #default="{row}"><span class="text-xs text-gray-400">{{row.media_type||'-'}}</span></template></el-table-column>

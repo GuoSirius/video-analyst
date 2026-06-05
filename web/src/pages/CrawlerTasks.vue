@@ -3,16 +3,15 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { crawlerAPI } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { usePagination } from '../composables/usePagination'
 
 const router = useRouter()
 
 // --- Task list state ---
 const tasks = ref<any[]>([])
 const statusFilter = ref('all')
+const keyword = ref('')
 const loading = ref(false)
 const selectedIds = ref<string[]>([])
-const tableRef = ref<any>(null)
 let sseConnection: EventSource | null = null
 
 // --- Dialog state ---
@@ -36,6 +35,7 @@ const formDetailLinkField = ref<string[]>([])
 const formMediaUrlField = ref<string[]>([])
 const formIdField = ref<string[]>([])
 const formErrorMode = ref<'lenient' | 'standard' | 'strict'>('standard')
+const formAutoDownload = ref(false)
 const formRules = ref([
   { name: 'title', selector: 'h1,.title,[class*="title"]', attr: '', regex: '' },
   { name: 'content', selector: '.content,.article-body,[class*="content"]', attr: '', regex: '' },
@@ -71,20 +71,36 @@ const presetRules: Record<string, { name: string; selector: string; attr: string
 // --- Step tracking for dialog ---
 const activeStep = ref(0)
 
-// --- Computed ---
-const filteredTasks = computed(() => {
-  if (statusFilter.value === 'all') return tasks.value
-  return tasks.value.filter((t: any) => t.status === statusFilter.value)
-})
-
 // --- Pagination ---
-const { page: taskPage, pageSize: taskPageSize, total: taskTotal, pageSizes: taskPageSizes, pagedData: pagedTasks, onPageChange: onTaskPageChange, onPageSizeChange: onTaskPageSizeChange } = usePagination({
-  data: () => filteredTasks.value,
-  defaultPageSize: 20,
-  resetOn: [statusFilter],
-})
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 
 const itemCounts = ref<Record<string, number>>({})
+
+// 从提取规则获取可选字段名（仅从已建规则中获取）
+const availableFieldNames = computed(() => {
+  const fields = new Set<string>()
+  formRules.value.forEach((r: any) => {
+    if (r.name) fields.add(r.name)
+  })
+  formDetailRules.value.forEach((r: any) => {
+    if (r.name) fields.add(r.name)
+  })
+  return Array.from(fields)
+})
+
+// Pagination handlers
+function onPageChange(p: number) {
+  page.value = p
+  refresh()
+}
+
+function onPageSizeChange(s: number) {
+  pageSize.value = s
+  page.value = 1
+  refresh()
+}
 
 // Tasks eligible for batch delete
 const deletableSelected = computed(() => {
@@ -96,10 +112,15 @@ const deletableSelected = computed(() => {
 
 // --- Actions ---
 async function refresh() {
-  const { data } = await crawlerAPI.getTasks()
-  tasks.value = data
+  const params: any = {}
+  if (statusFilter.value !== 'all') params.status = statusFilter.value
+  if (keyword.value.trim()) params.keyword = keyword.value.trim()
+  const { data } = await crawlerAPI.getTasksWithPagination(params)
+  tasks.value = data.tasks
+  total.value = data.total
   // Load item counts
-  const { data: items } = await crawlerAPI.getItems()
+  const { data: itemsResp } = await crawlerAPI.getItems({ pageSize: 10000 })
+  const items = itemsResp.data || itemsResp
   const counts: Record<string, number> = {}
   items.forEach((i: any) => {
     counts[i.task_id] = (counts[i.task_id] || 0) + 1
@@ -111,7 +132,8 @@ async function refresh() {
 const SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'}/crawler/events`
 
 async function refreshItemCounts() {
-  const { data: items } = await crawlerAPI.getItems()
+  const { data: itemsResp } = await crawlerAPI.getItems({ pageSize: 10000 })
+  const items = itemsResp.data || itemsResp
   const counts: Record<string, number> = {}
   items.forEach((i: any) => {
     counts[i.task_id] = (counts[i.task_id] || 0) + 1
@@ -193,6 +215,7 @@ function openCreateDialog() {
   ]
   formDetailLinkSelector.value = ''
   formDetailRules.value = []
+  formAutoDownload.value = false
   dialogVisible.value = true
 }
 
@@ -217,6 +240,7 @@ function openEditDialog(task: any) {
   formDetailLinkField.value = p.detailLinkField ? p.detailLinkField.split(',').map((s: string) => s.trim()).filter(Boolean) : []
   formMediaUrlField.value = p.mediaUrlField ? p.mediaUrlField.split(',').map((s: string) => s.trim()).filter(Boolean) : []
   formIdField.value = p.idField ? p.idField.split(',').map((s: string) => s.trim()).filter(Boolean) : []
+  formAutoDownload.value = p.autoDownload ?? false
   formRules.value = p.rules?.length ? [...p.rules] : [
     { name: 'title', selector: 'h1,.title,[class*="title"]', attr: '' },
     { name: 'content', selector: '.content,.article-body,[class*="content"]', attr: '' },
@@ -294,6 +318,7 @@ async function submitForm() {
     mediaUrlField: formMediaUrlField.value.length ? formMediaUrlField.value.join(',') : undefined,
     idField: formIdField.value.length ? formIdField.value.join(',') : undefined,
     errorMode: formErrorMode.value,
+    autoDownload: formAutoDownload.value || undefined,
   }
 
   loading.value = true
@@ -363,6 +388,21 @@ async function deleteTask(id: string) {
     await crawlerAPI.deleteTask(id)
     ElMessage.success('任务已删除')
     selectedIds.value = selectedIds.value.filter(sid => sid !== id)
+    refresh()
+  } catch { /* cancelled */ }
+}
+
+async function clearItems(id: string) {
+  try {
+    const task = tasks.value.find((t: any) => t.id === id)
+    const name = task?.payload?.name || task?.payload?.url || id.slice(0, 8)
+    await ElMessageBox.confirm(`确定要清空任务「${name}」下的所有采集项吗？采集任务本身不会被删除。`, '清空采集项', {
+      type: 'warning',
+      confirmButtonText: '清空',
+      cancelButtonText: '取消',
+    })
+    await crawlerAPI.clearItems(id)
+    ElMessage.success('已清空所有采集项')
     refresh()
   } catch { /* cancelled */ }
 }
@@ -475,32 +515,37 @@ onUnmounted(teardownSSE)
 
     <!-- Filters -->
     <div class="flex items-center justify-between mb-4 card-static">
-      <div class="flex gap-2">
-        <el-button
-          v-for="f in [
-            { k: 'all', l: '全部' },
-            { k: 'pending', l: '未开始' },
-            { k: 'running', l: '进行中' },
-            { k: 'paused', l: '已暂停' },
-            { k: 'completed', l: '已完成' },
-            { k: 'failed', l: '执行失败' },
-            { k: 'cancelled', l: '用户终止' },
-          ]"
-          :key="f.k" size="small"
-          :type="statusFilter === f.k ? 'primary' : 'default'"
-          :plain="statusFilter !== f.k"
-          @click="statusFilter = f.k"
-        >{{ f.l }}</el-button>
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs text-gray-400">状态筛选：</span>
+        <el-select v-model="statusFilter" size="small" class="!w-28">
+          <el-option label="全部" value="all" />
+          <el-option label="未开始" value="pending" />
+          <el-option label="进行中" value="running" />
+          <el-option label="已暂停" value="paused" />
+          <el-option label="已完成" value="completed" />
+          <el-option label="执行失败" value="failed" />
+          <el-option label="用户终止" value="cancelled" />
+        </el-select>
+        <div class="relative !w-48">
+          <el-input
+            v-model="keyword"
+            size="small"
+            placeholder="搜索任务名/URL"
+            clearable
+          >
+            <template #prefix>
+              <i class="fas fa-magnifying-glass text-gray-500 text-[12px]"></i>
+            </template>
+          </el-input>
+        </div>
       </div>
-      <span class="text-xs text-gray-500">共 {{ filteredTasks.length }} 个任务</span>
     </div>
 
     <!-- Task Table -->
     <div class="card-static">
       <el-table
-        v-if="filteredTasks.length"
-        ref="tableRef"
-        :data="pagedTasks"
+        v-if="tasks.length"
+        :data="tasks"
         size="small"
         row-key="id"
         @selection-change="handleSelectionChange"
@@ -600,24 +645,27 @@ onUnmounted(teardownSSE)
               <el-button v-if="canDelete(row.status)" size="small" type="danger" plain @click="deleteTask(row.id)">
                 删除
               </el-button>
+              <el-button v-if="canDelete(row.status)" size="small" plain @click="clearItems(row.id)">
+                清空采集项
+              </el-button>
             </div>
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="filteredTasks.length > taskPageSize" class="flex justify-end mt-4">
+      <div v-if="total > pageSize" class="flex justify-end mt-4">
         <el-pagination
-          v-model:current-page="taskPage"
-          v-model:page-size="taskPageSize"
-          :page-sizes="taskPageSizes"
-          :total="taskTotal"
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="total"
           layout="total, sizes, prev, pager, next"
           size="small"
           background
-          @size-change="onTaskPageSizeChange"
-          @current-change="onTaskPageChange"
+          @size-change="onPageSizeChange"
+          @current-change="onPageChange"
         />
       </div>
-      <div v-if="!filteredTasks.length" class="text-center py-12 text-gray-500 text-sm">
+      <div v-if="!tasks.length" class="text-center py-12 text-gray-500 text-sm">
         <i class="fas fa-bug text-3xl mb-3 block opacity-30"></i>暂无任务
       </div>
     </div>
@@ -699,7 +747,9 @@ onUnmounted(teardownSSE)
                     <i class="fas fa-circle-question text-gray-600 cursor-help ml-1"></i>
                   </el-tooltip>
                 </div>
-                <el-select v-model="formTitleField" multiple filterable allow-create default-first-option placeholder="留空自动查找" size="small" class="!w-full" />
+                <el-select v-model="formTitleField" multiple filterable allow-create default-first-option placeholder="留空自动查找" size="small" class="!w-full">
+                  <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+                </el-select>
               </div>
               <div>
                 <div class="text-xs text-gray-400 mb-1.5">
@@ -708,7 +758,9 @@ onUnmounted(teardownSSE)
                     <i class="fas fa-circle-question text-gray-600 cursor-help ml-1"></i>
                   </el-tooltip>
                 </div>
-                <el-select v-model="formDetailLinkField" multiple filterable allow-create default-first-option placeholder="如: link" size="small" class="!w-full" />
+                <el-select v-model="formDetailLinkField" multiple filterable allow-create default-first-option placeholder="如: link" size="small" class="!w-full">
+                  <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+                </el-select>
               </div>
               <div>
                 <div class="text-xs text-gray-400 mb-1.5">
@@ -717,7 +769,9 @@ onUnmounted(teardownSSE)
                     <i class="fas fa-circle-question text-gray-600 cursor-help ml-1"></i>
                   </el-tooltip>
                 </div>
-                <el-select v-model="formMediaUrlField" multiple filterable allow-create default-first-option placeholder="如: videoUrl" size="small" class="!w-full" />
+                <el-select v-model="formMediaUrlField" multiple filterable allow-create default-first-option placeholder="如: videoUrl" size="small" class="!w-full">
+                  <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+                </el-select>
               </div>
               <div>
                 <div class="text-xs text-gray-400 mb-1.5">
@@ -726,7 +780,9 @@ onUnmounted(teardownSSE)
                     <i class="fas fa-circle-question text-gray-600 cursor-help ml-1"></i>
                   </el-tooltip>
                 </div>
-                <el-select v-model="formIdField" multiple filterable allow-create default-first-option placeholder="如: id" size="small" class="!w-full" />
+                <el-select v-model="formIdField" multiple filterable allow-create default-first-option placeholder="如: id" size="small" class="!w-full">
+                  <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+                </el-select>
               </div>
             </div>
           </div>
@@ -752,6 +808,27 @@ onUnmounted(teardownSSE)
               {{ formErrorMode === 'lenient' ? '列表页或详情页访问失败均跳过，尽可能多地采集数据。404 视为翻页结束。' :
                  formErrorMode === 'standard' ? '失败自动重试 1-2 次，仍失败则跳过该项继续；404 视为翻页结束。' :
                  '任何页面或详情页访问失败立即终止任务，适合对数据完整性要求高的场景。' }}
+            </div>
+          </div>
+
+          <!-- 自动下载配置 -->
+          <div class="mt-4">
+            <el-checkbox v-model="formAutoDownload">
+              <span class="text-xs text-gray-300">自动下载媒体资源</span>
+              <el-tooltip placement="top" effect="dark" content="开启后，采集完成会自动将媒体资源字段中的 URL 加入下载队列。下载范围由上方'媒体资源字段'决定，留空则扫描所有 URL 字段" class="ml-1">
+                <i class="fas fa-circle-question text-gray-600 cursor-help"></i>
+              </el-tooltip>
+            </el-checkbox>
+            <div v-if="formAutoDownload" class="mt-3 ml-6">
+              <div class="text-[11px] text-gray-500">
+                下载范围由上方 <strong class="text-gray-400">媒体资源字段</strong> 决定。
+                <template v-if="formMediaUrlField.length">
+                  已配置: {{ formMediaUrlField.join('、') }}
+                </template>
+                <template v-else>
+                  未指定，将自动扫描所有包含 URL 的字段进行下载。
+                </template>
+              </div>
             </div>
           </div>
 
