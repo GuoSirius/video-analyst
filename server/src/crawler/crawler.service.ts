@@ -162,7 +162,6 @@ export class CrawlerService {
         } else {
           value = el.text().trim()
         }
-        if (rule.regex) console.log('##########################', rule)
         item[rule.name] = this.applyRegex(value.trim(), rule.regex)
       }
     }
@@ -174,13 +173,11 @@ export class CrawlerService {
   private applyRegex(value: string, regex?: string): string {
     if (!regex || !value) return value
     try {
-      console.log('***********************************', regex)
       const m = value.match(new RegExp(regex))
       if (!m) return ''
       // 有捕获组 → 提取模式；无捕获组 → 过滤模式（返回 $0）
       return m[1] ?? m[0]
     } catch {
-      console.log('======================================', value, regex)
       return ''
     }
   }
