@@ -162,20 +162,23 @@ export class CrawlerService {
         } else {
           value = el.text().trim()
         }
-        item[rule.name] = this.applyRegex(value, rule.regex)
+        item[rule.name] = this.applyRegex(value.trim(), rule.regex)
       }
     }
     return item
   }
 
-  /** Apply regex extraction: returns first capture group, or full value if no regex */
+  /** Apply regex extraction: returns first capture group, or full match if no capture group.
+   *  Returns empty string when regex does not match — the original value is NOT used as fallback. */
   private applyRegex(value: string, regex?: string): string {
     if (!regex || !value) return value
     try {
       const m = value.match(new RegExp(regex))
-      return m?.[1] ?? m?.[0] ?? value
+      if (!m) return ''
+      // 有捕获组 → 提取模式；无捕获组 → 过滤模式（返回 $0）
+      return m[1] ?? m[0]
     } catch {
-      return value
+      return ''
     }
   }
 

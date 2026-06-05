@@ -980,16 +980,16 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
 
           <div v-if="formPaginationMode === 'page'" class="ml-2 mb-3 space-y-2">
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16">抓取页数</span>
+              <span class="text-xs text-gray-400 w-20">抓取页数</span>
               <el-input-number v-model="formMaxPages" :min="0" :max="9999" size="small" />
               <span class="text-[11px] text-gray-500">0 = 全部</span>
             </div>
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16">下一页选择器</span>
+              <span class="text-xs text-gray-400 w-20">下一页选择器</span>
               <el-input v-model="formNextPageSelector" placeholder=".pagination .next, a[rel='next']" size="small" class="flex-1" />
             </div>
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16">
+              <span class="text-xs text-gray-400 w-24">
                 URL 模板
                 <el-tooltip content="用 {page} 表示页码，程序会自动替换为实际数字。例如：?page={page} → ?page=1, ?page=2...；/page/{page}/ → /page/1/, /page/2/...。留空则用「下一页选择器」自动翻页。" placement="top">
                   <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
@@ -1000,7 +1000,7 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
               <el-input-number v-model="formPageStart" :min="1" :max="9999" size="small" />
             </div>
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 flex-shrink-0 w-16">
+              <span class="text-xs text-gray-400 flex-shrink-0 w-24">
                 加载更多
                 <el-tooltip content="实验性：点击加载更多按钮的选择器，用于无限滚动类页面" placement="top">
                   <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
@@ -1012,15 +1012,15 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
 
           <div v-if="formPaginationMode === 'count'" class="ml-2 mb-3 space-y-2">
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16">抓取条数</span>
+              <span class="text-xs text-gray-400 w-20">抓取条数</span>
               <el-input-number v-model="formMaxItems" :min="1" :max="99999" size="small" />
             </div>
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16">下一页选择器</span>
+              <span class="text-xs text-gray-400 w-20">下一页选择器</span>
               <el-input v-model="formNextPageSelector" placeholder=".pagination .next, a[rel='next']" size="small" class="flex-1" />
             </div>
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16">
+              <span class="text-xs text-gray-400 w-24">
                 URL 模板
                 <el-tooltip content="用 {page} 表示页码，程序会自动替换为实际数字。例如：?page={page} → ?page=1, ?page=2...；/page/{page}/ → /page/1/, /page/2/...。留空则用「下一页选择器」自动翻页。" placement="top">
                   <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
@@ -1031,7 +1031,7 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
               <el-input-number v-model="formPageStart" :min="1" :max="9999" size="small" />
             </div>
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 flex-shrink-0 w-16">
+              <span class="text-xs text-gray-400 flex-shrink-0 w-24">
                 加载更多
                 <el-tooltip content="实验性：点击加载更多按钮的选择器，用于无限滚动类页面" placement="top">
                   <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
@@ -1065,7 +1065,7 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
               <el-input v-model="rule.name" placeholder="字段名" size="small" class="!w-21" />
               <el-input v-model="rule.selector" placeholder="CSS 选择器（留空=元素自身）" size="small" class="flex-1" />
               <el-input v-model="rule.attr" placeholder="属性(可选)" size="small" class="!w-18" />
-              <el-input v-model="rule.regex" placeholder="正则(可选)" size="small" class="!w-18" />
+              <el-input v-model="rule.regex" placeholder="正则(可选)" size="small" class="!w-28" />
               <el-button v-if="formRules.length > 1" size="small" type="danger" circle plain @click="removeRule('list', i)"><i class="fas fa-xmark"></i></el-button>
             </div>
           </div>
@@ -1086,7 +1086,7 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
                 <el-input v-model="rule.name" placeholder="字段名" size="small" class="!w-21" />
                 <el-input v-model="rule.selector" placeholder="CSS 选择器（留空=元素自身）" size="small" class="flex-1" />
                 <el-input v-model="rule.attr" placeholder="属性" size="small" class="!w-18" />
-                <el-input v-model="rule.regex" placeholder="正则" size="small" class="!w-18" />
+                <el-input v-model="rule.regex" placeholder="正则" size="small" class="!w-28" />
                 <el-button size="small" type="danger" circle plain @click="removeRule('detail', i)"><i class="fas fa-xmark"></i></el-button>
               </div>
             </div>
@@ -1103,7 +1103,7 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
           <div class="space-y-2">
             <!-- 标题字段 -->
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16 flex-shrink-0">
+              <span class="text-xs text-gray-400 w-24 flex-shrink-0">
                 标题字段
                 <el-tooltip :content="formTitleFieldAll ? '当前：收集所有指定字段的值作为标题列表' : '当前：按顺序选第一个非空值。勾选「取全部」改为收集全部字段值'" placement="top">
                   <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
@@ -1117,7 +1117,7 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
 
             <!-- 详情链接 -->
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16 flex-shrink-0">
+              <span class="text-xs text-gray-400 w-24 flex-shrink-0">
                 详情链接
                 <el-tooltip content="哪个字段的值是详情页 URL。列表模式下，程序用这个 URL 进入每个条目的详情页提取更多字段。多个字段时按顺序选第一个有效值。如需从链接元素的 href 属性提取，请在「提取规则」中添加一个 attr='href' 的规则。" placement="top">
                   <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
@@ -1131,7 +1131,7 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
 
             <!-- 媒体资源 -->
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16 flex-shrink-0">
+              <span class="text-xs text-gray-400 w-24 flex-shrink-0">
                 媒体资源
                 <el-tooltip content="存放视频/音频/图片 URL 的字段名。默认「取全部」表示收集所有指定字段的值作为独立下载资源。取消勾选则只取第一个。" placement="top">
                   <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
@@ -1145,7 +1145,7 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
 
             <!-- 唯一标识 -->
             <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-16 flex-shrink-0">
+              <span class="text-xs text-gray-400 w-24 flex-shrink-0">
                 唯一标识
                 <el-tooltip content="能唯一标识每条记录的字段名（如数据库 ID）。重试/重采时用于去重匹配，防止重复插入。" placement="top">
                   <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
