@@ -33,6 +33,6 @@ export const downloadAPI = {
 
   // Link operations
   testLink: (url: string, downloadMethod?: string) => api.post('/download/test', { url, downloadMethod }),
-  createDownload: (urls: Array<{ url: string; fieldName?: string; downloadMethod?: string }>, extra?: { item_id?: string; filenamePrefix?: string }) =>
+  createDownload: (urls: Array<{ url: string; fieldName?: string; downloadMethod?: string; ytDlpOptions?: any }>, extra?: { item_id?: string; filenamePrefix?: string }) =>
     api.post('/download/create', { urls, ...extra }),
 }

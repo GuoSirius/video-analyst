@@ -30,10 +30,14 @@ const uploadDialog = ref(false)
 const stagedFiles = ref<Array<{ id: string; name: string; file: File; size: number; type: string; status: 'ready' | 'uploading' | 'success' | 'error'; error?: string }>>([])
 const uploadFilterName = ref('')
 const uploadFilterType = ref('all')
+const uploadFilterExt = ref('all')
 const uploadFilterStatus = ref('all')
 const uploading = ref(false)
 const uploadResults = ref<Array<{ filename: string; ok: boolean; error?: string }>>([])
 const uploadDone = ref(false)
+const uploadSelectedIds = ref<string[]>([])
+const uploadTableRef = ref<any>(null)
+let syncingUploadSelection = false
 
 // Add link dialog
 const linkDialog = ref(false)
@@ -45,6 +49,15 @@ const linkPreview = ref<{
   width: number; height: number; duration: number; durationHuman: string; site: string
 } | null>(null)
 const testingLink = ref(false)
+const linkShowYtOpts = ref(false)
+// yt-dlp 参数（仅 linkDownloadMethod='yt-dlp' 时有效）
+const linkYtOpts = reactive({
+  cookiesFromBrowser: '', cookies: '', proxy: '', format: '',
+  userAgent: '', referer: '', limitRate: '',
+  username: '', password: '', retries: null as number | null,
+  sleepInterval: null as number | null,
+  geoBypass: false, noCheckCert: false, rawArgs: '',
+})
 
 // Filter options
 const filterTypes = ref<string[]>([])
@@ -322,6 +335,10 @@ const filteredStagedFiles = computed(() => {
     if (uploadFilterName.value && !f.name.toLowerCase().includes(uploadFilterName.value.toLowerCase())) return false
     if (uploadFilterType.value !== 'all' && f.type !== uploadFilterType.value) return false
     if (uploadFilterStatus.value !== 'all' && f.status !== uploadFilterStatus.value) return false
+    if (uploadFilterExt.value !== 'all') {
+      const fExt = f.name.split('.').pop()?.toLowerCase() || ''
+      if (fExt !== uploadFilterExt.value) return false
+    }
     return true
   })
 })
@@ -331,23 +348,54 @@ const stagedTypeOptions = computed(() => {
   return Array.from(types)
 })
 
+const stagedExtOptions = computed(() => {
+  const exts = new Set(stagedFiles.value.map(f => f.name.split('.').pop()?.toLowerCase() || ''))
+  return Array.from(exts).filter(Boolean).sort()
+})
+
 function openUploadDialog() {
   stagedFiles.value = []
   uploadResults.value = []
   uploadDone.value = false
   uploadFilterName.value = ''
   uploadFilterType.value = 'all'
+  uploadFilterExt.value = 'all'
   uploadFilterStatus.value = 'all'
+  uploadSelectedIds.value = []
   uploadDialog.value = true
+}
+
+// Upload table selection
+function handleUploadSelectionChange(rows: any[]) {
+  if (syncingUploadSelection) return
+  const visibleIds = new Set(filteredStagedFiles.value.map((f: any) => f.id))
+  const newSelected = new Set(rows.map((r: any) => r.id))
+  for (const id of visibleIds) {
+    if (!newSelected.has(id)) {
+      uploadSelectedIds.value = uploadSelectedIds.value.filter(x => x !== id)
+    }
+  }
+  for (const id of newSelected) {
+    if (id && !uploadSelectedIds.value.includes(id)) {
+      uploadSelectedIds.value.push(id)
+    }
+  }
+}
+
+function syncUploadSelection() {
+  if (!uploadTableRef.value) return
+  syncingUploadSelection = true
+  filteredStagedFiles.value.forEach((row: any) => {
+    uploadTableRef.value.toggleRowSelection(row, !!uploadSelectedIds.value.includes(row.id))
+  })
+  syncingUploadSelection = false
 }
 
 async function startUpload() {
   const readyFiles = stagedFiles.value.filter(f => f.status === 'ready' || f.status === 'error')
   if (!readyFiles.length) { ElMessage.warning('没有待上传的文件'); return }
 
-  // Mark all ready/error files as uploading
   for (const f of readyFiles) f.status = 'uploading'
-
   uploading.value = true
   try {
     const fd = new FormData()
@@ -357,7 +405,6 @@ async function startUpload() {
     const { data } = await api.post('/download/upload', fd)
 
     if (data.results) {
-      // Map results back to staged files
       for (const r of data.results) {
         const staged = stagedFiles.value.find(f => f.name === r.filename && f.status === 'uploading')
         if (staged) {
@@ -372,7 +419,7 @@ async function startUpload() {
     const failCount = stagedFiles.value.filter(f => f.status === 'error').length
 
     if (failCount > 0) {
-      ElMessage.warning(`${okCount} 个上传成功，${failCount} 个失败 — 可以重试失败项或忽略并带入成功项`)
+      ElMessage.warning(`${okCount} 个上传成功，${failCount} 个失败 — 可重试或忽略失败`)
     } else {
       ElMessage.success(`${okCount} 个文件全部上传成功，已自动带入列表`)
       uploadDialog.value = false
@@ -385,17 +432,17 @@ async function startUpload() {
   uploading.value = false
 }
 
-async function retryFailedUploads() {
-  const failedFiles = stagedFiles.value.filter(f => f.status === 'error')
-  if (!failedFiles.length) { ElMessage.warning('没有失败的文件需要重试'); return }
+/** Upload only selected files */
+async function uploadSelected() {
+  const selIds = new Set(uploadSelectedIds.value)
+  const targetFiles = stagedFiles.value.filter(f => selIds.has(f.id) && (f.status === 'ready' || f.status === 'error'))
+  if (!targetFiles.length) { ElMessage.warning('所选文件中没有待上传的'); return }
 
-  for (const f of failedFiles) f.status = 'uploading'
+  for (const f of targetFiles) f.status = 'uploading'
   uploading.value = true
   try {
     const fd = new FormData()
-    for (const f of failedFiles) {
-      fd.append('files', f.file)
-    }
+    for (const f of targetFiles) fd.append('files', f.file)
     const { data } = await api.post('/download/upload', fd)
 
     if (data.results) {
@@ -407,7 +454,43 @@ async function retryFailedUploads() {
         }
       }
     }
+    uploadDone.value = true
+    const okC = targetFiles.filter(f => f.status === 'success').length
+    const failC = targetFiles.filter(f => f.status === 'error').length
+    if (failC > 0) ElMessage.warning(`${okC} 个成功，${failC} 个失败`)
+    else ElMessage.success(`${okC} 个文件上传成功`)
+  } catch {
+    for (const f of targetFiles) f.status = 'error'
+    ElMessage.error('上传失败')
+  }
+  uploading.value = false
+}
 
+/** Delete selected staged files */
+function deleteSelectedStaged() {
+  const selIds = new Set(uploadSelectedIds.value)
+  stagedFiles.value = stagedFiles.value.filter(f => !selIds.has(f.id))
+  uploadSelectedIds.value = uploadSelectedIds.value.filter(id => !selIds.has(id))
+}
+
+/** Retry all failed files */
+async function retryAllFailed() {
+  const failedFiles = stagedFiles.value.filter(f => f.status === 'error')
+  if (!failedFiles.length) { ElMessage.warning('没有失败的文件需要重试'); return }
+
+  for (const f of failedFiles) f.status = 'uploading'
+  uploading.value = true
+  try {
+    const fd = new FormData()
+    for (const f of failedFiles) { fd.append('files', f.file) }
+    const { data } = await api.post('/download/upload', fd)
+
+    if (data.results) {
+      for (const r of data.results) {
+        const staged = stagedFiles.value.find(f => f.name === r.filename && f.status === 'uploading')
+        if (staged) { staged.status = r.ok ? 'success' : 'error'; staged.error = r.error }
+      }
+    }
     const okCount = stagedFiles.value.filter(f => f.status === 'success').length
     const failCount = stagedFiles.value.filter(f => f.status === 'error').length
     if (failCount > 0) {
@@ -425,13 +508,49 @@ async function retryFailedUploads() {
 
 async function ignoreFailedAndImport() {
   const successCount = stagedFiles.value.filter(f => f.status === 'success').length
-  if (successCount === 0) {
-    ElMessage.warning('没有成功上传的文件可以带入')
-    return
-  }
+  if (successCount === 0) { ElMessage.warning('没有成功上传的文件可以带入'); return }
   ElMessage.success(`已将 ${successCount} 个成功上传的文件带入列表`)
   uploadDialog.value = false
   await refresh()
+}
+
+function buildYtDlpOptionsFromLink(): any | null {
+  const o = linkYtOpts
+  const opts: any = {}
+  if (o.cookiesFromBrowser) opts.cookiesFromBrowser = o.cookiesFromBrowser
+  if (o.cookies) opts.cookies = o.cookies
+  if (o.proxy) opts.proxy = o.proxy
+  if (o.format) opts.format = o.format
+  if (o.userAgent) opts.userAgent = o.userAgent
+  if (o.referer) opts.referer = o.referer
+  if (o.limitRate) opts.limitRate = o.limitRate
+  if (o.username) opts.username = o.username
+  if (o.password) opts.password = o.password
+  if (o.retries != null) opts.retries = o.retries
+  if (o.sleepInterval != null) opts.sleepInterval = o.sleepInterval
+  if (o.geoBypass) opts.geoBypass = true
+  if (o.noCheckCert) opts.noCheckCertificates = true
+  if (o.rawArgs.trim()) {
+    opts.rawArgs = o.rawArgs.split('\n').map(s => s.trim()).filter(Boolean)
+  }
+  return Object.keys(opts).length > 0 ? opts : null
+}
+
+function resetLinkYtOpts() {
+  linkYtOpts.cookiesFromBrowser = ''
+  linkYtOpts.cookies = ''
+  linkYtOpts.proxy = ''
+  linkYtOpts.format = ''
+  linkYtOpts.userAgent = ''
+  linkYtOpts.referer = ''
+  linkYtOpts.limitRate = ''
+  linkYtOpts.username = ''
+  linkYtOpts.password = ''
+  linkYtOpts.retries = null
+  linkYtOpts.sleepInterval = null
+  linkYtOpts.geoBypass = false
+  linkYtOpts.noCheckCert = false
+  linkYtOpts.rawArgs = ''
 }
 
 // ── Add link dialog ──
@@ -439,6 +558,8 @@ function openLinkDialog() {
   linkInput.value = ''
   linkDownloadMethod.value = 'auto'
   linkPreview.value = null
+  linkShowYtOpts.value = false
+  resetLinkYtOpts()
   linkDialog.value = true
 }
 
@@ -466,14 +587,16 @@ async function confirmLink() {
   linking.value = true
   try {
     const dlMethod = linkDownloadMethod.value === 'auto' ? undefined : linkDownloadMethod.value
-    const res = await downloadAPI.createDownload([
-      { url: linkInput.value.trim(), fieldName: 'link', downloadMethod: dlMethod },
-    ])
+    const opts = linkDownloadMethod.value === 'yt-dlp' ? buildYtDlpOptionsFromLink() : null
+    const urls: any[] = [{ url: linkInput.value.trim(), fieldName: 'link', downloadMethod: dlMethod }]
+    if (opts) urls[0].ytDlpOptions = opts
+    const res = await downloadAPI.createDownload(urls)
     if (res.data?.error) { ElMessage.error(res.data.error); return }
     ElMessage.success('已创建下载任务')
     linkDialog.value = false
     linkPreview.value = null
     linkInput.value = ''
+    resetLinkYtOpts()
     await refresh()
   } catch { ElMessage.error('创建任务失败') }
   linking.value = false
@@ -821,38 +944,51 @@ onUnmounted(teardownSSE)
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- Upload Dialog -->
     <!-- ════════════════════════════════════════════════════════ -->
-    <el-dialog v-model="uploadDialog" title="上传文件" width="800px" destroy-on-close :close-on-click-modal="false">
+    <el-dialog v-model="uploadDialog" title="上传文件" width="900px" destroy-on-close :close-on-click-modal="false">
       <div class="space-y-4">
-        <!-- Top bar: file selector + upload button -->
-        <div class="flex items-center gap-3">
+        <!-- Top bar: file selector + upload buttons -->
+        <div class="flex items-center gap-3 flex-wrap">
           <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-500/10 border border-blue-500/25 cursor-pointer hover:bg-blue-500/20 transition-all text-xs">
             <i class="fas fa-folder-open text-blue-400"></i>
             选择文件
-            <input type="file" multiple accept="audio/*,video/*,image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.json,.yaml,.yml,.txt,.md" class="hidden" @change="handleUploadFileSelect" />
+            <input type="file" multiple accept="video/*,audio/*,image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.json,.yaml,.yml,.txt,.md,.ts,.m3u8" class="hidden" @change="handleUploadFileSelect" />
           </label>
           <el-button type="primary" size="small" :disabled="!stagedFiles.filter(f => f.status !== 'success').length || uploading" :loading="uploading" @click="startUpload">
-            <i class="fas fa-upload mr-1.5"></i>开始上传
+            <i class="fas fa-upload mr-1.5"></i>全部上传
+          </el-button>
+          <el-button v-if="uploadSelectedIds.length" size="small" type="success" plain :disabled="uploading" @click="uploadSelected">
+            <i class="fas fa-check mr-1"></i>上传所选 ({{ uploadSelectedIds.length }})
+          </el-button>
+          <el-button v-if="uploadDone && stagedFiles.some(f => f.status === 'error')" size="small" type="warning" plain @click="retryAllFailed">
+            <i class="fas fa-rotate-right mr-1"></i>全部重试
+          </el-button>
+          <el-button v-if="uploadSelectedIds.length" size="small" type="danger" plain @click="deleteSelectedStaged">
+            <i class="fas fa-trash-can mr-1"></i>删除所选 ({{ uploadSelectedIds.length }})
           </el-button>
           <span v-if="stagedFiles.length" class="text-xs text-gray-500 ml-auto">
-            {{ stagedFiles.filter(f => f.status === 'success').length }}/{{ stagedFiles.length }} 已上传
+            {{ stagedFiles.filter(f => f.status === 'success').length }}/{{ stagedFiles.length }} 个已上传
           </span>
-          <span v-else class="text-xs text-gray-600 ml-auto">支持视频/音频/图片/文档</span>
+          <span v-else class="text-xs text-gray-600 ml-auto">支持视频/音频/图片/文档/数据文件</span>
         </div>
 
         <!-- File table -->
         <div v-if="stagedFiles.length">
           <!-- Table filters -->
-          <div class="flex items-center gap-2">
-            <el-input v-model="uploadFilterName" size="small" placeholder="搜索文件名" clearable class="!w-44">
+          <div class="flex items-center gap-2 flex-wrap">
+            <el-input v-model="uploadFilterName" size="small" placeholder="搜索文件名" clearable class="!w-40" @change="nextTick(() => syncUploadSelection())">
               <template #prefix>
                 <i class="fas fa-magnifying-glass text-gray-500 text-[11px]"></i>
               </template>
             </el-input>
-            <el-select v-model="uploadFilterType" size="small" class="!w-24">
+            <el-select v-model="uploadFilterType" size="small" class="!w-22" @change="nextTick(() => syncUploadSelection())">
               <el-option label="全部类型" value="all" />
               <el-option v-for="t in stagedTypeOptions" :key="t" :label="t" :value="t" />
             </el-select>
-            <el-select v-model="uploadFilterStatus" size="small" class="!w-24">
+            <el-select v-model="uploadFilterExt" size="small" class="!w-24" @change="nextTick(() => syncUploadSelection())">
+              <el-option label="全部后缀" value="all" />
+              <el-option v-for="e in stagedExtOptions" :key="e" :label="`.${e}`" :value="e" />
+            </el-select>
+            <el-select v-model="uploadFilterStatus" size="small" class="!w-22" @change="nextTick(() => syncUploadSelection())">
               <el-option label="全部状态" value="all" />
               <el-option label="待上传" value="ready" />
               <el-option label="上传中" value="uploading" />
@@ -863,7 +999,16 @@ onUnmounted(teardownSSE)
 
           <!-- Staged files table -->
           <div class="border border-gray-700/30 rounded-lg overflow-hidden">
-            <el-table :data="filteredStagedFiles" size="small" max-height="350" row-key="id">
+            <el-table
+              ref="uploadTableRef"
+              :data="filteredStagedFiles"
+              size="small"
+              max-height="350"
+              row-key="id"
+              @selection-change="handleUploadSelectionChange"
+            >
+              <el-table-column type="selection" width="35" :reserve-selection="true" />
+              <el-table-column type="index" label="序号" width="50" align="center" />
               <el-table-column label="文件名" min-width="180" show-overflow-tooltip>
                 <template #default="{ row: f }">
                   <div class="flex items-center gap-1.5">
@@ -906,7 +1051,7 @@ onUnmounted(teardownSSE)
               </el-table-column>
               <el-table-column label="" width="45" align="center">
                 <template #default="{ row: f }">
-                  <el-button v-if="f.status !== 'uploading'" size="small" type="danger" circle plain @click="removeStagedFile(f.id)">
+                  <el-button v-if="f.status !== 'uploading'" size="small" type="danger" circle plain @click="removeStagedFile(f.id); uploadSelectedIds = uploadSelectedIds.filter(x => x !== f.id)">
                     <i class="fas fa-xmark text-[11px]"></i>
                   </el-button>
                 </template>
@@ -914,16 +1059,13 @@ onUnmounted(teardownSSE)
             </el-table>
           </div>
 
-          <!-- Post-upload actions -->
-          <div v-if="uploadDone && stagedFiles.some(f => f.status === 'error')" class="flex items-center gap-2">
+          <!-- Post-upload actions: ignore failures -->
+          <div v-if="uploadDone && stagedFiles.some(f => f.status === 'error') && stagedFiles.some(f => f.status === 'success')" class="flex items-center gap-2">
             <div class="flex items-center gap-1 text-xs text-red-400">
               <i class="fas fa-triangle-exclamation"></i>
-              {{ stagedFiles.filter(f => f.status === 'error').length }} 个文件上传失败
+              {{ stagedFiles.filter(f => f.status === 'error').length }} 个上传失败
             </div>
-            <el-button size="small" type="warning" plain @click="retryFailedUploads" :loading="uploading">
-              <i class="fas fa-rotate-right mr-1"></i>重试失败项
-            </el-button>
-            <el-button v-if="stagedFiles.some(f => f.status === 'success')" size="small" type="primary" plain @click="ignoreFailedAndImport">
+            <el-button size="small" type="primary" plain @click="ignoreFailedAndImport">
               <i class="fas fa-check mr-1"></i>忽略失败项，带入成功项
             </el-button>
           </div>
@@ -975,6 +1117,87 @@ onUnmounted(teardownSSE)
             <template v-if="linkDownloadMethod === 'auto'">自动识别链接类型，站点视频使用 yt-dlp，文件直链使用 HTTP 下载</template>
             <template v-else-if="linkDownloadMethod === 'yt-dlp'">适用 YouTube / bilibili / 抖音 / 优酷 / 爱奇艺 / Vimeo / Twitch 等站点视频</template>
             <template v-else>适用 MP4 / M3U8 / PDF / 图片 等可直接访问的文件链接</template>
+          </div>
+        </div>
+
+        <!-- yt-dlp options (collapsible) -->
+        <div v-if="linkDownloadMethod === 'yt-dlp'">
+          <div class="flex items-center gap-2 cursor-pointer text-xs text-gray-400 hover:text-gray-300 transition-colors" @click="linkShowYtOpts = !linkShowYtOpts">
+            <i :class="linkShowYtOpts ? 'fas fa-chevron-down text-[10px]' : 'fas fa-chevron-right text-[10px]'"></i>
+            <i class="fas fa-gear"></i>
+            <span>yt-dlp 参数配置</span>
+            <span class="text-gray-600">（可选）</span>
+          </div>
+
+          <div v-if="linkShowYtOpts" class="mt-2 pt-2 border-t border-gray-700/30 space-y-2">
+            <!-- 登录认证 -->
+            <div class="text-[11px] text-gray-400 font-semibold">登录认证</div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">Cookies from browser</div>
+                <el-input v-model="linkYtOpts.cookiesFromBrowser" placeholder="chrome" size="small" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">Cookies 文件</div>
+                <el-input v-model="linkYtOpts.cookies" placeholder="/path/to/cookies.txt" size="small" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">用户名</div>
+                <el-input v-model="linkYtOpts.username" placeholder="站点登录用户名" size="small" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">密码</div>
+                <el-input v-model="linkYtOpts.password" type="password" placeholder="站点登录密码" size="small" />
+              </div>
+            </div>
+
+            <!-- 网络 & 格式 -->
+            <div class="text-[11px] text-gray-400 font-semibold pt-1">网络 &amp; 格式</div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">代理地址</div>
+                <el-input v-model="linkYtOpts.proxy" placeholder="http://127.0.0.1:7890 或 socks5://" size="small" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">限速</div>
+                <el-input v-model="linkYtOpts.limitRate" placeholder="5M / 500K" size="small" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">格式选择器</div>
+                <el-input v-model="linkYtOpts.format" placeholder="bv*+ba" size="small" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">重试次数</div>
+                <el-input-number v-model="linkYtOpts.retries" :min="0" :max="99" size="small" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">User-Agent</div>
+                <el-input v-model="linkYtOpts.userAgent" placeholder="自定义 UA" size="small" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">Referer</div>
+                <el-input v-model="linkYtOpts.referer" placeholder="https://example.com/" size="small" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">请求间隔（秒）</div>
+                <el-input-number v-model="linkYtOpts.sleepInterval" :min="0" :max="3600" size="small" />
+              </div>
+              <div class="flex items-end gap-3 pb-px">
+                <el-checkbox v-model="linkYtOpts.geoBypass" size="small">
+                  <span class="text-[11px] text-gray-500">绕过地域限制</span>
+                </el-checkbox>
+                <el-checkbox v-model="linkYtOpts.noCheckCert" size="small">
+                  <span class="text-[11px] text-gray-500">跳过证书校验</span>
+                </el-checkbox>
+              </div>
+            </div>
+
+            <!-- 高级 -->
+            <div class="text-[11px] text-gray-400 font-semibold pt-1">高级</div>
+            <div>
+              <div class="text-[11px] text-gray-500 mb-1">额外命令行参数</div>
+              <el-input v-model="linkYtOpts.rawArgs" type="textarea" :rows="2" placeholder="--extractor-args youtube:player_client=web&#10;--add-header Referer:https://www.youtube.com/" size="small" />
+            </div>
           </div>
         </div>
 

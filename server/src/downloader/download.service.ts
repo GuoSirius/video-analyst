@@ -9,6 +9,20 @@ import { SseService } from '../common/sse/sse.service'
 import { v4 as uuid } from 'uuid'
 import type { YtDlpOptions } from '../crawler/crawler.service'
 
+const projectRoot = path.resolve(process.cwd(), '..')
+
+/** 将绝对路径转为相对于项目根的路径（用于持久化存储） */
+function toRelative(absolutePath: string): string {
+  return path.relative(projectRoot, absolutePath).replace(/\\/g, '/')
+}
+
+/** 解析存储的路径：兼容旧绝对路径 + 新相对路径 */
+export function resolvePath(stored: string): string {
+  if (!stored) return stored
+  if (path.isAbsolute(stored)) return stored  // 旧格式（绝对路径）
+  return path.resolve(projectRoot, stored)     // 新格式（相对路径）
+}
+
 /** 内部使用的视频信息结构 */
 export interface VideoInfo {
   title: string
@@ -48,7 +62,7 @@ export class DownloadService {
     private readonly db: DatabaseService,
     private readonly sse: SseService,
   ) {
-    this.downloadDir = path.resolve(process.cwd(), '..', 'data', 'downloads')
+    this.downloadDir = path.resolve(projectRoot, 'data', 'downloads')
     if (!fs.existsSync(this.downloadDir)) {
       fs.mkdirSync(this.downloadDir, { recursive: true })
     }
@@ -134,7 +148,7 @@ export class DownloadService {
       // Download succeeded — handle reimport_pending first
       const didReimport = await this.handleReimportIfPending(taskId)
       if (!didReimport) {
-        this.db.db.prepare(`UPDATE download_queue SET status = 'completed', file_path = ?, progress = 100, updated_at = datetime('now') WHERE id = ?`).run(filePath, taskId)
+        this.db.db.prepare(`UPDATE download_queue SET status = 'completed', file_path = ?, progress = 100, updated_at = datetime('now') WHERE id = ?`).run(toRelative(filePath), taskId)
         this.sse.emitEvent('download', { taskId, itemId, status: 'completed', filePath, progress: 100 })
       }
       return
@@ -244,8 +258,9 @@ export class DownloadService {
       return { error: '只有失败或已完成的任务可以重试' }
     }
     // Clean up old file if exists
-    if (task.file_path && fs.existsSync(task.file_path)) {
-      try { fs.unlinkSync(task.file_path) } catch { /* ignore */ }
+    const oldPath = task.file_path ? resolvePath(task.file_path) : null
+    if (oldPath && fs.existsSync(oldPath)) {
+      try { fs.unlinkSync(oldPath) } catch { /* ignore */ }
     }
     this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0, file_path = NULL, updated_at = datetime('now') WHERE id = ?`).run(taskId)
     // Trigger processing immediately
@@ -260,8 +275,9 @@ export class DownloadService {
     // If downloading, stop first
     this.cancelSet.delete(taskId)
     this.abortMap.delete(taskId)
-    if (task.file_path && fs.existsSync(task.file_path)) {
-      try { fs.unlinkSync(task.file_path) } catch { /* ignore */ }
+    const delPath = task.file_path ? resolvePath(task.file_path) : null
+    if (delPath && fs.existsSync(delPath)) {
+      try { fs.unlinkSync(delPath) } catch { /* ignore */ }
     }
     this.db.db.prepare('DELETE FROM download_queue WHERE id = ?').run(taskId)
     return { ok: true }
@@ -273,8 +289,9 @@ export class DownloadService {
       this.cancelSet.delete(id)
       this.abortMap.delete(id)
       const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
-      if (task?.file_path && fs.existsSync(task.file_path)) {
-        try { fs.unlinkSync(task.file_path) } catch { /* ignore */ }
+      const batchPath = task?.file_path ? resolvePath(task.file_path) : null
+      if (batchPath && fs.existsSync(batchPath)) {
+        try { fs.unlinkSync(batchPath) } catch { /* ignore */ }
       }
     }
     const stmt = this.db.db.prepare('DELETE FROM download_queue WHERE id = ?')
@@ -307,8 +324,9 @@ export class DownloadService {
       const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
       if (!task) continue
       if (task.status !== 'failed' && task.status !== 'completed') continue
-      if (task.file_path && fs.existsSync(task.file_path)) {
-        try { fs.unlinkSync(task.file_path) } catch { /* ignore */ }
+      const retryPath = task.file_path ? resolvePath(task.file_path) : null
+      if (retryPath && fs.existsSync(retryPath)) {
+        try { fs.unlinkSync(retryPath) } catch { /* ignore */ }
       }
       this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0, file_path = NULL, updated_at = datetime('now') WHERE id = ?`).run(id)
       count++
@@ -336,7 +354,8 @@ export class DownloadService {
         const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
         if (!task) { results.push({ id, ok: false, error: '任务不存在' }); continue }
         if (task.status !== 'completed') { results.push({ id, ok: false, error: '只能对已完成的下载执行流水线' }); continue }
-        if (!task.file_path || !fs.existsSync(task.file_path)) { results.push({ id, ok: false, error: '下载文件不存在' }); continue }
+        const filePath = resolvePath(task.file_path)
+        if (!filePath || !fs.existsSync(filePath)) { results.push({ id, ok: false, error: '下载文件不存在' }); continue }
 
         // 追溯爬虫任务 ID
         let crawlerTaskId: string | undefined
@@ -345,13 +364,13 @@ export class DownloadService {
           crawlerTaskId = item?.task_id || undefined
         }
 
-        const outputDir = path.resolve(process.cwd(), '..', 'data', 'transcoded')
-        const fileName = task.filename || path.basename(task.file_path)
+        const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
+        const fileName = task.filename || path.basename(filePath)
 
         // Create transcode task — processing handled by caller (controller)
         queueService.createTask('transcode', {
-          file: task.file_path,
-          outputDir,
+          file: toRelative(filePath),
+          outputDir: toRelative(outputDir),
           source: 'download',
           fileName,
           crawlerTaskId,
@@ -476,14 +495,15 @@ export class DownloadService {
    * 创建下载任务（支持站点链接）
    */
   async createDownloadTask(
-    urls: Array<{ url: string; fieldName?: string; downloadMethod?: string }>,
+    urls: Array<{ url: string; fieldName?: string; downloadMethod?: string; ytDlpOptions?: any }>,
     extra: { item_id?: string; filenamePrefix?: string },
   ): Promise<string[]> {
     const taskIds: string[] = []
 
-    for (const { url, fieldName, downloadMethod } of urls) {
+    for (const { url, fieldName, downloadMethod, ytDlpOptions } of urls) {
       const id = uuid()
       const forcedMethod = downloadMethod || null
+      const ytOptsJson = ytDlpOptions ? JSON.stringify(ytDlpOptions) : null
       const site = forcedMethod === 'file' ? 'direct' : forcedMethod === 'yt-dlp' ? 'unknown' : this.detectSite(url)
 
       if (site === 'direct') {
@@ -491,9 +511,9 @@ export class DownloadService {
         const ext = url.split('?')[0].split('.').pop()?.toLowerCase() || ''
         const fileType = this.getFileTypeExt(ext)
         this.db.db.prepare(`
-          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress, download_method)
-          VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?)
-        `).run(id, extra.item_id || null, url, filename, fileType, fieldName || 'link', forcedMethod)
+          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress, download_method, yt_dlp_options)
+          VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
+        `).run(id, extra.item_id || null, url, filename, fileType, fieldName || 'link', forcedMethod, ytOptsJson)
         taskIds.push(id)
         continue
       }
@@ -509,17 +529,17 @@ export class DownloadService {
           extra.filenamePrefix || (info.title ? info.title + '.' + ext : this.extractFilename(url))
         )
         this.db.db.prepare(`
-          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress, download_method)
-          VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?)
-        `).run(id, extra.item_id || null, url, filename, 'video', fieldName || 'link', forcedMethod || 'yt-dlp')
+          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress, download_method, yt_dlp_options)
+          VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
+        `).run(id, extra.item_id || null, url, filename, 'video', fieldName || 'link', forcedMethod || 'yt-dlp', ytOptsJson)
         taskIds.push(id)
       } catch (err: any) {
         console.error(`[DownloadService] Failed to get info for ${url}:`, err.message)
         const filename = this.sanitizeFilename(extra.filenamePrefix || 'video') + '.*'
         this.db.db.prepare(`
-          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, error, progress, download_method)
-          VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?)
-        `).run(id, extra.item_id || null, url, filename, 'video', fieldName || 'link', err.message, forcedMethod || 'yt-dlp')
+          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, error, progress, download_method, yt_dlp_options)
+          VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?, ?)
+        `).run(id, extra.item_id || null, url, filename, 'video', fieldName || 'link', err.message, forcedMethod || 'yt-dlp', ytOptsJson)
         taskIds.push(id)
       }
     }

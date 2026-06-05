@@ -9,7 +9,20 @@ import { DatabaseService } from '../common/database/database.service'
 import { QueueService } from '../common/queue/queue.service'
 import { TranscoderService } from '../transcoder/transcoder.service'
 
-const mediaDir = path.resolve(process.cwd(), '..', 'data', 'media')
+const projectRoot = path.resolve(process.cwd(), '..')
+const mediaDir = path.resolve(projectRoot, 'data', 'media')
+
+/** 将绝对路径转为相对于项目根的路径（用于持久化存储） */
+function toRelative(absolutePath: string): string {
+  return path.relative(projectRoot, absolutePath).replace(/\\/g, '/')
+}
+
+/** 解析存储的路径：兼容旧绝对路径 + 新相对路径 */
+function resolvePath(stored: string): string {
+  if (!stored) return stored
+  if (path.isAbsolute(stored)) return stored  // 旧格式（绝对路径）
+  return path.resolve(projectRoot, stored)     // 新格式（相对路径）
+}
 
 @Controller('api/download')
 export class DownloadController {
@@ -137,7 +150,7 @@ export class DownloadController {
         this.db.db.prepare(`
           INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, file_path)
           VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)
-        `).run(taskId, null, `upload://${file.originalname}`, file.originalname, fileType, 'upload', file.path)
+        `).run(taskId, null, `upload://${file.originalname}`, file.originalname, fileType, 'upload', toRelative(file.path))
         results.push({ filename: file.originalname, ok: true, taskId })
       } catch (err: any) {
         results.push({ filename: file.originalname, ok: false, error: err.message })
@@ -206,7 +219,8 @@ export class DownloadController {
   async startTranscode(@Param('id') id: string) {
     const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
     if (!task) return { error: 'Task not found' }
-    if (!task.file_path || !fs.existsSync(task.file_path)) return { error: '文件不存在' }
+    const filePath = resolvePath(task.file_path)
+    if (!filePath || !fs.existsSync(filePath)) return { error: '文件不存在' }
 
     // 追溯到爬虫任务 ID，用于流水线自动触发判断
     let crawlerTaskId: string | undefined
@@ -215,30 +229,32 @@ export class DownloadController {
       crawlerTaskId = item?.task_id || undefined
     }
 
-    const outputDir = path.resolve(process.cwd(), '..', 'data', 'transcoded')
-    const fileName = task.filename || path.basename(task.file_path)
+    const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
+    const fileName = task.filename || path.basename(filePath)
     const queueTask = this.queue.createTask('transcode', {
-      file: task.file_path,
-      outputDir,
+      file: toRelative(filePath),
+      outputDir: toRelative(outputDir),
       source: 'download',
       fileName,
       crawlerTaskId,
     })
 
     // Process the transcode task
-    this.processTranscodeTask(queueTask.id, task.file_path, outputDir, crawlerTaskId)
+    this.processTranscodeTask(queueTask.id, filePath, outputDir, crawlerTaskId)
 
     return { ok: true, taskId: queueTask.id }
   }
 
   private async processTranscodeTask(taskId: string, inputPath: string, outputDir: string, _crawlerTaskId?: string) {
     try {
+      const resolvedInput = resolvePath(inputPath)
+      const resolvedOutput = resolvePath(outputDir)
       this.queue.updateTaskStatus(taskId, 'running')
       this.queue.updateTaskProgress(taskId, 0)
-      const outputPath = await this.transcoder.transcode(inputPath, outputDir, (pct) => {
+      const outputPath = await this.transcoder.transcode(resolvedInput, resolvedOutput, (pct) => {
         this.queue.updateTaskProgress(taskId, pct)
       })
-      this.queue.updateTaskResult(taskId, { outputPath })
+      this.queue.updateTaskResult(taskId, { outputPath: toRelative(outputPath) })
     } catch (err: any) {
       this.queue.updateTaskError(taskId, err.message)
     }
@@ -366,7 +382,10 @@ export class DownloadController {
    */
   @Post('create')
   async createDownload(
-    @Body() body: { urls: Array<{ url: string; fieldName?: string; downloadMethod?: string }>; item_id?: string; filenamePrefix?: string },
+    @Body() body: {
+      urls: Array<{ url: string; fieldName?: string; downloadMethod?: string; ytDlpOptions?: any }>
+      item_id?: string; filenamePrefix?: string
+    },
   ) {
     if (!body.urls || !Array.isArray(body.urls) || body.urls.length === 0) {
       return { error: 'urls 数组不能为空' }
