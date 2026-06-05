@@ -1101,6 +1101,20 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
           <div class="text-[13px] font-semibold text-gray-300 mb-2.5">字段指定</div>
 
           <div class="space-y-2">
+            <!-- 唯一标识 -->
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 w-24 flex-shrink-0">
+                唯一标识
+                <el-tooltip content="能唯一标识每条记录的字段名（如数据库 ID）。重试/重采时用于去重匹配，防止重复插入。" placement="top">
+                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+                </el-tooltip>
+              </span>
+              <el-select v-model="formIdField" multiple filterable allow-create default-first-option placeholder="如: id" size="small" class="flex-1">
+                <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
+              </el-select>
+              <el-checkbox v-model="formIdFieldAll" size="small" class="!mr-0 flex-shrink-0">取全部</el-checkbox>
+            </div>
+
             <!-- 标题字段 -->
             <div class="flex items-center gap-3">
               <span class="text-xs text-gray-400 w-24 flex-shrink-0">
@@ -1141,20 +1155,6 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
                 <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
               </el-select>
               <el-checkbox v-model="formMediaUrlFieldAll" size="small" class="!mr-0 flex-shrink-0">取全部</el-checkbox>
-            </div>
-
-            <!-- 唯一标识 -->
-            <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-400 w-24 flex-shrink-0">
-                唯一标识
-                <el-tooltip content="能唯一标识每条记录的字段名（如数据库 ID）。重试/重采时用于去重匹配，防止重复插入。" placement="top">
-                  <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
-                </el-tooltip>
-              </span>
-              <el-select v-model="formIdField" multiple filterable allow-create default-first-option placeholder="如: id" size="small" class="flex-1">
-                <el-option v-for="f in availableFieldNames" :key="f" :label="f" :value="f" />
-              </el-select>
-              <el-checkbox v-model="formIdFieldAll" size="small" class="!mr-0 flex-shrink-0">取全部</el-checkbox>
             </div>
           </div>
 
