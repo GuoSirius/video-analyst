@@ -64,6 +64,7 @@ const linkPreview = ref<{
 } | null>(null)
 const testingLink = ref(false)
 const linkShowYtOpts = ref(false)
+const cookieBrowsers = ['chrome', 'firefox', 'edge', 'brave', 'opera', 'vivaldi', 'chromium']
 // yt-dlp 参数（仅 linkDownloadMethod='yt-dlp' 时有效）
 const linkYtOpts = reactive({
   cookiesFromBrowser: '', cookies: '', proxy: '', format: '',
@@ -172,7 +173,9 @@ function resetFilters() {
 }
 
 // ── Computed batches ──
-const pendingIds = computed(() => selectedIds.value.filter(id => findSelected(id)?.status === 'pending'))
+const pendingIds = computed(() => selectedIds.value.filter(id => {
+  const s = findSelected(id)?.status; return s === 'pending' || s === 'paused'
+}))
 const downloadingIds = computed(() => selectedIds.value.filter(id => findSelected(id)?.status === 'downloading'))
 const failedIds = computed(() => selectedIds.value.filter(id => findSelected(id)?.status === 'failed'))
 const completedIds = computed(() => selectedIds.value.filter(id => findSelected(id)?.status === 'completed'))
@@ -663,6 +666,7 @@ async function confirmLink() {
 function statusLabel(s: string) {
   const map: Record<string, string> = {
     pending: '等待下载', downloading: '下载中', completed: '已完成', failed: '下载失败',
+    paused: '已暂停',
   }
   return map[s] || s || '未知'
 }
@@ -673,6 +677,7 @@ function statusClass(s: string) {
     downloading: 'bg-blue-500/15 text-blue-300 border-blue-500/25',
     failed: 'bg-red-500/15 text-red-300 border-red-500/25',
     pending: 'bg-purple-500/15 text-purple-300 border-purple-500/25',
+    paused: 'bg-amber-500/15 text-amber-300 border-amber-500/25',
   }
   return map[s] || ''
 }
@@ -776,16 +781,38 @@ function buildDownloadCommand(task: any): string {
     }
   }
 
-  const baseName = filename.includes('.') ? filename.slice(0, filename.lastIndexOf('.')) : filename
-  const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : 'mp4'
-  parts.push(`-o "${baseName}.${ext}"`)
+  // Clean filename: strip pseudo-static extensions for video platform URLs
+  const isPseudoExt = (e: string) => ['html', 'htm', 'php', 'asp', 'aspx', 'jsp', 'cgi'].includes(e)
+  const VIDEO_SITES = ['v.qq.com', 'bilibili.com', 'bilivideo.com', 'b23.tv',
+    'youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com',
+    'youku.com', 'iqiyi.com', 'vimeo.com', 'twitch.tv',
+    'twitter.com', 'x.com', 'instagram.com', 'tiktok.com']
+  const isVideoSite = VIDEO_SITES.some(s => url.includes(s))
+
+  let displayExt = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : ''
+  let displayBase = filename.includes('.') ? filename.slice(0, filename.lastIndexOf('.')) : filename
+
+  // If the extension is a pseudo-static web extension, replace with mp4 for video sites
+  if (isPseudoExt(displayExt) && isVideoSite) {
+    displayExt = 'mp4'
+  } else if (!displayExt && isVideoSite) {
+    displayExt = 'mp4'
+  } else if (!displayExt) {
+    displayExt = 'mp4'
+  }
+
+  parts.push(`-o "${displayBase}.${displayExt}"`)
   parts.push(`"${url}"`)
 
   return parts.join(' \\\n  ')
 }
 
 function isDirectUrl(url: string): boolean {
-  const ext = url.split('?')[0].split('.').pop()?.toLowerCase() || ''
+  // Extract extension from last path segment only (not from domain)
+  const lastSeg = url.split('?')[0].split('/').pop() || ''
+  const ext = lastSeg.includes('.') ? lastSeg.split('.').pop()?.toLowerCase() || '' : ''
+  // Pseudo-static web extensions are not real file types
+  if (['html', 'htm', 'php', 'asp', 'aspx', 'jsp'].includes(ext)) return false
   return ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v', 'mp3', 'wav', 'ogg', 'aac', 'pdf', 'jpg', 'png', 'gif'].includes(ext)
 }
 
@@ -869,6 +896,7 @@ onUnmounted(teardownSSE)
           <span class="text-emerald-400">{{ stats.completed || 0 }}</span> 已完成 /
           <span class="text-blue-400">{{ stats.downloading || 0 }}</span> 下载中 /
           <span class="text-purple-400">{{ stats.pending || 0 }}</span> 等待 /
+          <span class="text-amber-400">{{ stats.paused || 0 }}</span> 暂停 /
           <span class="text-red-400">{{ stats.failed || 0 }}</span> 失败
         </span>
 
@@ -951,6 +979,7 @@ onUnmounted(teardownSSE)
           <el-select v-model="statusFilter" size="small" class="!w-28" @change="page=1;fetchItems()">
             <el-option label="全部" value="all" />
             <el-option label="等待下载" value="pending" />
+            <el-option label="已暂停" value="paused" />
             <el-option label="下载中" value="downloading" />
             <el-option label="已完成" value="completed" />
             <el-option label="下载失败" value="failed" />
@@ -1047,8 +1076,8 @@ onUnmounted(teardownSSE)
         <el-table-column label="操作" min-width="260" align="center" fixed="right">
           <template #default="{ row }">
             <div class="flex items-center justify-center gap-1 flex-wrap">
-              <!-- 等待下载: 开始下载、删除 -->
-              <template v-if="row.status === 'pending'">
+              <!-- 等待下载/已暂停: 开始下载、删除 -->
+              <template v-if="row.status === 'pending' || row.status === 'paused'">
                 <el-button size="small" type="primary" plain @click="startDownload(row.id)">开始下载</el-button>
                 <el-button size="small" type="danger" plain @click="deleteSingle(row.id)">删除</el-button>
               </template>
@@ -1065,6 +1094,7 @@ onUnmounted(teardownSSE)
               <!-- 已完成: 转码、重新下载、删除 -->
               <template v-else-if="row.status === 'completed'">
                 <el-button size="small" type="success" plain @click="startTranscode(row.id)">转码</el-button>
+                <el-button size="small" plain @click="showErrorDetail(row)">查看命令</el-button>
                 <el-button v-if="row.field_name !== 'upload'" size="small" type="warning" plain @click="retryDownload(row.id)">重新下载</el-button>
                 <el-button size="small" type="danger" plain @click="deleteSingle(row.id)">删除</el-button>
               </template>
@@ -1300,7 +1330,9 @@ onUnmounted(teardownSSE)
             <div class="grid grid-cols-2 gap-x-4 gap-y-2">
               <div>
                 <div class="text-[11px] text-gray-500 mb-1">Cookies from browser</div>
-                <el-input v-model="linkYtOpts.cookiesFromBrowser" placeholder="chrome" size="small" />
+                <el-select v-model="linkYtOpts.cookiesFromBrowser" placeholder="选择或输入浏览器" size="small" filterable allow-create clearable class="w-full">
+                  <el-option v-for="b in cookieBrowsers" :key="b" :label="b" :value="b" />
+                </el-select>
               </div>
               <div>
                 <div class="text-[11px] text-gray-500 mb-1">Cookies 文件</div>
@@ -1427,14 +1459,14 @@ onUnmounted(teardownSSE)
       </template>
     </el-dialog>
 
-    <!-- Error Detail Dialog -->
-    <el-dialog v-model="errorDialog" title="下载异常详情" width="720px" destroy-on-close>
+    <!-- Error / Command Detail Dialog -->
+    <el-dialog v-model="errorDialog" :title="errorTask?.error ? '下载异常详情' : '等效命令行'" width="720px" destroy-on-close>
       <div v-if="errorTask" class="space-y-4">
-        <!-- Error message -->
-        <div>
+        <!-- Error message (only when there is an error) -->
+        <div v-if="errorTask.error">
           <div class="text-xs text-gray-400 mb-2">错误信息</div>
           <div class="rounded-lg bg-red-500/5 border border-red-500/15 p-3">
-            <pre class="text-xs text-red-400 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ errorTask.error || '(无详细信息)' }}</pre>
+            <pre class="text-xs text-red-400 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ errorTask.error }}</pre>
           </div>
         </div>
 

@@ -35,12 +35,14 @@ server/src/
 │   ├── queue/       # SQLite 任务队列 (pending→running→completed/failed)
 │   ├── sse/         # SSE 实时推送任务进度
 │   ├── pipeline/    # 自动化流水线 (isAutoMode/setAutoMode)
-│   └── crypto/      # AES-256-GCM 加密 (encrypt/decrypt)
+│   ├── crypto/      # AES-256-GCM 加密 (encrypt/decrypt)
+│   └── utils/       # 共享工具 (date, url 检测/分类/ID提取)
 ├── settings/        # 全局设置 API (/api/settings/pipeline)
 ├── crawler/         # 爬虫 (cheerio + CSS选择器 + 翻页)
 ├── transcoder/      # FFmpeg 转码 → 16kHz mono WAV
 ├── whisper/         # 语音识别 (远端API 或 本地whisper CLI)
 ├── ai/              # 大模型调用 (多provider优先级+fallback)
+├── downloader/      # yt-dlp / HTTP直链 下载
 └── export/          # Excel 导出 (exceljs)
 
 web/src/
@@ -99,6 +101,47 @@ web/src/
 - Element Plus 组件用于表单: el-button/el-input/el-table/el-dialog 等
 - FontAwesome 图标用 CSS 方式: `<i class="fas fa-xxx">`（不是 SVG 组件）
 - 暗黑模式: `html.dark` + Element Plus dark css-vars + `web/src/style.css`
+- **下拉+自由输入**: cookies from browser 等场景用 `el-select` + `filterable` + `allow-create` + `clearable`，预设常用值但允许自定义
+- **弹窗合并**: 相近功能的弹窗共用一个 dialog，通过 `v-if` 条件区块 + 动态 title 区分模式（如错误详情/等效命令共用一个弹窗）
+
+### 7. URL 检测与文件名规范
+
+#### 共享工具 `server/src/common/utils/url.util.ts`
+
+所有 URL 类型判断、扩展名提取、视频 ID 提取的**唯一入口**，禁止在业务代码中内联重复列表。
+
+| 导出 | 用途 |
+|---|---|
+| `VIDEO_PLATFORM_DOMAINS` | 16 个已知视频站点域名（唯一数据源） |
+| `PSEUDO_STATIC_EXTS` | 伪静态后缀集合: `html/htm/php/asp/aspx/jsp/cgi` |
+| `isVideoPlatform(url)` | URL 是否属于已知视频平台 |
+| `extractExtFromUrl(url)` | 从末段取扩展名，自动过滤伪静态后缀，返回 `''` 表示无有效扩展名 |
+| `extractVideoId(url)` | 平台原生视频 ID（仅视频平台返回有意义值，非平台返回 `''`） |
+| `classifyExt(ext)` | 扩展名 → `video/audio/image/document/unknown` |
+| `resolveFileType(url, ext)` | 综合判断：扩展名 + 平台 + URL 特征 |
+
+**ID 提取规则**: YouTube 特判 `?v=` / `youtu.be/ID`；其余平台取 URL 末段剥除伪静态/媒体后缀，过滤路由噪声（watch/page/x/video 等）
+
+#### 文件名格式
+
+```
+{标题}_{视频ID}.{扩展名}
+```
+
+- **视频 ID 优先级**: yt-dlp `info.id` → `extractVideoId(url)` → `itemId` 前 8 位
+- **直链文件**: 无平台 ID 时用 itemId 前 8 位兜底
+- **非视频非直链**: 不加 ext，不加 ID 后缀
+- **伪静态后缀**: 视频平台自动替换为 `.mp4`，非平台剥离
+- **去重**: 若文件名已包含 ID 则跳过追加
+
+#### 示例
+
+| URL | 标题 | 结果 |
+|---|---|---|
+| `v.qq.com/x/page/l3503vghztq.html` | 冻存细胞收货处理 | `冻存细胞收货处理_l3503vghztq.mp4` |
+| `bilibili.com/video/BV1xx411c7mD` | 某个视频 | `某个视频_BV1xx411c7mD.mp4` |
+| `youtube.com/watch?v=abc123` | My Video | `My_Video_abc123.mp4` |
+| `example.com/file.mp4` | — | `file_a1b2c3d4.mp4` |
 
 ## 环境变量
 

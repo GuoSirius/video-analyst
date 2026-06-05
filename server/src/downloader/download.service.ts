@@ -7,6 +7,8 @@ import { YtDlp } from 'ytdlp-nodejs'
 import { DatabaseService } from '../common/database/database.service'
 import { SseService } from '../common/sse/sse.service'
 import { v4 as uuid } from 'uuid'
+import { formatDate } from '../common/utils/date.util'
+import { isVideoPlatform, classifyExt, extractExtFromUrl, extractVideoId, PSEUDO_STATIC_EXTS } from '../common/utils/url.util'
 import type { YtDlpOptions } from '../crawler/crawler.service'
 
 const projectRoot = path.resolve(process.cwd(), '..')
@@ -73,11 +75,11 @@ export class DownloadService {
     return this.downloadDir
   }
 
-  /** Process pending download tasks — called by scheduler */
+  /** Process pending download tasks — called by scheduler. Only picks up 'pending' status, not 'paused'. */
   async processDownloads() {
     const pendingTasks = this.db.db.prepare(
-      'SELECT * FROM download_queue WHERE status = ? ORDER BY created_at ASC LIMIT 5'
-    ).all('pending') as any[]
+      "SELECT * FROM download_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 5"
+    ).all() as any[]
 
     for (const task of pendingTasks) {
       if (this.cancelSet.has(task.id)) continue
@@ -118,80 +120,48 @@ export class DownloadService {
 
     if (fieldName === 'upload') {
       // 本地上传：uploads/{YYYY-MM-DD}/
-      const dateStr = new Date().toISOString().slice(0, 10)  // e.g. 2026-06-06
+      const dateStr = formatDate()
       return path.join(this.downloadDir, 'uploads', dateStr)
     }
 
-    // 手动添加链接 / 其他：manual/{YYYY-MM-DD}/
-    const dateStr = new Date().toISOString().slice(0, 10)  // e.g. 2026-06-06
-    return path.join(this.downloadDir, 'manual', dateStr)
+    // 手动添加链接 / 其他：manual/{taskId8}/（每个任务独立子目录，避免同名冲突）
+    return path.join(this.downloadDir, 'manual', task.id.slice(0, 8))
   }
 
   /** Determine file type by download method first, then by URL/extension */
   private resolveFileType(task: any): string {
     const method = task.download_method  // NULL | 'yt-dlp' | 'file'
     const url = task.url || ''
-    const ext = (task.filename || '').includes('.')
-      ? (task.filename as string).split('.').pop()?.toLowerCase() || ''
-      : ''
 
-    // yt-dlp 下载 → 一定是视频（站点视频平台）
-    if (method === 'yt-dlp') return 'video'
+    // yt-dlp / video platform → always video
+    if (method === 'yt-dlp' || isVideoPlatform(url)) return 'video'
 
-    // HTTP 直链 → 根据扩展名判断
-    if (method === 'file') return this.getFileTypeByExt(ext)
-
-    // NULL（自动检测/旧数据）→ URL 平台检测 + 扩展名兜底
-    if (this.isVideoPlatform(url)) return 'video'
-
-    // 从 filename 提取扩展名
+    // Extension from filename (using shared util that strips pseudo-static ext)
+    const ext = extractExtFromUrl(task.filename || url)
     if (ext) {
-      const ft = this.getFileTypeByExt(ext)
+      const ft = classifyExt(ext)
       if (ft !== 'unknown') return ft
     }
 
-    // URL 路径末段兜底
-    const lastSeg = url.split('?')[0].split('/').pop() || ''
-    const urlExt = lastSeg.includes('.') ? lastSeg.split('.').pop()?.toLowerCase() || '' : ''
-    if (urlExt && urlExt !== 'html' && urlExt !== 'php' && urlExt !== 'asp' && urlExt !== 'jsp') {
-      return this.getFileTypeByExt(urlExt)
+    // URL path last segment fallback
+    const urlExt = extractExtFromUrl(url)
+    if (urlExt) {
+      return classifyExt(urlExt)
     }
 
     return 'unknown'
   }
 
-  /** 已知视频平台检测（伪静态页面如 .html 结尾但实际是视频） */
-  private isVideoPlatform(url: string): boolean {
-    const sites = [
-      'v.qq.com', 'bilibili.com', 'bilivideo.com', 'b23.tv',
-      'youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com',
-      'youku.com', 'iqiyi.com', 'vimeo.com', 'twitch.tv',
-      'twitter.com', 'x.com', 'instagram.com', 'tiktok.com',
-    ]
-    return sites.some(s => url.includes(s))
-  }
-
-  /** 纯扩展名 → 文件类型（不含平台判断） */
-  private getFileTypeByExt(ext: string): string {
-    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'm4v', 'ts', 'm3u8']
-    const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma', 'opus']
-    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico']
-    const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md']
-    if (videoExts.includes(ext)) return 'video'
-    if (audioExts.includes(ext)) return 'audio'
-    if (imageExts.includes(ext)) return 'image'
-    if (docExts.includes(ext)) return 'document'
-    return 'unknown'
-  }
+  // (isVideoPlatform and classifyExt now imported from ../common/utils/url.util)
 
   /** Execute a single download task */
   private async executeDownload(task: any) {
     const taskId = task.id
     const url = task.url
     const itemId = task.item_id
-    const filename = this.sanitizeFilename(task.filename || this.extractFilename(url))
+    const filename = this.sanitizeFilename(task.filename || this.extractFilename(url, task.item_id))
 
-    // 目录结构: {taskName}_{taskId8}/{itemId8}/ | uploads/{YYYY-MM}/ | manual/{YYYY-MM-DD}/
+    // 目录结构: {taskName}_{taskId8}/{itemId8}/ | uploads/{YYYY-MM}/ | manual/{taskId8}/
     const itemDir = this.resolveDownloadPath(task)
     const normalizedFilename = this.normalizeFilePath(filename)
     const dirPath = path.join(itemDir, path.dirname(normalizedFilename))
@@ -199,6 +169,9 @@ export class DownloadService {
       fs.mkdirSync(dirPath, { recursive: true })
     }
     const filePath = path.join(itemDir, normalizedFilename)
+
+    // 方案A：先下载到临时文件，成功后 rename 覆盖正式文件（避免失败时损坏旧文件）
+    const tmpPath = filePath + '.tmp'
 
     // Check if cancelled before starting
     if (this.cancelSet.has(taskId)) {
@@ -214,31 +187,37 @@ export class DownloadService {
       const method = task.download_method  // NULL | 'yt-dlp' | 'file'
 
       if (method === 'file') {
-        await this.downloadFile(url, filePath, taskId, (progress) => {
-          if (this.cancelSet.has(taskId)) return // 忽略进度更新
+        await this.downloadFile(url, tmpPath, taskId, (progress) => {
+          if (this.cancelSet.has(taskId)) return
           this.db.db.prepare(`UPDATE download_queue SET progress = ? WHERE id = ?`).run(progress, taskId)
           this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress })
         })
       } else if (method === 'yt-dlp') {
-        await this.downloadWithYtDlpLib(url, filePath, taskId, itemId)
+        await this.downloadWithYtDlpLib(url, tmpPath, taskId, itemId)
       } else {
         // NULL：自动检测（兼容旧数据 + 手动添加的链接）
         const site = this.detectSite(url)
         if (site === 'direct') {
-          await this.downloadFile(url, filePath, taskId, (progress) => {
+          await this.downloadFile(url, tmpPath, taskId, (progress) => {
             if (this.cancelSet.has(taskId)) return
             this.db.db.prepare(`UPDATE download_queue SET progress = ? WHERE id = ?`).run(progress, taskId)
             this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress })
           })
         } else {
-          await this.downloadWithYtDlpLib(url, filePath, taskId, itemId)
+          await this.downloadWithYtDlpLib(url, tmpPath, taskId, itemId)
         }
       }
 
       // Check if cancelled after download completed
       if (this.cancelSet.has(taskId)) {
-        this.handleCancelled(taskId, filePath)
+        this.handleCancelled(taskId, tmpPath)
         return
+      }
+
+      // 下载成功：临时文件 → 正式文件
+      if (fs.existsSync(tmpPath)) {
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+        fs.renameSync(tmpPath, filePath)
       }
 
       // Download succeeded — handle reimport_pending first
@@ -250,6 +229,10 @@ export class DownloadService {
       return
 
     } catch (err: any) {
+      // Clean up temp file on failure
+      if (fs.existsSync(tmpPath)) {
+        try { fs.unlinkSync(tmpPath) } catch { /* ignore */ }
+      }
       // If cancelled, don't treat as failure
       if (this.cancelSet.has(taskId)) {
         this.handleCancelled(taskId, filePath)
@@ -300,16 +283,19 @@ export class DownloadService {
     // Delete the current task
     this.db.db.prepare('DELETE FROM download_queue WHERE id = ?').run(taskId)
 
+    // Respect autoDownload flag: paused if false, pending if true
+    const newStatus = opts.autoDownload ? 'pending' : 'paused'
+
     // Create new download tasks
     const insertStmt = this.db.db.prepare(`
       INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
-      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     for (const u of opts.urls) {
       const newId = uuid()
       const ytOptsJson = u.ytDlpOptions ? JSON.stringify(u.ytDlpOptions) : null
-      insertStmt.run(newId, opts.itemId, u.url, u.filename, u.fileType, u.fieldName, u.downloadMethod, ytOptsJson)
+      insertStmt.run(newId, opts.itemId, u.url, u.filename, u.fileType, u.fieldName, newStatus, u.downloadMethod, ytOptsJson)
     }
 
     // Update crawl_items download_status
@@ -397,14 +383,14 @@ export class DownloadService {
     return { ok: true, count: ids.length }
   }
 
-  /** Batch start pending tasks */
+  /** Batch start pending/paused tasks */
   batchStart(ids: string[]) {
     const stmt = this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0 WHERE id = ?`)
     let count = 0
     for (const id of ids) {
       const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
-      if (task && task.status === 'pending') {
-        // Already pending — will be picked up by scheduler; just ensure it's clean
+      if (task && (task.status === 'pending' || task.status === 'paused')) {
+        // Reset to pending — will be picked up by scheduler; just ensure it's clean
         stmt.run(id)
         count++
       }
@@ -556,6 +542,27 @@ export class DownloadService {
     return 'unknown'
   }
 
+  /** 站点特有的默认 HTTP 请求头（避免 Referer 校验/反爬拦截） */
+  private getSiteDefaultHeaders(url: string): string[] {
+    const u = url.toLowerCase()
+    const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    const headers: string[] = [`User-Agent:${DEFAULT_UA}`]
+
+    if (u.includes('bilibili.com') || u.includes('b23.tv') || u.includes('bilivideo.com')) {
+      headers.push('Referer:https://www.bilibili.com/')
+    } else if (u.includes('v.qq.com')) {
+      headers.push('Referer:https://v.qq.com/')
+    } else if (u.includes('youku.com')) {
+      headers.push('Referer:https://www.youku.com/')
+    } else if (u.includes('iqiyi.com')) {
+      headers.push('Referer:https://www.iqiyi.com/')
+    } else if (u.includes('douyin.com') || u.includes('iesdouyin.com')) {
+      headers.push('Referer:https://www.douyin.com/')
+    }
+
+    return headers
+  }
+
   /**
    * 获取视频信息（用于前端预览）
    */
@@ -603,7 +610,7 @@ export class DownloadService {
       const site = forcedMethod === 'file' ? 'direct' : forcedMethod === 'yt-dlp' ? 'unknown' : this.detectSite(url)
 
       if (site === 'direct') {
-        const filename = this.sanitizeFilename(extra.filenamePrefix || this.extractFilename(url))
+        const filename = this.sanitizeFilename(extra.filenamePrefix || this.extractFilename(url, extra.item_id))
         const fileType = this.resolveFileType({ download_method: forcedMethod, url, filename })
         this.db.db.prepare(`
           INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress, download_method, yt_dlp_options)
@@ -620,8 +627,11 @@ export class DownloadService {
           throw new Error('播放列表不支持下载，请指定单个视频链接')
         }
         const ext = (info.formats?.[0]?.ext) || 'mp4'
+        const vid = (info as any).id || extractVideoId(url) || extra.item_id?.slice(0, 8) || ''
+        const titlePart = info.title ? info.title.replace(/[^\w一-龥]+/g, '_') : this.extractFilename(url)
+        const idSuffix = vid ? `_${vid}` : ''
         const filename = this.sanitizeFilename(
-          extra.filenamePrefix || (info.title ? info.title + '.' + ext : this.extractFilename(url))
+          extra.filenamePrefix || `${titlePart}${idSuffix}.${ext}`
         )
         const method = forcedMethod || 'yt-dlp'
         this.db.db.prepare(`
@@ -654,8 +664,12 @@ export class DownloadService {
     taskId: string,
     itemId: string,
   ): Promise<void> {
-    const outputDir = path.dirname(filePath)
-    const baseName = path.basename(filePath, path.extname(filePath))
+    // 方案A：支持临时文件模式（filePath 以 .tmp 结尾时，输出到临时名，由调用方 rename 到正式文件）
+    const isTmp = filePath.endsWith('.tmp')
+    const realPath = isTmp ? filePath.slice(0, -4) : filePath
+    const outputDir = path.dirname(realPath)
+    const baseName = path.basename(realPath, path.extname(realPath))
+    const outBase = isTmp ? baseName + '.tmp' : baseName
 
     // 读取 yt-dlp 配置选项
     const task = this.db.db.prepare('SELECT yt_dlp_options FROM download_queue WHERE id = ?').get(taskId) as any
@@ -663,7 +677,7 @@ export class DownloadService {
 
     let dl = this.ytDlp
       .download(url)
-      .output(path.join(outputDir, baseName + '.%(ext)s'))
+      .output(path.join(outputDir, outBase + '.%(ext)s'))
       .on('progress', (progress) => {
         if (this.cancelSet.has(taskId)) return
         if (progress.percentage !== undefined) {
@@ -689,6 +703,12 @@ export class DownloadService {
       noPlaylist: true,         // 防止意外下载整个播放列表
       socketTimeout: 30,        // 避免连接挂起
       extractorRetries: 3,      // 提取器错误重试
+    }
+
+    // 1a. 站点特有的默认请求头（避免 Referer 校验失败）
+    const siteDefaultHeaders = this.getSiteDefaultHeaders(url)
+    if (siteDefaultHeaders.length > 0) {
+      mergedOpts.addHeaders = siteDefaultHeaders
     }
 
     // 2. 全局覆盖（settings 表 download_ytdlp_defaults，JSON 格式）
@@ -717,15 +737,15 @@ export class DownloadService {
     if (mergedOpts.limitRate) dl = dl.rateLimit(mergedOpts.limitRate)
     if (mergedOpts.username) dl = dl.username(mergedOpts.username)
     if (mergedOpts.password) dl = dl.password(mergedOpts.password)
-    if (opts.retries !== undefined) dl = dl.addOption('retries', opts.retries)
-    if (opts.noCheckCertificates) dl = dl.addOption('noCheckCertificates', true)
-    if (opts.geoBypass) dl = dl.addOption('geoBypass', true)
-    if (opts.userAgent) dl = dl.addOption('userAgent', opts.userAgent)
-    if (opts.referer) dl = dl.addOption('referer', opts.referer)
-    if (opts.sleepInterval !== undefined) dl = dl.addOption('sleepInterval', opts.sleepInterval)
-    if (opts.addHeaders) dl = dl.options({ addHeaders: opts.addHeaders })
-    if (opts.extractorArgs) dl = dl.options({ extractorArgs: opts.extractorArgs })
-    if (opts.rawArgs && opts.rawArgs.length > 0) dl = dl.addArgs(...opts.rawArgs)
+    if (mergedOpts.retries !== undefined) dl = dl.addOption('retries', mergedOpts.retries)
+    if (mergedOpts.noCheckCertificates) dl = dl.addOption('noCheckCertificates', true)
+    if (mergedOpts.geoBypass) dl = dl.addOption('geoBypass', true)
+    if (mergedOpts.userAgent) dl = dl.addOption('userAgent', mergedOpts.userAgent)
+    if (mergedOpts.referer) dl = dl.addOption('referer', mergedOpts.referer)
+    if (mergedOpts.sleepInterval !== undefined) dl = dl.addOption('sleepInterval', mergedOpts.sleepInterval)
+    if (mergedOpts.addHeaders) dl = dl.options({ addHeaders: mergedOpts.addHeaders })
+    if (mergedOpts.extractorArgs) dl = dl.options({ extractorArgs: mergedOpts.extractorArgs })
+    if (mergedOpts.rawArgs && mergedOpts.rawArgs.length > 0) dl = dl.addArgs(...mergedOpts.rawArgs)
 
     const result = await dl.run()
 
@@ -780,6 +800,7 @@ export class DownloadService {
 
         const file = fs.createWriteStream(filePath)
         let receivedBytes = 0
+        let lastProgressEmit = 0
         const contentLength = response.headers['content-length']
         const totalBytes = contentLength ? parseInt(contentLength, 10) : 0
 
@@ -789,7 +810,20 @@ export class DownloadService {
           receivedBytes += chunk.length
           if (totalBytes > 0) {
             const progress = Math.round((receivedBytes / totalBytes) * 100)
-            onProgress(progress)
+            // Throttle progress updates to avoid too many SSE events
+            if (progress !== lastProgressEmit) {
+              lastProgressEmit = progress
+              onProgress(progress)
+            }
+          } else {
+            // No Content-Length: report progress based on received bytes (cap at 99%)
+            // Approximate: use log scale so the bar climbs quickly then slows
+            const mb = receivedBytes / (1024 * 1024)
+            const progress = Math.min(Math.round(Math.log10(mb + 1) * 30), 99)
+            if (progress !== lastProgressEmit) {
+              lastProgressEmit = progress
+              onProgress(progress)
+            }
           }
         })
 
@@ -837,11 +871,34 @@ export class DownloadService {
   // 工具方法
   // ════════════════════════════════════════════════════════════════
 
-  /** Extract filename from URL */
-  private extractFilename(url: string): string {
+  /** Extract filename from URL (strips/replaces pseudo-static extensions like .html on video platforms) */
+  private extractFilename(url: string, fallbackId?: string): string {
     const parts = url.split('?')[0].split('/')
-    const filename = parts[parts.length - 1]
-    return filename || `file_${Date.now()}`
+    let filename = parts[parts.length - 1] || `file_${Date.now()}`
+    // Pseudo-static web extensions (html/php/etc.) are not real file types
+    const dotIdx = filename.lastIndexOf('.')
+    if (dotIdx > 0) {
+      const ext = filename.slice(dotIdx + 1).toLowerCase()
+      if (PSEUDO_STATIC_EXTS.has(ext)) {
+        // Replace with .mp4 for known video platforms, otherwise strip
+        if (isVideoPlatform(url)) {
+          filename = filename.slice(0, dotIdx) + '.mp4'
+        } else {
+          filename = filename.slice(0, dotIdx)
+        }
+      }
+    }
+    // Append video ID for uniqueness (unless filename already contains it)
+    const vid = extractVideoId(url) || fallbackId?.slice(0, 8) || ''
+    if (vid && !filename.includes(vid)) {
+      const extIdx = filename.lastIndexOf('.')
+      if (extIdx > 0) {
+        filename = filename.slice(0, extIdx) + '_' + vid + filename.slice(extIdx)
+      } else {
+        filename = filename + '_' + vid
+      }
+    }
+    return filename
   }
 
   /** Sanitize filename */
@@ -892,10 +949,11 @@ export class DownloadService {
   }
 
   private guessExtFromUrl(url: string): string {
-    const u = url.split('?')[0].split('#')[0]
-    const last = u.split('/').pop()?.split('.').pop()?.toLowerCase() || 'mp4'
-    const validExts = ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v', 'mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md']
-    if (validExts.includes(last)) return last
+    const ext = extractExtFromUrl(url)
+    if (ext) {
+      const type = classifyExt(ext)
+      if (type !== 'unknown') return ext
+    }
     return 'mp4'
   }
 }

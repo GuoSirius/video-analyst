@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { crawlerAPI } from '../api'
 import { usePagination } from '../composables/usePagination'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import dayjs from 'dayjs'
 
 const route = useRoute()
 
@@ -293,7 +294,7 @@ async function doExport() {
     const a = document.createElement('a')
     a.href = url
     const extMap: Record<string, string> = { json: 'json', yaml: 'yaml', csv: 'csv', excel: 'xlsx' }
-    a.download = `export_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${extMap[exportFormat.value]}`
+    a.download = `export_${dayjs().format('YYYY-MM-DD_HH-mm-ss')}.${extMap[exportFormat.value]}`
     a.click()
     window.URL.revokeObjectURL(url)
     ElMessage.success('导出成功')
@@ -627,7 +628,7 @@ function setupSSE() {
               result: evt.result,
               error: evt.error,
               started_at: evt.started_at || tasks.value[idx].started_at,
-              updated_at: evt.updated_at || new Date().toISOString().replace('T', ' ').slice(0, 19),
+              updated_at: evt.updated_at || dayjs().format('YYYY-MM-DD HH:mm:ss'),
             })
             // Refresh items when task produces/stops with data
             if (['completed', 'failed', 'cancelled', 'paused'].includes(evt.status)) {

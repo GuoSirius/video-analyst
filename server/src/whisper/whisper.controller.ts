@@ -191,8 +191,6 @@ export class WhisperController {
       const cTaskId = crawlerTaskId || (itemId ? this.pipeline.getCrawlerTaskIdFromItemId(itemId) : null)
       if (cTaskId && this.pipeline.shouldAutoAI(cTaskId)) {
         const config = {
-          provider: 'deepseek' as const,
-          model: 'deepseek-chat',
           prompt: '请对以下文本进行总结，提取关键信息和关键词，用中文回复。',
         }
         const aiTask = this.queue.createTask('ai', { config, transcriptionId })

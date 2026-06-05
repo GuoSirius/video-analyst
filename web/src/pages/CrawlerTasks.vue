@@ -4,8 +4,10 @@ import { useRouter } from 'vue-router'
 import { crawlerAPI } from '../api'
 import { usePagination } from '../composables/usePagination'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import dayjs from 'dayjs'
 
 const router = useRouter()
+const cookieBrowsers = ['chrome', 'firefox', 'edge', 'brave', 'opera', 'vivaldi', 'chromium']
 
 // --- Task list state ---
 const tasks = ref<any[]>([])
@@ -206,7 +208,7 @@ function setupSSE() {
               result: evt.result,
               error: evt.error,
               started_at: evt.started_at || tasks.value[idx].started_at,
-              updated_at: evt.updated_at || new Date().toISOString().replace('T', ' ').slice(0, 19),
+              updated_at: evt.updated_at || dayjs().format('YYYY-MM-DD HH:mm:ss'),
             })
             if (['completed', 'failed', 'cancelled', 'paused'].includes(evt.status)) {
               refreshItemCounts()
@@ -620,7 +622,7 @@ async function doExport() {
     const a = document.createElement('a')
     a.href = url
     const extMap: Record<string, string> = { json: 'json', yaml: 'yaml', csv: 'csv', excel: 'xlsx' }
-    a.download = `export_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${extMap[exportFormat.value]}`
+    a.download = `export_${dayjs().format('YYYY-MM-DD_HH-mm-ss')}.${extMap[exportFormat.value]}`
     a.click()
     window.URL.revokeObjectURL(url)
     ElMessage.success('导出成功')
@@ -651,8 +653,8 @@ function canViewResults(s: string) { return s === 'completed' }
 function formatDuration(task: any): string {
   if (!task.started_at) return '-'
   void durationTick.value  // reactivity: re-compute every tick for running tasks
-  const start = new Date(task.started_at + 'Z').getTime()
-  const end = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled' ? new Date(task.updated_at + 'Z').getTime() : Date.now()
+  const start = dayjs(task.started_at + 'Z').valueOf()
+  const end = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled' ? dayjs(task.updated_at + 'Z').valueOf() : dayjs().valueOf()
   if (isNaN(start) || isNaN(end) || end <= start) return '-'
   const sec = Math.floor((end - start) / 1000)
   if (sec < 60) return `${sec}秒`
@@ -1197,7 +1199,9 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
                   <div class="grid grid-cols-2 gap-x-4 gap-y-2">
                     <div>
                       <div class="text-[11px] text-gray-500 mb-1">Cookies from browser</div>
-                      <el-input v-model="t.ytDlpCookiesFromBrowser" placeholder="chrome" size="small" />
+                      <el-select v-model="t.ytDlpCookiesFromBrowser" placeholder="选择或输入浏览器" size="small" filterable allow-create clearable class="w-full">
+                        <el-option v-for="b in cookieBrowsers" :key="b" :label="b" :value="b" />
+                      </el-select>
                     </div>
                     <div>
                       <div class="text-[11px] text-gray-500 mb-1">Cookies 文件</div>

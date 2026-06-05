@@ -26,18 +26,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.seedDefaults()
   }
 
-  /** Add columns added after initial release to existing databases */
+  /** 向后兼容：为旧版本数据库补充缺失的列（新库已在 initTables 中直接包含） */
   private migrate() {
+    // --- tasks 表补列（旧库可能缺少） ---
     try { this.db.exec(`ALTER TABLE tasks ADD COLUMN started_at TEXT`) } catch { /* column exists */ }
+    // --- crawl_items 表补列（旧库可能缺少） ---
     try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN detail_url TEXT`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN download_status TEXT DEFAULT 'pending'`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN download_tasks TEXT`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN media_fields TEXT`) } catch { /* column exists */ }
+    // --- download_queue 表补列（旧库可能缺少） ---
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN download_method TEXT`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN yt_dlp_options TEXT`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN reimport_pending INTEGER DEFAULT 0`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN reimport_opts TEXT`) } catch { /* column exists */ }
-    // Fix legacy default: download_status should be NULL (not imported) instead of 'pending'
+    // 修正旧数据的默认值：download_status 应为 NULL（未导入），而非 'pending'
     try { this.db.exec(`UPDATE crawl_items SET download_status = NULL WHERE download_status = 'pending'`) } catch { /* ignore */ }
   }
 
@@ -144,6 +147,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         file_path TEXT,
         error TEXT,
         progress INTEGER DEFAULT 0,
+        download_method TEXT,
+        yt_dlp_options TEXT,
+        reimport_pending INTEGER DEFAULT 0,
+        reimport_opts TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -159,6 +166,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       INSERT OR IGNORE INTO ai_providers (id, name, api_key, base_url, default_model, priority, enabled)
       VALUES (?, ?, ?, ?, ?, ?, 1)
     `)
+    stmt.run('agnes', 'Agnes',
+      encrypt(process.env.AGNES_API_KEY || ''),
+      process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1',
+      'agnes-2.0-flash', 0)
     stmt.run('minimax', 'minimax',
       encrypt(process.env.MINIMAX_API_KEY || ''),
       process.env.MINIMAX_BASE_URL || 'https://api.minimaxi.com/v1',
@@ -178,5 +189,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     // Fix legacy data: keep only 'default' as the default prompt
     this.db.prepare("UPDATE ai_prompts SET is_default = 0 WHERE id != 'default' AND is_default = 1").run()
+
+    // 种子示例任务：普诺赛官网爬虫采集（英文站 ×2 + 中文站 ×1）
+    const taskStmt = this.db.prepare(`
+      INSERT OR IGNORE INTO tasks (id, type, status, payload, result, error, progress, retries, max_retries, started_at, created_at, updated_at)
+      VALUES (?, ?, 'completed', ?, ?, NULL, 100, 0, 3, ?, ?, ?)
+    `)
+    taskStmt.run(
+      '69a2e781-16af-4b7a-9ca3-f3e5d41b48b6',
+      'crawl',
+      JSON.stringify({ name: '普诺赛英文站宣传册采集', url: 'https://www.procellsystem.com/resources/brochure', mode: 'list', rules: [{ name: 'title', selector: '.text-left.px-4.d-block', attr: '', regex: '' }, { name: 'pdfUrl', selector: 'a.download-list', attr: 'href', regex: '' }], itemSelector: '.bg-white .row.mt-3 .col-12.col-lg-4.mb-3', paginationMode: 'none', autoStart: false, errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, mediaUrlField: { fields: ['pdfUrl'], mode: 'all' } }),
+      JSON.stringify({ itemsFound: 100 }),
+      '2026-06-05 11:41:47', '2026-06-05 11:41:47', '2026-06-05 13:59:28',
+    )
+    taskStmt.run(
+      '6ff7f96b-fe08-435c-8705-69e102e58759',
+      'crawl',
+      JSON.stringify({ name: '普诺赛英文站视频采集', url: 'https://www.procellsystem.com/resources/videos', mode: 'list', rules: [{ name: 'id', selector: '', attr: 'href', regex: '-(\\d+)(?:$|\\?|#)' }, { name: 'title', selector: '.my-2.two-lines', attr: '', regex: '' }, { name: 'link', selector: '', attr: 'href', regex: '' }], itemSelector: '.bg-white .row.mb-3 > a', paginationMode: 'page', maxPages: 0, urlPattern: 'https://www.procellsystem.com/resources/videos?page={page}', pageStart: 1, detailRules: [{ name: 'videoIframeUrl', selector: '.video-box iframe', attr: 'src', regex: '' }, { name: 'tencentVid', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/v\\.qq\\.com.*?)(?:\\?|&)vid=([^&#]+)(?:$|&|#)' }, { name: 'bilibiliBvid', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.bilibili\\.com.*?)(?:\\?|&)bvid=([^&#]+)(?:$|&|#)' }, { name: 'youtubeId', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/www\\.youtube\\.com.*?)\\/([^/\\?#]+)(?:$|\\?|#)' }, { name: 'youkuUrl', selector: '.video-box iframe', attr: 'src', regex: '^https?:\\/\\/player\\.youku\\.com.*' }], errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, detailLinkField: { fields: ['link'], mode: 'first' }, mediaUrlField: { fields: ['tencentVid', 'bilibiliBvid', 'youtubeId', 'youkuUrl'], mode: 'all' }, idField: { fields: ['id'], mode: 'first' }, urlTransforms: [{ fieldName: 'tencentVid', urlTemplate: 'https://v.qq.com/x/page/{tencentVid}.html', downloadMethod: 'yt-dlp' }, { fieldName: 'bilibiliBvid', urlTemplate: 'https://www.bilibili.com/video/{bilibiliBvid}/', downloadMethod: 'yt-dlp' }, { fieldName: 'youtubeId', urlTemplate: 'https://youtu.be/{youtubeId}', downloadMethod: 'yt-dlp', ytDlpOptions: { cookiesFromBrowser: 'chrome' } }, { fieldName: 'youkuUrl', urlTemplate: '', downloadMethod: 'yt-dlp' }] }),
+      JSON.stringify({ itemsFound: 50 }),
+      '2026-06-05 11:39:35', '2026-06-05 11:39:35', '2026-06-05 13:59:28',
+    )
+    taskStmt.run(
+      '2b2b277a-1b66-4914-8ded-cc6468fd5bae',
+      'crawl',
+      JSON.stringify({ name: '普诺赛中文站视频采集', url: 'https://www.procell.com.cn/resource/video', mode: 'list', rules: [{ name: 'id', selector: 'a.px-2', attr: 'href', regex: '\\/(\\d+)(?:$|\\?|#)' }, { name: 'title', selector: 'a.px-2', attr: '', regex: '' }, { name: 'link', selector: 'a.px-2', attr: 'href', regex: '' }, { name: 'thumbnail', selector: '.video-img>img:nth-child(2)', attr: 'src', regex: '' }], itemSelector: '.col-6.col-md-4.mb-4>.huodong-list', paginationMode: 'page', maxPages: 0, urlPattern: 'https://www.procell.com.cn/resource/video?page={page}', pageStart: 1, detailRules: [{ name: 'videoIframeUrl', selector: '.vedio-content>iframe', attr: 'src', regex: '' }, { name: 'tencentVid', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/v\\.qq\\.com.*?)(?:\\?|&)vid=([^&#]+)(?:$|&|#)' }, { name: 'bilibiliBvid', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.bilibili\\.com.*?)(?:\\?|&)bvid=([^&#]+)(?:$|&|#)' }, { name: 'youtubeId', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/www\\.youtube\\.com.*?)\\/([^/\\?#]+)(?:$|\\?|#)' }, { name: 'youkuUrl', selector: '.vedio-content>iframe', attr: 'src', regex: '^https?:\\/\\/player\\.youku\\.com.*' }], errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, detailLinkField: { fields: ['link'], mode: 'first' }, mediaUrlField: { fields: ['tencentVid', 'bilibiliBvid', 'youtubeId', 'youkuUrl', 'thumbnail'], mode: 'all' }, idField: { fields: ['id'], mode: 'first' }, urlTransforms: [{ fieldName: 'tencentVid', urlTemplate: 'https://v.qq.com/x/page/{tencentVid}.html', downloadMethod: 'yt-dlp' }, { fieldName: 'bilibiliBvid', urlTemplate: 'https://www.bilibili.com/video/{bilibiliBvid}/', downloadMethod: 'yt-dlp' }, { fieldName: 'youtubeId', urlTemplate: 'https://youtu.be/{youtubeId}', downloadMethod: 'yt-dlp', ytDlpOptions: { cookiesFromBrowser: 'chrome' } }, { fieldName: 'youkuUrl', urlTemplate: '', downloadMethod: 'yt-dlp' }] }),
+      JSON.stringify({ itemsFound: 72 }),
+      '2026-05-27 13:59:18', '2026-05-27 13:59:18', '2026-06-05 13:59:31',
+    )
   }
 }

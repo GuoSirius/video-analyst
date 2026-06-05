@@ -12,8 +12,21 @@ import * as fs from 'fs'
 import { v4 as uuid } from 'uuid'
 import { diskStorage } from 'multer'
 
-const mediaDir = path.resolve(process.cwd(), '..', 'data', 'media')
-const outputDir = path.resolve(process.cwd(), '..', 'data', 'transcoded')
+const projectRoot = path.resolve(process.cwd(), '..')
+const mediaDir = path.resolve(projectRoot, 'data', 'media')
+const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
+
+/** 将绝对路径转为相对于项目根的路径（用于持久化存储） */
+function toRelative(absolutePath: string): string {
+  return path.relative(projectRoot, absolutePath).replace(/\\/g, '/')
+}
+
+/** 解析存储的路径：兼容旧绝对路径 + 新相对路径 */
+function resolvePath(stored: string): string {
+  if (!stored) return stored
+  if (path.isAbsolute(stored)) return stored  // 旧格式（绝对路径）
+  return path.resolve(projectRoot, stored)     // 新格式（相对路径）
+}
 
 @Controller('api/transcoder')
 export class TranscoderController {
@@ -63,8 +76,8 @@ export class TranscoderController {
       if (!fs.existsSync(fp)) continue
       const displayName = body.fileNames?.[i] || path.basename(fp)
       const task = this.queue.createTask('transcode', {
-        file: fp,
-        outputDir,
+        file: toRelative(fp),
+        outputDir: toRelative(outputDir),
         source: 'upload',
         fileName: displayName,
       })
@@ -150,18 +163,21 @@ export class TranscoderController {
 
   private async processTranscodeTask(taskId: string, inputPath: string, outDir: string, crawlerTaskId?: string) {
     try {
+      const resolvedInput = resolvePath(inputPath)
+      const resolvedOutput = resolvePath(outDir)
       this.queue.updateTaskStatus(taskId, 'running')
       this.queue.updateTaskProgress(taskId, 0)
 
-      const outputPath = await this.transcoder.transcode(inputPath, outDir, (pct) => {
+      const outputPath = await this.transcoder.transcode(resolvedInput, resolvedOutput, (pct) => {
         this.queue.updateTaskProgress(taskId, pct)
       })
 
-      this.queue.updateTaskResult(taskId, { outputPath })
+      // 持久化存储使用相对路径，结果中存相对路径
+      this.queue.updateTaskResult(taskId, { outputPath: toRelative(outputPath) })
 
       // 任务级自动转码→识别：检查爬虫任务是否开启了 autoTranscode / autoPipeline
       if (crawlerTaskId && this.pipeline.shouldAutoTranscode(crawlerTaskId) && fs.existsSync(outputPath)) {
-        const whisperTask = this.queue.createTask('whisper', { filePath: outputPath, crawlerTaskId })
+        const whisperTask = this.queue.createTask('whisper', { filePath: toRelative(outputPath), crawlerTaskId })
         this.processWhisperChain(whisperTask.id, outputPath, crawlerTaskId)
       }
     } catch (err: any) {
@@ -185,8 +201,6 @@ export class TranscoderController {
       // 任务级自动 AI：检查是否开启了 autoAI / autoPipeline
       if (crawlerTaskId && this.pipeline.shouldAutoAI(crawlerTaskId)) {
         const config = {
-          provider: 'deepseek' as const,
-          model: 'deepseek-chat',
           prompt: '请对以下文本进行总结，提取关键信息和关键词，用中文回复。',
         }
         const aiTask = this.queue.createTask('ai', { config, transcriptionId })

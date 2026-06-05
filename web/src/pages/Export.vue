@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { exportAPI, crawlerAPI } from '../api'
 import { ElMessage } from 'element-plus'
+import dayjs from 'dayjs'
 
 const columns = ref<string[]>([])
 const selectedColumns = ref<string[]>(['title','source_url','media_url','media_source','transcription','ai_result'])
@@ -19,7 +20,7 @@ async function doExport(){
   try{
     const{data}=await exportAPI.exportExcel({columns:selectedColumns.value,itemIds:selectedItemIds.value.length?selectedItemIds.value:undefined,includeTranscriptions:true,includeAIResults:true})
     const blob=new Blob([data],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
-    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`export_${new Date().toISOString().slice(0,10)}.xlsx`;a.click();URL.revokeObjectURL(url)
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`export_${dayjs().format('YYYY-MM-DD')}.xlsx`;a.click();URL.revokeObjectURL(url)
     ElMessage.success('导出成功')
   }catch{ElMessage.error('导出失败')}
   exporting.value=false

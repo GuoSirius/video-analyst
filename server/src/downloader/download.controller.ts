@@ -103,6 +103,7 @@ export class DownloadController {
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN status = 'downloading' THEN 1 ELSE 0 END) as downloading,
         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END) as paused,
         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
       FROM download_queue
     `).get() as any
@@ -117,6 +118,7 @@ export class DownloadController {
         completed: statsRow?.completed || 0,
         downloading: statsRow?.downloading || 0,
         pending: statsRow?.pending || 0,
+        paused: statsRow?.paused || 0,
         failed: statsRow?.failed || 0,
       }
     }
@@ -202,8 +204,11 @@ export class DownloadController {
   async startDownload(@Param('id') id: string) {
     const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
     if (!task) return { error: '任务不存在' }
-    if (task.status !== 'pending') return { error: '只能启动等待中的任务' }
-    // Trigger processing
+    if (task.status !== 'pending' && task.status !== 'paused') return { error: '只能启动等待中或暂停的任务' }
+    // Change paused → pending and trigger processing
+    if (task.status === 'paused') {
+      this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0 WHERE id = ?`).run(id)
+    }
     setImmediate(() => this.download.processDownloads())
     return { ok: true }
   }
@@ -213,9 +218,11 @@ export class DownloadController {
     return this.download.stopDownload(id)
   }
 
-  /** Process all pending tasks */
+  /** Process all pending/paused tasks */
   @Post('queue/process')
   async processAll() {
+    // Change all paused tasks to pending first
+    this.db.db.prepare(`UPDATE download_queue SET status = 'pending' WHERE status = 'paused'`).run()
     await this.download.processDownloads()
     return { ok: true }
   }

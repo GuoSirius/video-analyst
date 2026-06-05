@@ -11,7 +11,10 @@ import { CrawlerService, CrawlPayload, FieldSpec, UrlTransform } from './crawler
 import { QueueService } from '../common/queue/queue.service'
 import { SseService } from '../common/sse/sse.service'
 import { DatabaseService } from '../common/database/database.service'
+import { DownloadService } from '../downloader/download.service'
+import { resolveFileType, extractExtFromUrl, extractVideoId, isVideoPlatform } from '../common/utils/url.util'
 import { v4 as uuid } from 'uuid'
+import { formatTimestamp } from '../common/utils/date.util'
 
 const isUrl = (val: string) => val.startsWith('http://') || val.startsWith('https://') || val.startsWith('//')
 const normalizeUrl = (val: string, sourceUrl?: string) => {
@@ -32,6 +35,7 @@ export class CrawlerController {
     private readonly queue: QueueService,
     private readonly sse: SseService,
     private readonly db: DatabaseService,
+    private readonly download: DownloadService,
   ) {}
 
   @Post('crawl')
@@ -207,7 +211,7 @@ export class CrawlerController {
     const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
 
     // 收集所有待下载的 URL（含转换后的）
-    const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [])
+    const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [], item.title, item.id)
 
     if (urlsToDownload.length === 0) {
       // 兜底：检查 media_url 字段
@@ -216,8 +220,8 @@ export class CrawlerController {
         urlsToDownload.push({
           url: this.applyUrlTransform(url, 'media_url', payload.urlTransforms || [], extraData),
           fieldName: 'media_url',
-          filename: this.getFilename(url, 'media_url', item.title),
-          fileType: this.getFileType(url, url.split('?')[0].split('.').pop() || ''),
+          filename: this.getFilename(url, 'media_url', item.title, item.id),
+          fileType: this.getFileType(url, extractExtFromUrl(url)),
         })
       }
     }
@@ -265,25 +269,30 @@ export class CrawlerController {
     // Safe to delete old and create new
     this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
 
+    const autoDownload = body?.autoDownload ?? false
+    const status = autoDownload ? 'pending' : 'paused'
+
     const insertStmt = this.db.db.prepare(`
       INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
-      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     const createdTasks: string[] = []
     for (const u of reimportOpts.urls) {
       const dTaskId = uuid()
       const ytOptsJson = u.ytDlpOptions ? JSON.stringify(u.ytDlpOptions) : null
-      insertStmt.run(dTaskId, id, u.url, u.filename, u.fileType, u.fieldName, u.downloadMethod, ytOptsJson)
+      insertStmt.run(dTaskId, id, u.url, u.filename, u.fileType, u.fieldName, status, u.downloadMethod, ytOptsJson)
       createdTasks.push(dTaskId)
     }
 
     this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
 
-    // Tasks are inserted with status='pending', the download scheduler will pick them up automatically.
-    // The autoDownload flag affects logging/UI behavior.
+    // When autoDownload is true, trigger immediate download processing
+    if (autoDownload) {
+      setImmediate(() => this.download.processDownloads())
+    }
 
-    return { ok: true, count: createdTasks.length, taskIds: createdTasks, autoDownload: body?.autoDownload ?? false }
+    return { ok: true, count: createdTasks.length, taskIds: createdTasks, autoDownload }
   }
 
   @Post('items/:id/cancel')
@@ -570,14 +579,14 @@ export class CrawlerController {
         const payload: CrawlPayload = task.payload
         const extraData = safeJsonParse(item.extra_data)
         const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
-        const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [])
+        const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [], item.title, item.id)
         if (urlsToDownload.length === 0 && item.media_url && isUrl(item.media_url)) {
           const url = normalizeUrl(item.media_url)
           urlsToDownload.push({
             url: this.applyUrlTransform(url, 'media_url', payload.urlTransforms || [], extraData),
             fieldName: 'media_url',
-            filename: this.getFilename(url, 'media_url', item.title),
-            fileType: this.getFileType(url, url.split('?')[0].split('.').pop() || ''),
+            filename: this.getFilename(url, 'media_url', item.title, item.id),
+            fileType: this.getFileType(url, extractExtFromUrl(url)),
           })
         }
         if (urlsToDownload.length === 0) { results.push({ id, ok: false, error: '未找到需要下载的媒体资源' }); continue }
@@ -610,14 +619,18 @@ export class CrawlerController {
         }
 
         this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
+
+        const autoDownload = body.autoDownload ?? false
+        const status = autoDownload ? 'pending' : 'paused'
+
         const insertStmt = this.db.db.prepare(`
           INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
-          VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         for (const u of reimportOpts.urls) {
           const dTaskId = uuid()
           const ytOptsJson = u.ytDlpOptions ? JSON.stringify(u.ytDlpOptions) : null
-          insertStmt.run(dTaskId, id, u.url, u.filename, u.fileType, u.fieldName, u.downloadMethod, ytOptsJson)
+          insertStmt.run(dTaskId, id, u.url, u.filename, u.fileType, u.fieldName, status, u.downloadMethod, ytOptsJson)
         }
         this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
         results.push({ id, ok: true })
@@ -625,6 +638,12 @@ export class CrawlerController {
         results.push({ id, ok: false, error: err.message })
       }
     }
+
+    // When autoDownload is true, trigger immediate download processing
+    if (body.autoDownload) {
+      setImmediate(() => this.download.processDownloads())
+    }
+
     return results
   }
 
@@ -647,14 +666,14 @@ export class CrawlerController {
         // Trigger download import
         const extraData = safeJsonParse(item.extra_data)
         const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
-        const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [])
+        const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [], item.title, item.id)
         if (urlsToDownload.length === 0 && item.media_url && isUrl(item.media_url)) {
           const url = normalizeUrl(item.media_url)
           urlsToDownload.push({
             url: this.applyUrlTransform(url, 'media_url', payload.urlTransforms || [], extraData),
             fieldName: 'media_url',
-            filename: this.getFilename(url, 'media_url', item.title),
-            fileType: this.getFileType(url, url.split('?')[0].split('.').pop() || ''),
+            filename: this.getFilename(url, 'media_url', item.title, item.id),
+            fileType: this.getFileType(url, extractExtFromUrl(url)),
           })
         }
         if (urlsToDownload.length > 0) {
@@ -752,7 +771,7 @@ export class CrawlerController {
     if (!taskIds?.length) return res.status(400).json({ error: 'taskIds is required' })
     if (!fields?.length) return res.status(400).json({ error: 'fields is required' })
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const timestamp = formatTimestamp()
     const isMulti = multiFile && taskIds.length > 1
 
     // Build SQL template
@@ -962,7 +981,7 @@ export class CrawlerController {
     if (!itemIds?.length) return res.status(400).json({ error: 'itemIds is required' })
     if (!fields?.length) return res.status(400).json({ error: 'fields is required' })
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const timestamp = formatTimestamp()
     const placeholders = itemIds.map(() => '?').join(',')
 
     let sql: string
@@ -1397,6 +1416,8 @@ export class CrawlerController {
     extraData: Record<string, any>,
     mediaSpec: FieldSpec,
     urlTransforms: UrlTransform[],
+    title?: string,
+    itemId?: string,
   ): Array<{ url: string; fieldName: string; filename: string; fileType: string }> {
     const results: Array<{ url: string; fieldName: string; filename: string; fileType: string }> = []
 
@@ -1420,11 +1441,11 @@ export class CrawlerController {
             continue
           }
 
-          const ext = effectiveUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+          const ext = extractExtFromUrl(effectiveUrl)
           results.push({
             url: effectiveUrl,
             fieldName,
-            filename: this.getFilename(effectiveUrl, fieldName),
+            filename: this.getFilename(effectiveUrl, fieldName, title, itemId),
             fileType: this.getFileType(effectiveUrl, ext),
           })
         }
@@ -1446,11 +1467,11 @@ export class CrawlerController {
             continue
           }
 
-          const ext = effectiveUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+          const ext = extractExtFromUrl(effectiveUrl)
           results.push({
             url: effectiveUrl,
             fieldName,
-            filename: this.getFilename(effectiveUrl, fieldName),
+            filename: this.getFilename(effectiveUrl, fieldName, title, itemId),
             fileType: this.getFileType(effectiveUrl, ext),
           })
           break // first mode: 找到第一个就停止
@@ -1473,11 +1494,11 @@ export class CrawlerController {
           continue
         }
 
-        const ext = effectiveUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+        const ext = extractExtFromUrl(effectiveUrl)
         results.push({
           url: effectiveUrl,
           fieldName,
-          filename: this.getFilename(effectiveUrl, fieldName),
+          filename: this.getFilename(effectiveUrl, fieldName, title, itemId),
           fileType: this.getFileType(effectiveUrl, ext),
         })
       }
@@ -1539,7 +1560,7 @@ export class CrawlerController {
         // 先删除该采集项旧的下载记录
         this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(item.id)
 
-        const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, urlTransforms)
+        const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, urlTransforms, item.title, item.id)
 
         // 兜底：也检查 media_url 字段
         if (urlsToDownload.length === 0 && item.media_url && isUrl(item.media_url)) {
@@ -1547,8 +1568,8 @@ export class CrawlerController {
           urlsToDownload.push({
             url: this.applyUrlTransform(url, 'media_url', urlTransforms, extraData),
             fieldName: 'media_url',
-            filename: this.getFilename(url, 'media_url', item.title),
-            fileType: this.getFileType(url, url.split('?')[0].split('.').pop() || ''),
+            filename: this.getFilename(url, 'media_url', item.title, item.id),
+            fileType: this.getFileType(url, extractExtFromUrl(url)),
           })
         }
 
@@ -1581,40 +1602,21 @@ export class CrawlerController {
   // ════════════════════════════════════════════════════════════════
 
   private getFileType(url: string, ext: string): string {
-    // 首先排除伪静态扩展名（html/php等不会标识实际媒体类型）
-    if (ext === 'html' || ext === 'php' || ext === 'asp' || ext === 'jsp' || ext === 'aspx') {
-      ext = ''
-    }
-
-    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
-    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'm4v', 'ts', 'm3u8']
-    const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma', 'opus']
-    const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md']
-
-    if (ext && imageExts.includes(ext)) return 'image'
-    if (ext && videoExts.includes(ext)) return 'video'
-    if (ext && audioExts.includes(ext)) return 'audio'
-    if (ext && docExts.includes(ext)) return 'document'
-
-    // 已知视频平台（URL 不含视频扩展名也识别为视频，处理伪静态页面）
-    const VIDEO_SITES = ['v.qq.com', 'bilibili.com', 'bilivideo.com', 'b23.tv',
-      'youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com',
-      'youku.com', 'iqiyi.com', 'vimeo.com', 'twitch.tv',
-      'twitter.com', 'x.com', 'instagram.com', 'tiktok.com']
-    if (VIDEO_SITES.some(s => url.includes(s))) return 'video'
-
-    // URL 特征兜底
-    if (url.includes('video') || url.includes('mp4') || url.includes('m3u8')) return 'video'
-    if (url.includes('audio') || url.includes('mp3') || url.includes('.wav')) return 'audio'
-    return 'unknown'
+    return resolveFileType(url, ext)
   }
 
-  private getFilename(url: string, fieldName: string, title?: string): string {
+  private getFilename(url: string, fieldName: string, title?: string, itemId?: string): string {
     const name = title?.replace(/[^\w一-龥]+/g, '_') || fieldName
-    // 只从 URL 最后一个 / 段提取扩展名，避免把域名中的 . 误判为扩展名分隔符
-    const lastSegment = url.split('?')[0].split('/').pop() || ''
-    const ext = lastSegment.includes('.') ? lastSegment.split('.').pop()?.toLowerCase() || '' : ''
-    return ext ? `${name}.${ext}` : name
+    const ext = extractExtFromUrl(url)           // '' for pseudo-static or no extension
+    const vid = extractVideoId(url)              // platform-native ID, or '' for non-platform
+    const fallbackId = itemId?.slice(0, 8) || ''
+    const idSuffix = (vid || fallbackId) ? `_${vid || fallbackId}` : ''
+
+    if (isVideoPlatform(url)) {
+      return `${name}${idSuffix}.${ext || 'mp4'}`
+    }
+
+    return ext ? `${name}${idSuffix}.${ext}` : `${name}${idSuffix || ''}`
   }
 
   private async fetchWithRetry(url: string, maxRetries: number): Promise<string> {

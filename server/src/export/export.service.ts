@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { DatabaseService } from '../common/database/database.service'
+import { formatTimestamp } from '../common/utils/date.util'
 import * as ExcelJS from 'exceljs'
 import * as path from 'path'
 import * as fs from 'fs'
@@ -55,7 +56,7 @@ export class ExportService {
       fs.mkdirSync(exportDir, { recursive: true })
     }
 
-    const filename = `export_${Date.now()}.xlsx`
+    const filename = `export_${formatTimestamp()}.xlsx`
     const filePath = path.join(exportDir, filename)
     await workbook.xlsx.writeFile(filePath)
 
