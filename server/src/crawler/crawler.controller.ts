@@ -1581,23 +1581,30 @@ export class CrawlerController {
   // ════════════════════════════════════════════════════════════════
 
   private getFileType(url: string, ext: string): string {
+    // 首先排除伪静态扩展名（html/php等不会标识实际媒体类型）
+    if (ext === 'html' || ext === 'php' || ext === 'asp' || ext === 'jsp' || ext === 'aspx') {
+      ext = ''
+    }
+
     const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
-    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv']
-    const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma']
+    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'm4v', 'ts', 'm3u8']
+    const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma', 'opus']
+    const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md']
 
-    if (imageExts.includes(ext)) return 'image'
-    if (videoExts.includes(ext)) return 'video'
-    if (audioExts.includes(ext)) return 'audio'
+    if (ext && imageExts.includes(ext)) return 'image'
+    if (ext && videoExts.includes(ext)) return 'video'
+    if (ext && audioExts.includes(ext)) return 'audio'
+    if (ext && docExts.includes(ext)) return 'document'
 
-    // URL 特征匹配
-    if (url.includes('video') || url.includes('mp4') || url.includes('m3u8')) return 'video'
-    // 已知视频平台（URL 不含 .mp4 等视频扩展名也识别为视频）
+    // 已知视频平台（URL 不含视频扩展名也识别为视频，处理伪静态页面）
     const VIDEO_SITES = ['v.qq.com', 'bilibili.com', 'bilivideo.com', 'b23.tv',
       'youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com',
       'youku.com', 'iqiyi.com', 'vimeo.com', 'twitch.tv',
       'twitter.com', 'x.com', 'instagram.com', 'tiktok.com']
     if (VIDEO_SITES.some(s => url.includes(s))) return 'video'
 
+    // URL 特征兜底
+    if (url.includes('video') || url.includes('mp4') || url.includes('m3u8')) return 'video'
     if (url.includes('audio') || url.includes('mp3') || url.includes('.wav')) return 'audio'
     return 'unknown'
   }

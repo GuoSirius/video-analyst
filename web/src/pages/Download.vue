@@ -710,6 +710,20 @@ function downloadMethodLabel(task: any): string {
   return '自动'
 }
 
+function typeLabel(t: string): string {
+  const map: Record<string, string> = {
+    video: '视频', audio: '音频', image: '图片', document: '文档', unknown: '未知',
+  }
+  return map[t] || t || '未知'
+}
+
+function typeClass(t: string): string {
+  const map: Record<string, string> = {
+    video: 'text-blue-400', audio: 'text-emerald-400', image: 'text-purple-400', document: 'text-amber-400', unknown: 'text-gray-500',
+  }
+  return map[t] || 'text-gray-500'
+}
+
 function isRowSelectable(_row: any) { return true }
 
 // ── Download error detail dialog ──
@@ -967,8 +981,8 @@ onUnmounted(teardownSSE)
         </el-table-column>
         <el-table-column label="类型" width="70">
           <template #default="{ row }">
-            <span class="text-xs" :class="row.file_type === 'video' ? 'text-blue-400' : row.file_type === 'audio' ? 'text-emerald-400' : row.file_type === 'image' ? 'text-purple-400' : row.file_type === 'document' ? 'text-amber-400' : 'text-gray-500'">
-              {{ row.file_type === 'video' ? '视频' : row.file_type === 'audio' ? '音频' : row.file_type === 'image' ? '图片' : row.file_type === 'document' ? '文档' : row.file_type || '-' }}
+            <span class="text-xs" :class="typeClass(row.file_type)">
+              {{ typeLabel(row.file_type) }}
             </span>
           </template>
         </el-table-column>
@@ -1429,7 +1443,7 @@ onUnmounted(teardownSSE)
           </div>
           <div>
             <span class="text-gray-500">类型</span>
-            <div class="text-gray-300 mt-0.5">{{ errorTask.file_type || '-' }}</div>
+            <div class="text-gray-300 mt-0.5">{{ typeLabel(errorTask.file_type) }}</div>
           </div>
         </div>
 

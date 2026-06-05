@@ -89,14 +89,110 @@ export class DownloadService {
     }
   }
 
+  /** Sanitize a string for use as a directory name */
+  private sanitizeDirname(name: string): string {
+    return name
+      .replace(/[<>:"|?*\/\\]/g, '_')
+      .replace(/[\x00-\x1f]/g, '')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
+      .slice(0, 80) || 'unknown'
+  }
+
+  /** Resolve the download directory path for a task */
+  private resolveDownloadPath(task: any): string {
+    const itemId: string | null = task.item_id
+    const fieldName: string = task.field_name || ''
+
+    if (itemId) {
+      // 采集带入：{taskName}_{taskId8}/{itemId8}/
+      const item = this.db.db.prepare('SELECT task_id FROM crawl_items WHERE id = ?').get(itemId) as any
+      if (item?.task_id) {
+        const taskRow = this.db.db.prepare("SELECT payload FROM tasks WHERE id = ?").get(item.task_id) as any
+        let taskName = ''
+        try { taskName = JSON.parse(taskRow?.payload || '{}').name || '' } catch { /* ignore */ }
+        const taskDir = this.sanitizeDirname(taskName ? `${taskName}_${item.task_id.slice(0, 8)}` : item.task_id.slice(0, 8))
+        return path.join(this.downloadDir, taskDir, itemId.slice(0, 8))
+      }
+    }
+
+    if (fieldName === 'upload') {
+      // 本地上传：uploads/{YYYY-MM}/
+      const ym = new Date().toISOString().slice(0, 7)  // e.g. 2026-06
+      return path.join(this.downloadDir, 'uploads', ym)
+    }
+
+    // 手动添加链接 / 其他：manual/{YYYY-MM-DD}/
+    const dateStr = new Date().toISOString().slice(0, 10)  // e.g. 2026-06-06
+    return path.join(this.downloadDir, 'manual', dateStr)
+  }
+
+  /** Determine file type by download method first, then by URL/extension */
+  private resolveFileType(task: any): string {
+    const method = task.download_method  // NULL | 'yt-dlp' | 'file'
+    const url = task.url || ''
+    const ext = (task.filename || '').includes('.')
+      ? (task.filename as string).split('.').pop()?.toLowerCase() || ''
+      : ''
+
+    // yt-dlp 下载 → 一定是视频（站点视频平台）
+    if (method === 'yt-dlp') return 'video'
+
+    // HTTP 直链 → 根据扩展名判断
+    if (method === 'file') return this.getFileTypeByExt(ext)
+
+    // NULL（自动检测/旧数据）→ URL 平台检测 + 扩展名兜底
+    if (this.isVideoPlatform(url)) return 'video'
+
+    // 从 filename 提取扩展名
+    if (ext) {
+      const ft = this.getFileTypeByExt(ext)
+      if (ft !== 'unknown') return ft
+    }
+
+    // URL 路径末段兜底
+    const lastSeg = url.split('?')[0].split('/').pop() || ''
+    const urlExt = lastSeg.includes('.') ? lastSeg.split('.').pop()?.toLowerCase() || '' : ''
+    if (urlExt && urlExt !== 'html' && urlExt !== 'php' && urlExt !== 'asp' && urlExt !== 'jsp') {
+      return this.getFileTypeByExt(urlExt)
+    }
+
+    return 'unknown'
+  }
+
+  /** 已知视频平台检测（伪静态页面如 .html 结尾但实际是视频） */
+  private isVideoPlatform(url: string): boolean {
+    const sites = [
+      'v.qq.com', 'bilibili.com', 'bilivideo.com', 'b23.tv',
+      'youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com',
+      'youku.com', 'iqiyi.com', 'vimeo.com', 'twitch.tv',
+      'twitter.com', 'x.com', 'instagram.com', 'tiktok.com',
+    ]
+    return sites.some(s => url.includes(s))
+  }
+
+  /** 纯扩展名 → 文件类型（不含平台判断） */
+  private getFileTypeByExt(ext: string): string {
+    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'm4v', 'ts', 'm3u8']
+    const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma', 'opus']
+    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico']
+    const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md']
+    if (videoExts.includes(ext)) return 'video'
+    if (audioExts.includes(ext)) return 'audio'
+    if (imageExts.includes(ext)) return 'image'
+    if (docExts.includes(ext)) return 'document'
+    return 'unknown'
+  }
+
   /** Execute a single download task */
   private async executeDownload(task: any) {
     const taskId = task.id
     const url = task.url
     const itemId = task.item_id
     const filename = this.sanitizeFilename(task.filename || this.extractFilename(url))
-    const itemDir = itemId ? path.join(this.downloadDir, itemId.slice(0, 8)) : this.downloadDir
 
+    // 目录结构: {taskName}_{taskId8}/{itemId8}/ | uploads/{YYYY-MM}/ | manual/{YYYY-MM-DD}/
+    const itemDir = this.resolveDownloadPath(task)
     const normalizedFilename = this.normalizeFilePath(filename)
     const dirPath = path.join(itemDir, path.dirname(normalizedFilename))
     if (!fs.existsSync(dirPath)) {
@@ -508,8 +604,7 @@ export class DownloadService {
 
       if (site === 'direct') {
         const filename = this.sanitizeFilename(extra.filenamePrefix || this.extractFilename(url))
-        const ext = url.split('?')[0].split('.').pop()?.toLowerCase() || ''
-        const fileType = this.getFileTypeExt(ext)
+        const fileType = this.resolveFileType({ download_method: forcedMethod, url, filename })
         this.db.db.prepare(`
           INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress, download_method, yt_dlp_options)
           VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
@@ -528,10 +623,11 @@ export class DownloadService {
         const filename = this.sanitizeFilename(
           extra.filenamePrefix || (info.title ? info.title + '.' + ext : this.extractFilename(url))
         )
+        const method = forcedMethod || 'yt-dlp'
         this.db.db.prepare(`
           INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress, download_method, yt_dlp_options)
           VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
-        `).run(id, extra.item_id || null, url, filename, 'video', fieldName || 'link', forcedMethod || 'yt-dlp', ytOptsJson)
+        `).run(id, extra.item_id || null, url, filename, 'video', fieldName || 'link', method, ytOptsJson)
         taskIds.push(id)
       } catch (err: any) {
         console.error(`[DownloadService] Failed to get info for ${url}:`, err.message)
@@ -765,19 +861,6 @@ export class DownloadService {
     const clean = filename.replace(/[\/\\]/g, '_')
     const parts = clean.split('/')
     return parts[parts.length - 1]
-  }
-
-  /** Get file type from extension */
-  private getFileTypeExt(ext: string): string {
-    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
-    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'm4v']
-    const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma']
-    const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md']
-    if (imageExts.includes(ext)) return 'image'
-    if (videoExts.includes(ext)) return 'video'
-    if (audioExts.includes(ext)) return 'audio'
-    if (docExts.includes(ext)) return 'document'
-    return 'unknown'
   }
 
   /** Get direct file info via HEAD request */
