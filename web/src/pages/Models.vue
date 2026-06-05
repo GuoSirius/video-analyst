@@ -153,7 +153,7 @@ const modelOptions = computed(() => {
       </el-table>
 
       <div v-else class="text-center py-16 text-gray-500 text-sm">
-        <i class="fas fa-robot text-3xl mb-3 block opacity-30"></i>
+        <i class="fas fa-robot text-3xl mb-3 inline-block opacity-30"></i>
         暂无模型，点击"添加模型"开始配置
       </div>
     </div>

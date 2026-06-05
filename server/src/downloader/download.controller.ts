@@ -114,7 +114,7 @@ export class DownloadController {
   }
 
   @Post('upload')
-  @UseInterceptors(FilesInterceptor('files', 20, {
+  @UseInterceptors(FilesInterceptor('files', 50, {
     storage: diskStorage({
       destination: (_req, _file, cb) => {
         if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true })
@@ -125,61 +125,76 @@ export class DownloadController {
         cb(null, `${uuid()}${ext}`)
       },
     }),
+    limits: { fileSize: 10 * 1024 * 1024 * 1024 }, // 10GB
   }))
   async uploadFiles(@UploadedFiles() files: Express.Multer.File[]) {
-    const createdTasks: string[] = []
+    const results: Array<{ filename: string; ok: boolean; taskId?: string; error?: string }> = []
+
     for (const file of files) {
-      const fileType = this.getFileType(file.originalname)
-      const taskId = uuid()
-      this.db.db.prepare(`
-        INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, file_path)
-        VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)
-      `).run(taskId, null, `upload://${file.originalname}`, file.originalname, fileType, 'upload', file.path)
-      createdTasks.push(taskId)
+      try {
+        const fileType = this.getFileType(file.originalname)
+        const taskId = uuid()
+        this.db.db.prepare(`
+          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, file_path)
+          VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)
+        `).run(taskId, null, `upload://${file.originalname}`, file.originalname, fileType, 'upload', file.path)
+        results.push({ filename: file.originalname, ok: true, taskId })
+      } catch (err: any) {
+        results.push({ filename: file.originalname, ok: false, error: err.message })
+      }
     }
-    return { ok: true, count: files.length, taskIds: createdTasks }
+
+    const okCount = results.filter(r => r.ok).length
+    const failCount = results.filter(r => !r.ok).length
+
+    return {
+      ok: failCount === 0,
+      count: okCount,
+      failCount,
+      results,
+      message: failCount > 0
+        ? `${okCount} 个文件上传成功，${failCount} 个失败`
+        : `${okCount} 个文件上传成功`,
+    }
   }
 
   private getFileType(filename: string): string {
     const ext = filename.split('.').pop()?.toLowerCase() || ''
     const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
-    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv']
+    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'm4v']
     const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma']
+    const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md']
     if (imageExts.includes(ext)) return 'image'
     if (videoExts.includes(ext)) return 'video'
     if (audioExts.includes(ext)) return 'audio'
+    if (docExts.includes(ext)) return 'document'
     return 'unknown'
   }
 
+  // ════════════════════════════════════════════════════════════════
+  // 单个任务操作
+  // ════════════════════════════════════════════════════════════════
+
   @Post('queue/:id/start')
   async startDownload(@Param('id') id: string) {
-    const result = await this.download.retryDownload(id)
-    return result
+    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
+    if (!task) return { error: '任务不存在' }
+    if (task.status !== 'pending') return { error: '只能启动等待中的任务' }
+    // Trigger processing
+    setImmediate(() => this.download.processDownloads())
+    return { ok: true }
   }
 
+  @Post('queue/:id/stop')
+  async stopDownload(@Param('id') id: string) {
+    return this.download.stopDownload(id)
+  }
+
+  /** Process all pending tasks */
   @Post('queue/process')
   async processAll() {
     await this.download.processDownloads()
     return { ok: true }
-  }
-
-  @Post('queue/batch-delete')
-  batchDelete(@Body() body: { ids: string[] }) {
-    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
-      return { error: 'ids array is required' }
-    }
-    // Delete files first
-    const tasks = this.db.db.prepare('SELECT * FROM download_queue WHERE id IN (?)').all(body.ids) as any[]
-    for (const task of tasks) {
-      if (task.file_path && fs.existsSync(task.file_path)) {
-        try { fs.unlinkSync(task.file_path) } catch {}
-      }
-    }
-    const stmt = this.db.db.prepare('DELETE FROM download_queue WHERE id = ?')
-    for (const id of body.ids) {
-      stmt.run(id)
-    }
-    return { ok: true, count: body.ids.length }
   }
 
   @Delete('queue/:id')
@@ -231,23 +246,60 @@ export class DownloadController {
 
   @Post('queue/:id/retry')
   async retryDownload(@Param('id') id: string) {
-    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
-    if (!task) return { error: 'Task not found' }
-    if (task.status !== 'failed' && task.status !== 'completed') {
-      return { error: '只有失败的任务可以重试' }
-    }
-    // For upload items, don't allow retry (no re-upload)
-    if (task.field_name === 'upload') {
-      return { error: '上传的文件不支持重新下载' }
-    }
-    // Reset status to pending (the existing service method handles the rest)
-    const result = await this.download.retryDownload(id)
-    return result
+    return this.download.retryDownload(id)
   }
+
+  // ════════════════════════════════════════════════════════════════
+  // 批量操作
+  // ════════════════════════════════════════════════════════════════
+
+  @Post('queue/batch-delete')
+  batchDelete(@Body() body: { ids: string[] }) {
+    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
+      return { error: 'ids array is required' }
+    }
+    return this.download.batchDelete(body.ids)
+  }
+
+  @Post('queue/batch-start')
+  batchStart(@Body() body: { ids: string[] }) {
+    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
+      return { error: 'ids array is required' }
+    }
+    return this.download.batchStart(body.ids)
+  }
+
+  @Post('queue/batch-stop')
+  batchStop(@Body() body: { ids: string[] }) {
+    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
+      return { error: 'ids array is required' }
+    }
+    return this.download.batchStop(body.ids)
+  }
+
+  @Post('queue/batch-retry')
+  batchRetry(@Body() body: { ids: string[] }) {
+    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
+      return { error: 'ids array is required' }
+    }
+    return this.download.batchRetry(body.ids)
+  }
+
+  @Post('queue/batch-auto-pipeline')
+  async batchAutoPipeline(@Body() body: { ids: string[] }) {
+    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
+      return { error: 'ids array is required' }
+    }
+    const results = await this.download.batchAutoPipeline(body.ids, this.queue)
+    return { ok: true, results }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // Filters
+  // ════════════════════════════════════════════════════════════════
 
   @Get('filters')
   getFilters() {
-    // Get distinct file_type, field_name, and item_ids with their associated task_ids
     const types = this.db.db.prepare(
       "SELECT DISTINCT file_type FROM download_queue WHERE file_type IS NOT NULL ORDER BY file_type"
     ).all() as { file_type: string }[]
@@ -274,20 +326,23 @@ export class DownloadController {
     }
   }
 
-  // ==================== 新增强端：创建下载任务、测试链接 ====================
+  // ════════════════════════════════════════════════════════════════
+  // 创建下载任务、测试链接
+  // ════════════════════════════════════════════════════════════════
 
   /**
    * 测试视频链接能否获取信息
    * POST /api/download/test
-   * body: { url: string, fieldName?: string }
+   * body: { url: string, downloadMethod?: string }
    */
   @Post('test')
-  async testLink(@Body() body: { url: string; fieldName?: string }) {
+  async testLink(@Body() body: { url: string; downloadMethod?: string }) {
     if (!body.url) {
       return { error: 'URL 不能为空' }
     }
 
-    const info = await this.download.getVideoInfo(body.url)
+    const urlToTest = body.downloadMethod === 'file' ? body.url : body.url
+    const info = await this.download.getVideoInfo(urlToTest)
     return {
       ok: true,
       info: {
@@ -307,17 +362,16 @@ export class DownloadController {
   /**
    * 从 URL 创建下载任务
    * POST /api/download/create
-   * body: { urls: [{url, fieldName?}], item_id?: string, filenamePrefix?: string }
+   * body: { urls: [{url, fieldName?, downloadMethod?}], item_id?: string, filenamePrefix?: string }
    */
   @Post('create')
   async createDownload(
-    @Body() body: { urls: Array<{ url: string; fieldName?: string }>; item_id?: string; filenamePrefix?: string },
+    @Body() body: { urls: Array<{ url: string; fieldName?: string; downloadMethod?: string }>; item_id?: string; filenamePrefix?: string },
   ) {
     if (!body.urls || !Array.isArray(body.urls) || body.urls.length === 0) {
       return { error: 'urls 数组不能为空' }
     }
 
-    // 验证每个 URL
     for (const item of body.urls) {
       if (!item.url) {
         return { error: 'URL 不能为空' }
@@ -332,7 +386,9 @@ export class DownloadController {
     return { ok: true, taskIds }
   }
 
-  // ==================== 工具方法 ====================
+  // ════════════════════════════════════════════════════════════════
+  // 工具方法
+  // ════════════════════════════════════════════════════════════════
 
   private formatFileSize(bytes: number): string {
     if (bytes < 1024) return bytes + ' B'

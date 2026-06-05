@@ -4,13 +4,13 @@ import { exportAPI, crawlerAPI } from '../api'
 import { ElMessage } from 'element-plus'
 
 const columns = ref<string[]>([])
-const selectedColumns = ref<string[]>(['title','source_url','media_url','media_type','media_source','transcription','ai_result'])
+const selectedColumns = ref<string[]>(['title','source_url','media_url','media_source','transcription','ai_result'])
 const items = ref<any[]>([])
 const selectedItemIds = ref<string[]>([])
 const exporting = ref(false)
 const activeTab = ref('export')
 
-const colLabels:Record<string,string>={id:'ID',title:'标题',source_url:'来源 URL',media_url:'媒体 URL',media_type:'媒体类型',media_source:'媒体来源',transcription:'识别文本',language:'语言',duration:'时长',ai_result:'AI 分析结果',ai_model:'AI 模型',ai_prompt:'分析提示词'}
+const colLabels:Record<string,string>={id:'ID',title:'标题',source_url:'来源 URL',media_url:'媒体 URL',media_source:'来源平台',transcription:'识别文本',language:'语言',duration:'时长',ai_result:'AI 分析结果',ai_model:'AI 模型',ai_prompt:'分析提示词'}
 
 async function refresh(){const[c,i]=await Promise.all([exportAPI.getColumns(),crawlerAPI.getItems()]);columns.value=c.data;items.value=i.data}
 
@@ -51,8 +51,7 @@ onMounted(refresh)
         <el-table :data="items" row-key="id" size="small" max-height="300" @selection-change="(rows:any)=>selectedItemIds=rows.map((r:any)=>r.id)">
           <el-table-column type="selection" width="40"/>
           <el-table-column prop="title" label="标题" show-overflow-tooltip min-width="200"/>
-          <el-table-column label="类型" width="80"><template #default="{row}"><span class="text-xs text-gray-400">{{row.media_type||'-'}}</span></template></el-table-column>
-          <el-table-column label="来源" width="90"><template #default="{row}"><span class="text-xs text-gray-400">{{row.media_source||'-'}}</span></template></el-table-column>
+          <el-table-column label="来源" width="110"><template #default="{row}"><span class="text-xs text-gray-400">{{row.media_source||'-'}}</span></template></el-table-column>
         </el-table>
       </div>
 
@@ -66,7 +65,7 @@ onMounted(refresh)
       <el-table v-if="items.length" :data="items" size="small" max-height="500">
         <el-table-column v-for="col in selectedColumns" :key="col" :prop="col" :label="colLabels[col]||col" show-overflow-tooltip min-width="150"/>
       </el-table>
-      <div v-else class="text-center py-12 text-gray-500 text-sm"><i class="fas fa-table text-3xl mb-3 block opacity-30"></i>暂无数据</div>
+      <div v-else class="text-center py-12 text-gray-500 text-sm"><i class="fas fa-table text-3xl mb-3 inline-block opacity-30"></i>暂无数据</div>
     </div>
   </div>
 </template>

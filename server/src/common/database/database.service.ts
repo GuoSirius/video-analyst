@@ -35,6 +35,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN media_fields TEXT`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN download_method TEXT`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN yt_dlp_options TEXT`) } catch { /* column exists */ }
+    try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN reimport_pending INTEGER DEFAULT 0`) } catch { /* column exists */ }
+    try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN reimport_opts TEXT`) } catch { /* column exists */ }
     // Fix legacy default: download_status should be NULL (not imported) instead of 'pending'
     try { this.db.exec(`UPDATE crawl_items SET download_status = NULL WHERE download_status = 'pending'`) } catch { /* ignore */ }
   }

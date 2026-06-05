@@ -21,10 +21,28 @@ export interface VideoInfo {
   duration?: number
 }
 
+/** reimport_opts JSON 结构 */
+export interface ReimportOpts {
+  autoDownload: boolean
+  itemId: string
+  urls: Array<{
+    url: string
+    fieldName: string
+    filename: string
+    fileType: string
+    downloadMethod: string | null
+    ytDlpOptions: YtDlpOptions | null
+  }>
+}
+
 @Injectable()
 export class DownloadService {
   private downloadDir: string
   private ytDlp: YtDlp
+  /** 被终止的任务 ID 集合（yt-dlp 无法真正中断，完成后检查此集合忽略结果） */
+  private cancelSet = new Set<string>()
+  /** HTTP 下载的 AbortController 映射（支持真正中断 HTTP 直链下载） */
+  private abortMap = new Map<string, AbortController>()
 
   constructor(
     private readonly db: DatabaseService,
@@ -41,13 +59,14 @@ export class DownloadService {
     return this.downloadDir
   }
 
-  /** Process pending download tasks */
+  /** Process pending download tasks — called by scheduler */
   async processDownloads() {
     const pendingTasks = this.db.db.prepare(
       'SELECT * FROM download_queue WHERE status = ? ORDER BY created_at ASC LIMIT 5'
     ).all('pending') as any[]
 
     for (const task of pendingTasks) {
+      if (this.cancelSet.has(task.id)) continue
       try {
         await this.executeDownload(task)
       } catch (err: any) {
@@ -71,27 +90,33 @@ export class DownloadService {
     }
     const filePath = path.join(itemDir, normalizedFilename)
 
+    // Check if cancelled before starting
+    if (this.cancelSet.has(taskId)) {
+      this.handleCancelled(taskId, filePath)
+      return
+    }
+
     try {
-      this.db.db.prepare(`UPDATE download_queue SET status = 'downloading', updated_at = datetime('now') WHERE id = ?`).run(taskId)
+      this.db.db.prepare(`UPDATE download_queue SET status = 'downloading', error = NULL, updated_at = datetime('now') WHERE id = ?`).run(taskId)
       this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress: 0 })
 
       // 根据 download_method 字段选择下载方式
       const method = task.download_method  // NULL | 'yt-dlp' | 'file'
 
       if (method === 'file') {
-        // 强制 HTTP 直链下载
-        await this.downloadFile(url, filePath, (progress) => {
+        await this.downloadFile(url, filePath, taskId, (progress) => {
+          if (this.cancelSet.has(taskId)) return // 忽略进度更新
           this.db.db.prepare(`UPDATE download_queue SET progress = ? WHERE id = ?`).run(progress, taskId)
           this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress })
         })
       } else if (method === 'yt-dlp') {
-        // 强制 yt-dlp 下载
         await this.downloadWithYtDlpLib(url, filePath, taskId, itemId)
       } else {
         // NULL：自动检测（兼容旧数据 + 手动添加的链接）
         const site = this.detectSite(url)
         if (site === 'direct') {
-          await this.downloadFile(url, filePath, (progress) => {
+          await this.downloadFile(url, filePath, taskId, (progress) => {
+            if (this.cancelSet.has(taskId)) return
             this.db.db.prepare(`UPDATE download_queue SET progress = ? WHERE id = ?`).run(progress, taskId)
             this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress })
           })
@@ -100,14 +125,411 @@ export class DownloadService {
         }
       }
 
-      this.db.db.prepare(`UPDATE download_queue SET status = 'completed', file_path = ?, progress = 100, updated_at = datetime('now') WHERE id = ?`).run(filePath, taskId)
-      this.sse.emitEvent('download', { taskId, itemId, status: 'completed', filePath, progress: 100 })
+      // Check if cancelled after download completed
+      if (this.cancelSet.has(taskId)) {
+        this.handleCancelled(taskId, filePath)
+        return
+      }
+
+      // Download succeeded — handle reimport_pending first
+      const didReimport = await this.handleReimportIfPending(taskId)
+      if (!didReimport) {
+        this.db.db.prepare(`UPDATE download_queue SET status = 'completed', file_path = ?, progress = 100, updated_at = datetime('now') WHERE id = ?`).run(filePath, taskId)
+        this.sse.emitEvent('download', { taskId, itemId, status: 'completed', filePath, progress: 100 })
+      }
+      return
 
     } catch (err: any) {
+      // If cancelled, don't treat as failure
+      if (this.cancelSet.has(taskId)) {
+        this.handleCancelled(taskId, filePath)
+        return
+      }
+
+      // Download failed — still handle reimport_pending
       this.db.db.prepare(`UPDATE download_queue SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`).run(err.message, taskId)
       this.sse.emitEvent('download', { taskId, itemId, status: 'failed', error: err.message })
+
+      await this.handleReimportIfPending(taskId)
     }
   }
+
+  /** Handle cancelled task: cleanup + reset to pending */
+  private handleCancelled(taskId: string, filePath: string) {
+    this.cancelSet.delete(taskId)
+    this.abortMap.delete(taskId)
+    // Clean up partial file
+    if (filePath && fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath) } catch { /* ignore */ }
+    }
+    // Reset to pending
+    this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0, file_path = NULL, updated_at = datetime('now') WHERE id = ?`).run(taskId)
+    this.sse.emitEvent('download', { taskId, status: 'pending' })
+  }
+
+  /** Handle reimport_pending flag after download completes/fails. Returns true if reimport was performed. */
+  private async handleReimportIfPending(taskId: string): Promise<boolean> {
+    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
+    if (!task || !task.reimport_pending) return false
+
+    // Parse reimport opts
+    let opts: ReimportOpts
+    try {
+      opts = JSON.parse(task.reimport_opts || '{}')
+    } catch {
+      // Invalid opts, just clear flag
+      this.db.db.prepare(`UPDATE download_queue SET reimport_pending = 0, reimport_opts = NULL WHERE id = ?`).run(taskId)
+      return false
+    }
+
+    if (!opts.urls || !opts.urls.length) {
+      this.db.db.prepare(`UPDATE download_queue SET reimport_pending = 0, reimport_opts = NULL WHERE id = ?`).run(taskId)
+      return false
+    }
+
+    // Delete the current task
+    this.db.db.prepare('DELETE FROM download_queue WHERE id = ?').run(taskId)
+
+    // Create new download tasks
+    const insertStmt = this.db.db.prepare(`
+      INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `)
+
+    for (const u of opts.urls) {
+      const newId = uuid()
+      const ytOptsJson = u.ytDlpOptions ? JSON.stringify(u.ytDlpOptions) : null
+      insertStmt.run(newId, opts.itemId, u.url, u.filename, u.fileType, u.fieldName, u.downloadMethod, ytOptsJson)
+    }
+
+    // Update crawl_items download_status
+    this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(opts.itemId)
+
+    this.sse.emitEvent('download', { taskId, itemId: opts.itemId, status: 'reimported', message: '下载任务已重新创建' })
+
+    // If autoDownload, trigger processing
+    if (opts.autoDownload) {
+      setImmediate(() => this.processDownloads())
+    }
+    return true
+  }
+
+  /** Stop (terminate) a download task — reset to pending */
+  stopDownload(taskId: string): { ok?: boolean; error?: string } {
+    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
+    if (!task) return { error: '任务不存在' }
+    if (task.status !== 'downloading') return { error: '只能终止下载中的任务' }
+
+    // Mark as cancelled
+    this.cancelSet.add(taskId)
+
+    // Abort HTTP download if in progress
+    const controller = this.abortMap.get(taskId)
+    if (controller) {
+      controller.abort()
+      this.abortMap.delete(taskId)
+    }
+
+    // Note: for yt-dlp, we can't truly abort it. The cancel flag in cancelSet
+    // will cause the completion handler to ignore the result and reset to pending.
+
+    return { ok: true }
+  }
+
+  /** Retry a failed or completed download task */
+  async retryDownload(taskId: string) {
+    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
+    if (!task) return { error: 'Task not found' }
+    if (task.status !== 'failed' && task.status !== 'completed') {
+      return { error: '只有失败或已完成的任务可以重试' }
+    }
+    // Clean up old file if exists
+    if (task.file_path && fs.existsSync(task.file_path)) {
+      try { fs.unlinkSync(task.file_path) } catch { /* ignore */ }
+    }
+    this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0, file_path = NULL, updated_at = datetime('now') WHERE id = ?`).run(taskId)
+    // Trigger processing immediately
+    setImmediate(() => this.processDownloads())
+    return { ok: true }
+  }
+
+  /** Delete a download task */
+  deleteTask(taskId: string) {
+    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
+    if (!task) return { error: 'Task not found' }
+    // If downloading, stop first
+    this.cancelSet.delete(taskId)
+    this.abortMap.delete(taskId)
+    if (task.file_path && fs.existsSync(task.file_path)) {
+      try { fs.unlinkSync(task.file_path) } catch { /* ignore */ }
+    }
+    this.db.db.prepare('DELETE FROM download_queue WHERE id = ?').run(taskId)
+    return { ok: true }
+  }
+
+  /** Batch delete */
+  batchDelete(ids: string[]) {
+    for (const id of ids) {
+      this.cancelSet.delete(id)
+      this.abortMap.delete(id)
+      const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
+      if (task?.file_path && fs.existsSync(task.file_path)) {
+        try { fs.unlinkSync(task.file_path) } catch { /* ignore */ }
+      }
+    }
+    const stmt = this.db.db.prepare('DELETE FROM download_queue WHERE id = ?')
+    for (const id of ids) {
+      stmt.run(id)
+    }
+    return { ok: true, count: ids.length }
+  }
+
+  /** Batch start pending tasks */
+  batchStart(ids: string[]) {
+    const stmt = this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0 WHERE id = ?`)
+    let count = 0
+    for (const id of ids) {
+      const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
+      if (task && task.status === 'pending') {
+        // Already pending — will be picked up by scheduler; just ensure it's clean
+        stmt.run(id)
+        count++
+      }
+    }
+    setImmediate(() => this.processDownloads())
+    return { ok: true, count }
+  }
+
+  /** Batch retry */
+  batchRetry(ids: string[]) {
+    let count = 0
+    for (const id of ids) {
+      const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
+      if (!task) continue
+      if (task.status !== 'failed' && task.status !== 'completed') continue
+      if (task.file_path && fs.existsSync(task.file_path)) {
+        try { fs.unlinkSync(task.file_path) } catch { /* ignore */ }
+      }
+      this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0, file_path = NULL, updated_at = datetime('now') WHERE id = ?`).run(id)
+      count++
+    }
+    setImmediate(() => this.processDownloads())
+    return { ok: true, count }
+  }
+
+  /** Batch stop */
+  batchStop(ids: string[]) {
+    let count = 0
+    for (const id of ids) {
+      const result = this.stopDownload(id)
+      if (result.ok) count++
+    }
+    return { ok: true, count }
+  }
+
+  /** Batch auto pipeline: transcode → whisper → AI for completed downloads */
+  async batchAutoPipeline(ids: string[], queueService: any) {
+    const results: Array<{ id: string; ok: boolean; error?: string }> = []
+
+    for (const id of ids) {
+      try {
+        const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
+        if (!task) { results.push({ id, ok: false, error: '任务不存在' }); continue }
+        if (task.status !== 'completed') { results.push({ id, ok: false, error: '只能对已完成的下载执行流水线' }); continue }
+        if (!task.file_path || !fs.existsSync(task.file_path)) { results.push({ id, ok: false, error: '下载文件不存在' }); continue }
+
+        // 追溯爬虫任务 ID
+        let crawlerTaskId: string | undefined
+        if (task.item_id) {
+          const item = this.db.db.prepare('SELECT task_id FROM crawl_items WHERE id = ?').get(task.item_id) as any
+          crawlerTaskId = item?.task_id || undefined
+        }
+
+        const outputDir = path.resolve(process.cwd(), '..', 'data', 'transcoded')
+        const fileName = task.filename || path.basename(task.file_path)
+
+        // Create transcode task — processing handled by caller (controller)
+        queueService.createTask('transcode', {
+          file: task.file_path,
+          outputDir,
+          source: 'download',
+          fileName,
+          crawlerTaskId,
+        })
+        results.push({ id, ok: true })
+      } catch (err: any) {
+        results.push({ id, ok: false, error: err.message })
+      }
+    }
+
+    return results
+  }
+
+  /** Get downloaded files for an item */
+  getDownloadedFiles(itemId: string) {
+    return this.db.db.prepare(
+      'SELECT * FROM download_queue WHERE item_id = ? AND status = ? ORDER BY created_at DESC'
+    ).all(itemId, 'completed') as any[]
+  }
+
+  /** Get download statistics */
+  getStats() {
+    const total = this.db.db.prepare('SELECT COUNT(*) as count FROM download_queue').get() as any
+    const pending = this.db.db.prepare("SELECT COUNT(*) as count FROM download_queue WHERE status = 'pending'").get() as any
+    const downloading = this.db.db.prepare("SELECT COUNT(*) as count FROM download_queue WHERE status = 'downloading'").get() as any
+    const completed = this.db.db.prepare("SELECT COUNT(*) as count FROM download_queue WHERE status = 'completed'").get() as any
+    const failed = this.db.db.prepare("SELECT COUNT(*) as count FROM download_queue WHERE status = 'failed'").get() as any
+
+    return {
+      total: total.count,
+      pending: pending.count,
+      downloading: downloading.count,
+      completed: completed.count,
+      failed: failed.count,
+    }
+  }
+
+  /** Check if an item has any downloading tasks */
+  hasDownloadingTasks(itemId: string): boolean {
+    const row = this.db.db.prepare(
+      "SELECT COUNT(*) as count FROM download_queue WHERE item_id = ? AND status = 'downloading'"
+    ).get(itemId) as any
+    return row?.count > 0
+  }
+
+  /** Get downloading task IDs for an item */
+  getDownloadingTaskIds(itemId: string): string[] {
+    const rows = this.db.db.prepare(
+      "SELECT id FROM download_queue WHERE item_id = ? AND status = 'downloading'"
+    ).all(itemId) as any[]
+    return rows.map((r: any) => r.id)
+  }
+
+  /** Set reimport_pending on downloading tasks (for scheme C) */
+  setReimportPending(itemId: string, opts: ReimportOpts): number {
+    const taskIds = this.getDownloadingTaskIds(itemId)
+    if (taskIds.length === 0) return 0
+    const optsJson = JSON.stringify(opts)
+    const stmt = this.db.db.prepare(`UPDATE download_queue SET reimport_pending = 1, reimport_opts = ? WHERE id = ?`)
+    for (const id of taskIds) {
+      stmt.run(optsJson, id)
+    }
+    return taskIds.length
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // 站点识别与分发
+  // ════════════════════════════════════════════════════════════════
+
+  /** 判断 URL 是否属于受支持的站点 */
+  detectSite(url: string): 'bilibili' | 'tencent' | 'youtube' | 'douyin' | 'youku' | 'iqiyi' | 'vimeo' | 'twitch' | 'twitter' | 'instagram' | 'tiktok' | 'direct' | 'unknown' {
+    const u = url.toLowerCase()
+    if (u.includes('bilibili.com') || u.includes('b23.tv') || u.includes('bilivideo.com')) return 'bilibili'
+    if (u.includes('v.qq.com') || u.includes('腾讯视频')) return 'tencent'
+    if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube'
+    if (u.includes('douyin.com') || u.includes('iesdouyin.com')) return 'douyin'
+    if (u.includes('youku.com')) return 'youku'
+    if (u.includes('iqiyi.com')) return 'iqiyi'
+    if (u.includes('vimeo.com')) return 'vimeo'
+    if (u.includes('twitch.tv')) return 'twitch'
+    if (u.includes('twitter.com') || u.includes('x.com')) return 'twitter'
+    if (u.includes('instagram.com')) return 'instagram'
+    if (u.includes('tiktok.com')) return 'tiktok'
+    // Check for direct file extensions
+    const ext = u.split('?')[0].split('.').pop()?.trim().toLowerCase() || ''
+    if (['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v', 'mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md', 'zip', 'rar', '7z', 'm3u8'].includes(ext)) return 'direct'
+    return 'unknown'
+  }
+
+  /**
+   * 获取视频信息（用于前端预览）
+   */
+  async getVideoInfo(url: string): Promise<VideoInfo> {
+    const site = this.detectSite(url)
+
+    if (site === 'direct') {
+      return this.getDirectFileInfo(url)
+    }
+
+    // 站点视频 + 未知：用 ytdlp-nodejs getInfoAsync
+    try {
+      const info = await this.ytDlp.getInfoAsync(url)
+      if (!('formats' in info)) {
+        return this.getDirectFileInfo(url)
+      }
+      const bestFormat: any = (info.formats || []).find((f: any) => f.ext) || {}
+      return {
+        title: info.title || this.extractFilename(url),
+        url: url,
+        ext: bestFormat.ext || 'mp4',
+        duration: (info as any).duration || undefined,
+        filesize: bestFormat.filesize || undefined,
+        width: bestFormat.width || undefined,
+        height: bestFormat.height || undefined,
+      }
+    } catch (err: any) {
+      return this.getDirectFileInfo(url)
+    }
+  }
+
+  /**
+   * 创建下载任务（支持站点链接）
+   */
+  async createDownloadTask(
+    urls: Array<{ url: string; fieldName?: string; downloadMethod?: string }>,
+    extra: { item_id?: string; filenamePrefix?: string },
+  ): Promise<string[]> {
+    const taskIds: string[] = []
+
+    for (const { url, fieldName, downloadMethod } of urls) {
+      const id = uuid()
+      const forcedMethod = downloadMethod || null
+      const site = forcedMethod === 'file' ? 'direct' : forcedMethod === 'yt-dlp' ? 'unknown' : this.detectSite(url)
+
+      if (site === 'direct') {
+        const filename = this.sanitizeFilename(extra.filenamePrefix || this.extractFilename(url))
+        const ext = url.split('?')[0].split('.').pop()?.toLowerCase() || ''
+        const fileType = this.getFileTypeExt(ext)
+        this.db.db.prepare(`
+          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress, download_method)
+          VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?)
+        `).run(id, extra.item_id || null, url, filename, fileType, fieldName || 'link', forcedMethod)
+        taskIds.push(id)
+        continue
+      }
+
+      // 站点链接：获取视频信息
+      try {
+        const info = await this.ytDlp.getInfoAsync(url)
+        if (!('formats' in info)) {
+          throw new Error('播放列表不支持下载，请指定单个视频链接')
+        }
+        const ext = (info.formats?.[0]?.ext) || 'mp4'
+        const filename = this.sanitizeFilename(
+          extra.filenamePrefix || (info.title ? info.title + '.' + ext : this.extractFilename(url))
+        )
+        this.db.db.prepare(`
+          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress, download_method)
+          VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?)
+        `).run(id, extra.item_id || null, url, filename, 'video', fieldName || 'link', forcedMethod || 'yt-dlp')
+        taskIds.push(id)
+      } catch (err: any) {
+        console.error(`[DownloadService] Failed to get info for ${url}:`, err.message)
+        const filename = this.sanitizeFilename(extra.filenamePrefix || 'video') + '.*'
+        this.db.db.prepare(`
+          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, error, progress, download_method)
+          VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?)
+        `).run(id, extra.item_id || null, url, filename, 'video', fieldName || 'link', err.message, forcedMethod || 'yt-dlp')
+        taskIds.push(id)
+      }
+    }
+
+    return taskIds
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // 内部下载方法
+  // ════════════════════════════════════════════════════════════════
 
   /** 使用 ytdlp-nodejs 库下载站点视频 */
   private async downloadWithYtDlpLib(
@@ -127,6 +549,7 @@ export class DownloadService {
       .download(url)
       .output(path.join(outputDir, baseName + '.%(ext)s'))
       .on('progress', (progress) => {
+        if (this.cancelSet.has(taskId)) return
         if (progress.percentage !== undefined) {
           const pct = Math.round(progress.percentage)
           this.db.db.prepare(`UPDATE download_queue SET progress = ? WHERE id = ?`).run(pct, taskId)
@@ -163,6 +586,9 @@ export class DownloadService {
 
     const result = await dl.run()
 
+    // Check cancelled after yt-dlp finishes
+    if (this.cancelSet.has(taskId)) return
+
     // 如果下载的文件名与预期不同，重命名
     if (result.filePaths && result.filePaths.length > 0) {
       const actualPath = result.filePaths[0]
@@ -173,38 +599,46 @@ export class DownloadService {
     }
   }
 
-  /** HTTP 直链下载（保留原有逻辑） */
-  private downloadFile(url: string, filePath: string, onProgress: (progress: number) => void): Promise<void> {
+  /** HTTP 直链下载（支持取消） */
+  private downloadFile(
+    url: string,
+    filePath: string,
+    taskId: string,
+    onProgress: (progress: number) => void,
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const protocol = url.startsWith('https') ? https : http
-      const file = fs.createWriteStream(filePath)
-      let receivedBytes = 0
-      let totalBytes = 0
 
-      const request = protocol.get(url, {
+      // Create AbortController for this download
+      const controller = new AbortController()
+      this.abortMap.set(taskId, controller)
+
+      const req = protocol.get(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         },
+        signal: controller.signal,
       }, (response) => {
+        // Handle redirect
         if (response.statusCode === 301 || response.statusCode === 302) {
           const redirectUrl = response.headers.location
           if (redirectUrl) {
-            file.close()
-            fs.unlinkSync(filePath)
-            this.downloadFile(redirectUrl, filePath, onProgress).then(resolve).catch(reject)
+            this.abortMap.delete(taskId)
+            this.downloadFile(redirectUrl, filePath, taskId, onProgress).then(resolve).catch(reject)
             return
           }
         }
 
         if (response.statusCode !== 200) {
-          file.close()
-          fs.unlinkSync(filePath)
+          this.abortMap.delete(taskId)
           reject(new Error(`HTTP ${response.statusCode}`))
           return
         }
 
+        const file = fs.createWriteStream(filePath)
+        let receivedBytes = 0
         const contentLength = response.headers['content-length']
-        totalBytes = contentLength ? parseInt(contentLength, 10) : 0
+        const totalBytes = contentLength ? parseInt(contentLength, 10) : 0
 
         response.pipe(file)
 
@@ -218,30 +652,47 @@ export class DownloadService {
 
         file.on('finish', () => {
           file.close()
+          this.abortMap.delete(taskId)
+          // If cancelled during write, clean up
+          if (this.cancelSet.has(taskId)) {
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+            reject(new Error('Download cancelled'))
+            return
+          }
           resolve()
         })
 
         file.on('error', (err) => {
           file.close()
-          fs.unlinkSync(filePath)
+          this.abortMap.delete(taskId)
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
           reject(err)
         })
       })
 
-      request.on('error', (err) => {
-        file.close()
+      req.on('error', (err: any) => {
+        this.abortMap.delete(taskId)
+        if (err.name === 'AbortError') {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+          reject(new Error('Download cancelled'))
+          return
+        }
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
         reject(err)
       })
 
-      request.setTimeout(300000, () => {
-        request.destroy()
-        file.close()
+      req.setTimeout(300000, () => {
+        this.abortMap.delete(taskId)
+        req.destroy()
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
         reject(new Error('Download timeout'))
       })
     })
   }
+
+  // ════════════════════════════════════════════════════════════════
+  // 工具方法
+  // ════════════════════════════════════════════════════════════════
 
   /** Extract filename from URL */
   private extractFilename(url: string): string {
@@ -269,100 +720,20 @@ export class DownloadService {
     return parts[parts.length - 1]
   }
 
-  /** Retry a failed download task */
-  async retryDownload(taskId: string) {
-    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
-    if (!task) return { error: 'Task not found' }
-    if (task.status !== 'failed' && task.status !== 'completed') {
-      return { error: 'Only failed or completed tasks can be retried' }
-    }
-    this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0, updated_at = datetime('now') WHERE id = ?`).run(taskId)
-    await this.executeDownload(task)
-    return { ok: true }
-  }
-
-  /** Delete a download task */
-  deleteTask(taskId: string) {
-    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
-    if (!task) return { error: 'Task not found' }
-    if (task.file_path && fs.existsSync(task.file_path)) {
-      fs.unlinkSync(task.file_path)
-    }
-    this.db.db.prepare('DELETE FROM download_queue WHERE id = ?').run(taskId)
-    return { ok: true }
-  }
-
-  /** Get downloaded files for an item */
-  getDownloadedFiles(itemId: string) {
-    return this.db.db.prepare(
-      'SELECT * FROM download_queue WHERE item_id = ? AND status = ? ORDER BY created_at DESC'
-    ).all(itemId, 'completed') as any[]
-  }
-
-  /** Get download statistics */
-  getStats() {
-    const total = this.db.db.prepare('SELECT COUNT(*) as count FROM download_queue').get() as any
-    const pending = this.db.db.prepare("SELECT COUNT(*) as count FROM download_queue WHERE status = 'pending'").get() as any
-    const downloading = this.db.db.prepare("SELECT COUNT(*) as count FROM download_queue WHERE status = 'downloading'").get() as any
-    const completed = this.db.db.prepare("SELECT COUNT(*) as count FROM download_queue WHERE status = 'completed'").get() as any
-    const failed = this.db.db.prepare("SELECT COUNT(*) as count FROM download_queue WHERE status = 'failed'").get() as any
-
-    return {
-      total: total.count,
-      pending: pending.count,
-      downloading: downloading.count,
-      completed: completed.count,
-      failed: failed.count,
-    }
-  }
-
-  // ==================== 站点识别与分发 ====================
-
-  /** 判断 URL 是否属于受支持的站点 */
-  detectSite(url: string): 'bilibili' | 'tencent' | 'youtube' | 'direct' | 'unknown' {
-    const u = url.toLowerCase()
-    if (u.includes('bilibili.com') || u.includes('b23.tv') || u.includes('bilivideo.com')) return 'bilibili'
-    if (u.includes('qq.com') || u.includes('v.qq.com') || u.includes('tenpay.com')) return 'tencent'
-    if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube'
-    const ext = u.split('?')[0].split('.').pop()?.trim() || ''
-    if (['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v'].includes(ext)) return 'direct'
+  /** Get file type from extension */
+  private getFileTypeExt(ext: string): string {
+    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
+    const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'm4v']
+    const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma']
+    const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md']
+    if (imageExts.includes(ext)) return 'image'
+    if (videoExts.includes(ext)) return 'video'
+    if (audioExts.includes(ext)) return 'audio'
+    if (docExts.includes(ext)) return 'document'
     return 'unknown'
   }
 
-  /**
-   * 获取视频信息（用于前端预览）
-   */
-  async getVideoInfo(url: string): Promise<VideoInfo> {
-    const site = this.detectSite(url)
-
-    if (site === 'direct') {
-      return this.getDirectFileInfo(url)
-    }
-
-    // 站点视频 + 未知：用 ytdlp-nodejs getInfoAsync
-    try {
-      const info = await this.ytDlp.getInfoAsync(url)
-      // getInfoAsync 返回 VideoInfo | PlaylistInfo，仅处理 VideoInfo
-      if (!('formats' in info)) {
-        return this.getDirectFileInfo(url)
-      }
-      const bestFormat: any = (info.formats || []).find((f: any) => f.ext) || {}
-      return {
-        title: info.title || this.extractFilename(url),
-        url: url,
-        ext: bestFormat.ext || 'mp4',
-        duration: (info as any).duration || undefined,
-        filesize: bestFormat.filesize || undefined,
-        width: bestFormat.width || undefined,
-        height: bestFormat.height || undefined,
-      }
-    } catch (err: any) {
-      // fallback: HEAD 检测
-      return this.getDirectFileInfo(url)
-    }
-  }
-
-  /** 获取直链文件的头部信息 */
+  /** Get direct file info via HEAD request */
   private getDirectFileInfo(url: string): Promise<VideoInfo> {
     return new Promise((resolve, reject) => {
       const protocol = url.startsWith('https') ? https : http
@@ -393,62 +764,8 @@ export class DownloadService {
   private guessExtFromUrl(url: string): string {
     const u = url.split('?')[0].split('#')[0]
     const last = u.split('/').pop()?.split('.').pop()?.toLowerCase() || 'mp4'
-    if (['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v', 'mp3', 'wav', 'ogg'].includes(last)) return last
+    const validExts = ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v', 'mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'json', 'yaml', 'yml', 'txt', 'md']
+    if (validExts.includes(last)) return last
     return 'mp4'
-  }
-
-  /**
-   * 创建下载任务（支持站点链接）
-   */
-  async createDownloadTask(
-    urls: Array<{ url: string; fieldName?: string }>,
-    extra: { item_id?: string; filenamePrefix?: string },
-  ): Promise<string[]> {
-    const taskIds: string[] = []
-
-    for (const { url, fieldName } of urls) {
-      const id = uuid()
-      const site = this.detectSite(url)
-
-      if (site === 'direct') {
-        const filename = this.sanitizeFilename(extra.filenamePrefix || this.extractFilename(url))
-        const ext = url.split('?')[0].split('.').pop()?.toLowerCase() || 'mp4'
-        const fileType = ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv'].includes(ext) ? 'video' : 'unknown'
-        this.db.db.prepare(`
-          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress)
-          VALUES (?, ?, ?, ?, ?, ?, 'pending', 0)
-        `).run(id, extra.item_id || null, url, filename, fileType, fieldName || 'link')
-        taskIds.push(id)
-        continue
-      }
-
-      // 站点链接：获取视频信息
-      try {
-        const info = await this.ytDlp.getInfoAsync(url)
-        if (!('formats' in info)) {
-          throw new Error('播放列表不支持下载，请指定单个视频链接')
-        }
-        const ext = (info.formats?.[0]?.ext) || 'mp4'
-        const filename = this.sanitizeFilename(
-          extra.filenamePrefix || (info.title ? info.title + '.' + ext : this.extractFilename(url))
-        )
-        this.db.db.prepare(`
-          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, progress)
-          VALUES (?, ?, ?, ?, ?, ?, 'pending', 0)
-        `).run(id, extra.item_id || null, url, filename, 'video', fieldName || 'link')
-        taskIds.push(id)
-      } catch (err: any) {
-        console.error(`[DownloadService] Failed to get info for ${url}:`, err.message)
-        this.db.db.prepare(`
-          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, error, progress)
-          VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 0)
-        `).run(id, extra.item_id || null, url,
-          this.sanitizeFilename(extra.filenamePrefix || 'video') + '.*',
-          'video', fieldName || 'link', err.message)
-        taskIds.push(id)
-      }
-    }
-
-    return taskIds
   }
 }

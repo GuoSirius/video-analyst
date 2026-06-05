@@ -79,7 +79,7 @@ onMounted(load)
         </el-table-column>
       </el-table>
       <div v-else class="text-center py-16 text-gray-500 text-sm">
-        <i class="fas fa-file-lines text-3xl mb-3 block opacity-30"></i>暂无提示词
+        <i class="fas fa-file-lines text-3xl mb-3 inline-block opacity-30"></i>暂无提示词
       </div>
     </div>
 

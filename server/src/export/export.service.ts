@@ -25,7 +25,7 @@ export class ExportService {
     // Build query
     let sql = `
       SELECT
-        ci.id, ci.title, ci.source_url, ci.media_url, ci.media_type, ci.media_source, ci.extra_data,
+        ci.id, ci.title, ci.source_url, ci.media_url, ci.media_source, ci.extra_data,
         t.content as transcription, t.language, t.duration,
         ar.result as ai_result, ar.model as ai_model, ar.prompt as ai_prompt
       FROM crawl_items ci
@@ -68,7 +68,6 @@ export class ExportService {
       'title',
       'source_url',
       'media_url',
-      'media_type',
       'media_source',
       'transcription',
       'language',

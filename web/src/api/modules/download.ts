@@ -16,15 +16,23 @@ export const downloadAPI = {
   uploadFiles: (fd: FormData) => api.post('/download/upload', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
+  // Single operations
   startDownload: (id: string) => api.post(`/download/queue/${id}/start`),
-  processAll: () => api.post('/download/queue/process'),
-  batchDelete: (ids: string[]) => api.post('/download/queue/batch-delete', { ids }),
+  stopDownload: (id: string) => api.post(`/download/queue/${id}/stop`),
+  retryDownload: (id: string) => api.post(`/download/queue/${id}/retry`),
   deleteTask: (id: string) => api.delete(`/download/queue/${id}`),
   startTranscode: (id: string) => api.post(`/download/queue/${id}/transcode`),
-  retryDownload: (id: string) => api.post(`/download/queue/${id}/retry`),
+  processAll: () => api.post('/download/queue/process'),
 
-  // 新增 API
-  testLink: (url: string) => api.post('/download/test', { url }),
-  createDownload: (urls: Array<{ url: string; fieldName?: string }>, extra?: { item_id?: string; filenamePrefix?: string }) =>
+  // Batch operations
+  batchStart: (ids: string[]) => api.post('/download/queue/batch-start', { ids }),
+  batchStop: (ids: string[]) => api.post('/download/queue/batch-stop', { ids }),
+  batchRetry: (ids: string[]) => api.post('/download/queue/batch-retry', { ids }),
+  batchDelete: (ids: string[]) => api.post('/download/queue/batch-delete', { ids }),
+  batchAutoPipeline: (ids: string[]) => api.post('/download/queue/batch-auto-pipeline', { ids }),
+
+  // Link operations
+  testLink: (url: string, downloadMethod?: string) => api.post('/download/test', { url, downloadMethod }),
+  createDownload: (urls: Array<{ url: string; fieldName?: string; downloadMethod?: string }>, extra?: { item_id?: string; filenamePrefix?: string }) =>
     api.post('/download/create', { urls, ...extra }),
 }

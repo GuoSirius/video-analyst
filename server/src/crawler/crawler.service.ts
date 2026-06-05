@@ -130,27 +130,27 @@ export class CrawlerService {
     return resp.text()
   }
 
-  parseHtml(html: string, rules: CrawlRule[], itemSelector?: string): Record<string, any>[] {
+  parseHtml(html: string, rules: CrawlRule[], itemSelector?: string, sourceUrl?: string): Record<string, any>[] {
     const $ = cheerio.load(html)
 
     if (itemSelector) {
       const results: Record<string, any>[] = []
       $(itemSelector).each((_, el) => {
-        results.push(this.extractItem($, el, rules))
+        results.push(this.extractItem($, el, rules, sourceUrl))
       })
       return results
     }
 
-    return [this.extractItem($, $.root(), rules)]
+    return [this.extractItem($, $.root(), rules, sourceUrl)]
   }
 
-  private extractItem($: cheerio.CheerioAPI, root: any, rules: CrawlRule[]): Record<string, any> {
+  private extractItem($: cheerio.CheerioAPI, root: any, rules: CrawlRule[], sourceUrl?: string): Record<string, any> {
     const item: Record<string, any> = {}
     for (const rule of rules) {
       if (rule.isList && rule.subRules) {
         const listResults: Record<string, any>[] = []
         $(rule.selector, root).each((_, el) => {
-          listResults.push(this.extractItem($, el, rule.subRules!))
+          listResults.push(this.extractItem($, el, rule.subRules!, sourceUrl))
         })
         item[rule.name] = listResults
       } else {
@@ -162,23 +162,43 @@ export class CrawlerService {
         } else {
           value = el.text().trim()
         }
-        item[rule.name] = this.applyRegex(value.trim(), rule.regex)
+        item[rule.name] = this.applyRegex(value.trim(), rule.regex, sourceUrl)
       }
     }
     return item
   }
 
   /** Apply regex extraction: returns first capture group, or full match if no capture group.
-   *  Returns empty string when regex does not match — the original value is NOT used as fallback. */
-  private applyRegex(value: string, regex?: string): string {
+   *  Returns empty string when regex does not match — the original value is NOT used as fallback.
+   *  Protocol-relative URLs (//) are normalized with the source page's protocol before regex. */
+  private applyRegex(value: string, regex?: string, sourceUrl?: string): string {
     if (!regex || !value) return value
     try {
-      const m = value.match(new RegExp(regex))
+      // 协议补全：对于 // 开头的资源 URL，使用源页面协议补全后再应用正则
+      const normalized = this.normalizeProtocol(value, sourceUrl)
+      const m = normalized.match(new RegExp(regex))
       if (!m) return ''
       // 有捕获组 → 提取模式；无捕获组 → 过滤模式（返回 $0）
-      return m[1] ?? m[0]
+      const result = m[1] ?? m[0]
+      // 如果匹配结果本身仍然是协议相对URL，也补全（保证最终结果是绝对URL）
+      if (result.startsWith('//')) {
+        return this.normalizeProtocol(result, sourceUrl)
+      }
+      return result
     } catch {
       return ''
+    }
+  }
+
+  /** 补全协议相对 URL：从源页面 URL 提取协议，补到 // 开头的 URL 前 */
+  private normalizeProtocol(url: string, sourceUrl?: string): string {
+    if (!url.startsWith('//')) return url
+    if (!sourceUrl) return 'https:' + url
+    try {
+      const proto = new URL(sourceUrl).protocol // "http:" or "https:"
+      return proto + url
+    } catch {
+      return 'https:' + url
     }
   }
 
@@ -195,17 +215,28 @@ export class CrawlerService {
     if (url.includes('youku.com')) {
       return { type: 'video', source: 'youku' }
     }
+    if (url.includes('youtube.com') || url.includes('youtu.be') || url.includes('yt.be')) {
+      return { type: 'video', source: 'youtube' }
+    }
     // Video file extensions
-    if (/\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v)$/i.test(url)) {
+    if (/\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v|3gp|ogv|ts|m3u8)$/i.test(url)) {
       return { type: 'video', source: 'direct' }
     }
     // Audio file extensions
-    if (/\.(mp3|wav|flac|aac|ogg|wma|m4a|opus)$/i.test(url)) {
+    if (/\.(mp3|wav|flac|aac|ogg|wma|m4a|opus|mid|midi|weba)$/i.test(url)) {
       return { type: 'audio', source: 'direct' }
     }
     // Image file extensions
-    if (/\.(jpg|jpeg|png|gif|webp|bmp|svg|ico)$/i.test(url)) {
+    if (/\.(jpg|jpeg|png|gif|webp|bmp|svg|ico|tiff|tif|avif|heic|heif)$/i.test(url)) {
       return { type: 'image', source: 'direct' }
+    }
+    // Document file extensions
+    if (/\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|csv|tsv)$/i.test(url)) {
+      return { type: 'document', source: 'direct' }
+    }
+    // Data / text file extensions
+    if (/\.(md|json|ya?ml|txt|xml|html?|log|sql)$/i.test(url)) {
+      return { type: 'data', source: 'direct' }
     }
     // Looks like a web page or API link (not a media file)
     if (/^https?:\/\//i.test(url)) {

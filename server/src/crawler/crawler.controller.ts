@@ -14,7 +14,15 @@ import { DatabaseService } from '../common/database/database.service'
 import { v4 as uuid } from 'uuid'
 
 const isUrl = (val: string) => val.startsWith('http://') || val.startsWith('https://') || val.startsWith('//')
-const normalizeUrl = (val: string) => val.startsWith('//') ? 'https:' + val : val
+const normalizeUrl = (val: string, sourceUrl?: string) => {
+  if (!val.startsWith('//')) return val
+  try {
+    const proto = sourceUrl ? new URL(sourceUrl).protocol : 'https:'
+    return proto + val
+  } catch {
+    return 'https:' + val
+  }
+}
 
 @Injectable()
 @Controller('api/crawler')
@@ -89,17 +97,31 @@ export class CrawlerController {
     return tasks
   }
 
+  /** 返回所有已出现过的来源值（用于前端动态筛选项），将逗号拼接的值拆分为独立值再去重 */
+  @Get('sources')
+  getSources() {
+    const rows = this.db.db.prepare(
+      "SELECT DISTINCT media_source FROM crawl_items WHERE media_source IS NOT NULL AND media_source != ''"
+    ).all() as { media_source: string }[]
+
+    const uniqueSources = new Set<string>()
+    for (const row of rows) {
+      // 兼容逗号拼接的聚合来源 (e.g. "bilibili,direct") — 拆分为独立值
+      row.media_source.split(',').map(s => s.trim()).filter(Boolean).forEach(s => uniqueSources.add(s))
+    }
+    return Array.from(uniqueSources).sort()
+  }
+
   @Get('items')
   getItems(@Query() query: {
     taskId?: string
     status?: string
-    mediaType?: string
     mediaSource?: string
     keyword?: string
     page?: string
     pageSize?: string
   }) {
-    const { taskId, status, mediaType, mediaSource, keyword, page, pageSize } = query
+    const { taskId, status, mediaSource, keyword, page, pageSize } = query
     const pageNum = page ? parseInt(page, 10) : 1
     const size = pageSize ? parseInt(pageSize, 10) : 20
     const offset = (pageNum - 1) * size
@@ -111,13 +133,10 @@ export class CrawlerController {
       conditions.push('task_id = ?')
       params.push(taskId)
     }
-    if (mediaType) {
-      conditions.push('media_type = ?')
-      params.push(mediaType)
-    }
     if (mediaSource) {
-      conditions.push('media_source = ?')
-      params.push(mediaSource)
+      // Aggregated source is comma-separated (e.g. "bilibili,direct") — use LIKE for matching
+      conditions.push("(media_source = ? OR media_source LIKE ?)")
+      params.push(mediaSource, `%${mediaSource}%`)
     }
 
     if (status && status !== 'all') {
@@ -173,7 +192,10 @@ export class CrawlerController {
   }
 
   @Post('items/:id/import-download')
-  async importToDownloadQueue(@Param('id') id: string, @Body() _body?: { retry?: boolean }) {
+  async importToDownloadQueue(
+    @Param('id') id: string,
+    @Body() body?: { retry?: boolean; autoDownload?: boolean },
+  ) {
     const item = this.db.db.prepare('SELECT * FROM crawl_items WHERE id = ?').get(id) as any
     if (!item) return { error: '采集项不存在' }
 
@@ -204,27 +226,64 @@ export class CrawlerController {
       return { error: '未找到需要下载的媒体资源' }
     }
 
-    // 先删除该采集项旧的下载记录
+    // Build reimport opts (for scheme C)
+    const reimportOpts = {
+      autoDownload: body?.autoDownload ?? false,
+      itemId: id,
+      urls: urlsToDownload.map(u => {
+        const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(u.fieldName, payload.urlTransforms || [])
+        return {
+          url: u.url,
+          fieldName: u.fieldName,
+          filename: u.filename,
+          fileType: u.fileType,
+          downloadMethod: dlMethod,
+          ytDlpOptions: ytDlpOptsJson ? JSON.parse(ytDlpOptsJson) : null,
+        }
+      }),
+    }
+
+    // Scheme C: if downloading tasks exist, mark reimport_pending instead of replacing
+    if (body?.retry) {
+      const hasDownloading = this.db.db.prepare(
+        "SELECT COUNT(*) as count FROM download_queue WHERE item_id = ? AND status = 'downloading'"
+      ).get(id) as any
+
+      if (hasDownloading?.count > 0) {
+        // Set reimport_pending on all downloading tasks for this item
+        const updatedCount = this.db.db.prepare(
+          `UPDATE download_queue SET reimport_pending = 1, reimport_opts = ? WHERE item_id = ? AND status = 'downloading'`
+        ).run(JSON.stringify(reimportOpts), id).changes
+        return {
+          ok: true,
+          pendingReimport: true,
+          message: `有 ${updatedCount} 个下载任务正在进行中，将在完成后自动重新带入`,
+        }
+      }
+    }
+
+    // Safe to delete old and create new
     this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
 
-    // 批量插入下载任务
     const insertStmt = this.db.db.prepare(`
       INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
     `)
 
     const createdTasks: string[] = []
-    for (const { url, fieldName, filename, fileType } of urlsToDownload) {
+    for (const u of reimportOpts.urls) {
       const dTaskId = uuid()
-      const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(fieldName, payload.urlTransforms || [])
-      insertStmt.run(dTaskId, id, url, filename, fileType, fieldName, dlMethod, ytDlpOptsJson)
+      const ytOptsJson = u.ytDlpOptions ? JSON.stringify(u.ytDlpOptions) : null
+      insertStmt.run(dTaskId, id, u.url, u.filename, u.fileType, u.fieldName, u.downloadMethod, ytOptsJson)
       createdTasks.push(dTaskId)
     }
 
-    // 标记为已带入
     this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
 
-    return { ok: true, count: createdTasks.length, taskIds: createdTasks }
+    // Tasks are inserted with status='pending', the download scheduler will pick them up automatically.
+    // The autoDownload flag affects logging/UI behavior.
+
+    return { ok: true, count: createdTasks.length, taskIds: createdTasks, autoDownload: body?.autoDownload ?? false }
   }
 
   @Post('items/:id/cancel')
@@ -493,11 +552,11 @@ export class CrawlerController {
   }
 
   @Post('items/batch-import-download')
-  async batchImportDownload(@Body() body: { ids: string[]; retry?: boolean }) {
+  async batchImportDownload(@Body() body: { ids: string[]; retry?: boolean; autoDownload?: boolean }) {
     if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
       return { error: 'ids array is required' }
     }
-    const results: { id: string; ok: boolean; error?: string }[] = []
+    const results: Array<{ id: string; ok: boolean; pendingReimport?: boolean; error?: string }> = []
     for (const id of body.ids) {
       const item = this.db.db.prepare('SELECT * FROM crawl_items WHERE id = ?').get(id) as any
       if (!item) { results.push({ id, ok: false, error: '采集项不存在' }); continue }
@@ -506,7 +565,6 @@ export class CrawlerController {
         results.push({ id, ok: false, error: '该项已带入下载，请使用重新带入' }); continue
       }
       try {
-        // Call the single-item import logic
         const task = this.queue.getTask(item.task_id)
         if (!task) { results.push({ id, ok: false, error: '所属任务不存在' }); continue }
         const payload: CrawlPayload = task.payload
@@ -523,15 +581,43 @@ export class CrawlerController {
           })
         }
         if (urlsToDownload.length === 0) { results.push({ id, ok: false, error: '未找到需要下载的媒体资源' }); continue }
+
+        const reimportOpts = {
+          autoDownload: body.autoDownload ?? false,
+          itemId: id,
+          urls: urlsToDownload.map(u => {
+            const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(u.fieldName, payload.urlTransforms || [])
+            return {
+              url: u.url, fieldName: u.fieldName, filename: u.filename, fileType: u.fileType,
+              downloadMethod: dlMethod,
+              ytDlpOptions: ytDlpOptsJson ? JSON.parse(ytDlpOptsJson) : null,
+            }
+          }),
+        }
+
+        // Scheme C: if downloading tasks exist, mark reimport_pending
+        if (body.retry) {
+          const hasDownloading = this.db.db.prepare(
+            "SELECT COUNT(*) as count FROM download_queue WHERE item_id = ? AND status = 'downloading'"
+          ).get(id) as any
+          if (hasDownloading?.count > 0) {
+            this.db.db.prepare(
+              `UPDATE download_queue SET reimport_pending = 1, reimport_opts = ? WHERE item_id = ? AND status = 'downloading'`
+            ).run(JSON.stringify(reimportOpts), id)
+            results.push({ id, ok: true, pendingReimport: true })
+            continue
+          }
+        }
+
         this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
         const insertStmt = this.db.db.prepare(`
           INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
         `)
-        for (const { url, fieldName, filename, fileType } of urlsToDownload) {
+        for (const u of reimportOpts.urls) {
           const dTaskId = uuid()
-          const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(fieldName, payload.urlTransforms || [])
-          insertStmt.run(dTaskId, id, url, filename, fileType, fieldName, dlMethod, ytDlpOptsJson)
+          const ytOptsJson = u.ytDlpOptions ? JSON.stringify(u.ytDlpOptions) : null
+          insertStmt.run(dTaskId, id, u.url, u.filename, u.fileType, u.fieldName, u.downloadMethod, ytOptsJson)
         }
         this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
         results.push({ id, ok: true })
@@ -607,8 +693,7 @@ export class CrawlerController {
       { key: 'detail_url', label: '详情URL' },
       { key: 'title', label: '标题' },
       { key: 'media_url', label: '媒体URL' },
-      { key: 'media_type', label: '媒体类型' },
-      { key: 'media_source', label: '媒体来源' },
+      { key: 'media_source', label: '来源平台' },
       { key: 'status', label: '采集状态' },
       { key: 'download_status', label: '带入状态' },
       { key: 'created_at', label: '采集时间' },
@@ -992,6 +1077,7 @@ export class CrawlerController {
       detailLinkField, mediaUrlField,
       errorMode = 'standard',
       mode = itemSelector ? 'list' : 'single',
+      urlTransforms = [],
     } = payload
 
     const resolvedPaginationMode = paginationMode
@@ -1052,7 +1138,7 @@ export class CrawlerController {
         }
 
         const items = this.crawler.parseHtml(
-          html, rules, mode === 'list' ? (itemSelector || undefined) : undefined,
+          html, rules, mode === 'list' ? (itemSelector || undefined) : undefined, currentUrl,
         )
 
         if (urlPattern && isUnlimited && items.length === 0 && pageIndex > pageStart) {
@@ -1077,7 +1163,7 @@ export class CrawlerController {
             if (detailUrl) {
               try {
                 const detailHtml = await this.fetchWithRetry(detailUrl, errorMode === 'strict' ? 0 : 1)
-                const detailData = this.crawler.parseHtml(detailHtml, detailRules)
+                const detailData = this.crawler.parseHtml(detailHtml, detailRules, undefined, detailUrl)
                 if (detailData.length > 0) {
                   Object.assign(items[i], detailData[0])
                 }
@@ -1095,34 +1181,100 @@ export class CrawlerController {
 
         // Insert items to DB
         const insertStmt = this.db.db.prepare(`
-          INSERT OR REPLACE INTO crawl_items (id, task_id, source_url, detail_url, title, media_url, media_type, media_source, status, extra_data)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'crawled', ?)
+          INSERT OR REPLACE INTO crawl_items (id, task_id, source_url, detail_url, title, media_url, media_type, media_source, status, download_status, extra_data)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'crawled', NULL, ?)
         `)
 
         for (const item of items) {
           const itemId = uuid()
 
+          // ── 协议补全基准：有详情页优先用详情页协议，否则用当前列表页 ──
+          const normalizeSource = item._detail_url || currentUrl
+
           // ── 媒体 URL 解析 ──
           let mediaUrl = ''
+          const allUrlEntries: Array<{ url: string; fieldName: string; method: string }> = []
+
           if (mediaUrlField?.fields?.length) {
             if (mediaUrlField.mode === 'all') {
-              // 收集所有指定字段的值
-              const allUrls = this.crawler.collectAll(item, mediaUrlField.fields)
-                .filter(v => isUrl(v))
-              mediaUrl = allUrls[0] || ''  // media_url 列只存第一个
-              item._media_urls = allUrls    // 全部存 extra_data
+              // 逐个字段收集：空值跳过；非URL有转写规则也纳入（通过转写得到URL）
+              for (const fieldName of mediaUrlField.fields) {
+                const val = item[fieldName]
+                if (val === null || val === undefined || val === '') continue
+                const valStr = String(val)
+                const transform = urlTransforms.find(t => t.fieldName === fieldName)
+
+                let effectiveUrl: string
+                let method: string
+
+                if (isUrl(valStr)) {
+                  // 值是完整URL：直接使用
+                  effectiveUrl = normalizeUrl(valStr, normalizeSource)
+                  method = transform?.downloadMethod || this.inferDownloadMethod(effectiveUrl)
+                } else if (transform) {
+                  // 值不是URL但有转写规则：应用转写得到完整URL
+                  effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, item)
+                  method = transform.downloadMethod || this.inferDownloadMethod(effectiveUrl)
+                } else {
+                  // 不是URL也没有转写规则：跳过
+                  continue
+                }
+
+                allUrlEntries.push({ url: effectiveUrl, fieldName, method })
+              }
+              mediaUrl = allUrlEntries[0]?.url || ''
+              item._media_urls = allUrlEntries.map(e => e.url)
+              item._media_url_fields = allUrlEntries.map(e => e.fieldName)
+              item._media_methods = allUrlEntries.map(e => e.method)
             } else {
-              // first 模式：按顺序选第一个
-              mediaUrl = this.crawler.pickFirst(item, mediaUrlField.fields)
+              // first 模式：按顺序选第一个有效值
+              let found = false
+              for (const fieldName of mediaUrlField.fields) {
+                const val = item[fieldName]
+                if (val === null || val === undefined || val === '') continue
+                const valStr = String(val)
+                const transform = urlTransforms.find(t => t.fieldName === fieldName)
+
+                if (isUrl(valStr)) {
+                  mediaUrl = normalizeUrl(valStr, normalizeSource)
+                  const method = transform?.downloadMethod || this.inferDownloadMethod(mediaUrl)
+                  item._media_urls = [mediaUrl]
+                  item._media_url_fields = [fieldName]
+                  item._media_methods = [method]
+                  found = true
+                  break
+                } else if (transform) {
+                  mediaUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, item)
+                  const method = transform.downloadMethod || this.inferDownloadMethod(mediaUrl)
+                  item._media_urls = [mediaUrl]
+                  item._media_url_fields = [fieldName]
+                  item._media_methods = [method]
+                  found = true
+                  break
+                }
+              }
+              if (!found) {
+                item._media_urls = []
+                item._media_url_fields = []
+                item._media_methods = []
+              }
             }
           }
           // 兜底自动检测
           if (!mediaUrl) {
             const autoFields = ['videoUrl', 'audioUrl', 'mediaUrl', 'imageUrl', 'picUrl', 'thumbnail', 'image', 'url', 'link']
-            mediaUrl = this.crawler.pickFirst(item, autoFields)
+            mediaUrl = normalizeUrl(this.crawler.pickFirst(item, autoFields), normalizeSource)
+            if (mediaUrl) {
+              item._media_urls = [mediaUrl]
+              item._media_url_fields = ['_auto']
+              item._media_methods = ['file']
+            }
           }
 
-          const { type, source } = this.crawler.detectMediaType(mediaUrl)
+          // ── 聚合来源：URL转写优先 → 原始URL兜底 → 源页面兜底 ──
+          const aggregatedSource = this.aggregateMediaSources(item, mediaUrl, urlTransforms, currentUrl)
+          // type 保留向后兼容，UI 不再使用
+          const { type } = this.crawler.detectMediaType(mediaUrl)
 
           // ── 标题解析 ──
           const titleFields = titleField?.fields?.length
@@ -1136,7 +1288,7 @@ export class CrawlerController {
           const detailUrl = item._detail_url || null
           delete item._detail_url
 
-          insertStmt.run(itemId, taskId, currentUrl, detailUrl, itemTitle, mediaUrl, type, source, JSON.stringify(item))
+          insertStmt.run(itemId, taskId, currentUrl, detailUrl, itemTitle, mediaUrl, type, aggregatedSource, JSON.stringify(item))
           totalItems++
 
           if (resolvedPaginationMode === 'count' && maxItems && totalItems >= maxItems) break
@@ -1185,6 +1337,61 @@ export class CrawlerController {
   // URL 转换 & 下载解析
   // ════════════════════════════════════════════════════════════════
 
+  /** 对采集项的所有媒体 URL 计算来源，去重拼接（如 "bilibili,direct"）。
+   *  优先使用 URL 转写规则变换后的 URL 判断来源，否则用原始值。
+   *  如果所有 URL 都无法识别平台来源，会用源页面 URL 做兜底检测。 */
+  private aggregateMediaSources(
+    extraData: Record<string, any>,
+    primaryMediaUrl: string,
+    urlTransforms: UrlTransform[] = [],
+    sourceUrl?: string,
+  ): string {
+    const sources = new Set<string>()
+    // 从 _media_urls 数组收集
+    if (extraData._media_urls && Array.isArray(extraData._media_urls)) {
+      const fields = extraData._media_url_fields || []
+      for (let i = 0; i < extraData._media_urls.length; i++) {
+        const rawUrl = extraData._media_urls[i]
+        if (typeof rawUrl !== 'string' || !rawUrl) continue
+        const fieldName = fields[i] || ''
+        // 有转写规则：对转写后的 URL 判断来源；否则直接用原始 URL
+        const finalUrl = fieldName
+          ? this.applyUrlTransform(rawUrl, fieldName, urlTransforms, extraData)
+          : rawUrl
+        const { source } = this.crawler.detectMediaType(finalUrl)
+        if (source) sources.add(source)
+      }
+    }
+    // 兜底：从主 media_url 收集
+    if (primaryMediaUrl) {
+      const { source } = this.crawler.detectMediaType(primaryMediaUrl)
+      if (source) sources.add(source)
+    }
+    // 二次兜底：所有URL都无法识别平台时（只有direct/域名），用源页面URL检测
+    if (sources.size === 0 || (sources.size === 1 && sources.has('direct'))) {
+      if (sourceUrl) {
+        const { source } = this.crawler.detectMediaType(sourceUrl)
+        if (source && source !== 'direct' && source !== '') {
+          sources.add(source)
+          // 从源页面检测到平台时，也移除 'direct' 避免误导
+          sources.delete('direct')
+        }
+      }
+    }
+    return [...sources].join(',')
+  }
+
+  /** 根据 URL 内容推断推荐的下载方式（无转写规则时使用） */
+  private inferDownloadMethod(url: string): string {
+    const { source } = this.crawler.detectMediaType(url)
+    // 已知视频平台 → 需要 yt-dlp 解析
+    if (source === 'bilibili' || source === 'tencent' || source === 'youku' || source === 'youtube') {
+      return 'yt-dlp'
+    }
+    // 文件直链 / 文档 / 数据 / 图片 / 未知链接 → 直链下载
+    return 'file'
+  }
+
   /** 根据 mediaUrlField 配置从 extraData 中解析出待下载的 URL 列表 */
   private resolveDownloadUrls(
     extraData: Record<string, any>,
@@ -1195,52 +1402,84 @@ export class CrawlerController {
 
     if (mediaSpec.fields.length > 0) {
       if (mediaSpec.mode === 'all') {
-        // 收集所有指定字段的有效 URL
+        // 收集所有指定字段的有效 URL（含 URL 转换）
         for (const fieldName of mediaSpec.fields) {
           const fieldValue = extraData[fieldName]
-          if (typeof fieldValue === 'string' && isUrl(fieldValue)) {
-            const normalized = normalizeUrl(fieldValue)
-            const finalUrl = this.applyUrlTransform(normalized, fieldName, urlTransforms, extraData)
-            const ext = finalUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
-            results.push({
-              url: finalUrl,
-              fieldName,
-              filename: this.getFilename(finalUrl, fieldName),
-              fileType: this.getFileType(finalUrl, ext),
-            })
+          if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue
+          const valStr = String(fieldValue)
+          const transform = urlTransforms.find(t => t.fieldName === fieldName)
+
+          let effectiveUrl: string
+          if (isUrl(valStr)) {
+            effectiveUrl = normalizeUrl(valStr)
+            effectiveUrl = this.applyUrlTransform(effectiveUrl, fieldName, urlTransforms, extraData)
+          } else if (transform) {
+            // 字段值不是 URL 但有转换规则：应用转换得到完整 URL
+            effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, extraData)
+          } else {
+            continue
           }
+
+          const ext = effectiveUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+          results.push({
+            url: effectiveUrl,
+            fieldName,
+            filename: this.getFilename(effectiveUrl, fieldName),
+            fileType: this.getFileType(effectiveUrl, ext),
+          })
         }
       } else {
-        // first 模式：按顺序选第一个有效 URL
-        const found = this.crawler.pickFirst(extraData, mediaSpec.fields)
-        if (found && isUrl(found)) {
-          const normalized = normalizeUrl(found)
-          // 找到匹配的字段名
-          const matchedField = mediaSpec.fields.find(f => extraData[f] === found) || mediaSpec.fields[0]
-          const finalUrl = this.applyUrlTransform(normalized, matchedField, urlTransforms)
-          const ext = finalUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+        // first 模式：按顺序选第一个有效 URL（含 URL 转换）
+        for (const fieldName of mediaSpec.fields) {
+          const fieldValue = extraData[fieldName]
+          if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue
+          const valStr = String(fieldValue)
+          const transform = urlTransforms.find(t => t.fieldName === fieldName)
+
+          let effectiveUrl: string
+          if (isUrl(valStr)) {
+            effectiveUrl = normalizeUrl(valStr)
+            effectiveUrl = this.applyUrlTransform(effectiveUrl, fieldName, urlTransforms, extraData)
+          } else if (transform) {
+            effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, extraData)
+          } else {
+            continue
+          }
+
+          const ext = effectiveUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
           results.push({
-            url: finalUrl,
-            fieldName: matchedField,
-            filename: this.getFilename(finalUrl, matchedField),
-            fileType: this.getFileType(finalUrl, ext),
+            url: effectiveUrl,
+            fieldName,
+            filename: this.getFilename(effectiveUrl, fieldName),
+            fileType: this.getFileType(effectiveUrl, ext),
           })
+          break // first mode: 找到第一个就停止
         }
       }
     } else {
-      // 未指定字段：扫描所有 URL 字段
+      // 未指定字段：扫描所有 URL 字段（含 URL 转换）
       for (const [fieldName, fieldValue] of Object.entries(extraData)) {
-        if (typeof fieldValue === 'string' && isUrl(fieldValue)) {
-          const normalized = normalizeUrl(fieldValue)
-          const finalUrl = this.applyUrlTransform(normalized, fieldName, urlTransforms)
-          const ext = finalUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
-          results.push({
-            url: finalUrl,
-            fieldName,
-            filename: this.getFilename(finalUrl, fieldName),
-            fileType: this.getFileType(finalUrl, ext),
-          })
+        if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue
+        const valStr = String(fieldValue)
+        const transform = urlTransforms.find(t => t.fieldName === fieldName)
+
+        let effectiveUrl: string
+        if (isUrl(valStr)) {
+          effectiveUrl = normalizeUrl(valStr)
+          effectiveUrl = this.applyUrlTransform(effectiveUrl, fieldName, urlTransforms, extraData)
+        } else if (transform) {
+          effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, extraData)
+        } else {
+          continue
         }
+
+        const ext = effectiveUrl.split('?')[0].split('.').pop()?.toLowerCase() || ''
+        results.push({
+          url: effectiveUrl,
+          fieldName,
+          filename: this.getFilename(effectiveUrl, fieldName),
+          fileType: this.getFileType(effectiveUrl, ext),
+        })
       }
     }
 
@@ -1250,10 +1489,13 @@ export class CrawlerController {
   /** 如果该字段配置了 URL 转换规则，则用模板拼接；否则返回原 URL
    *  模板支持 {任意字段名} 占位符，会从 extraData 中查找对应值替换。
    *  例如模板 "https://v.qq.com/x/page/{videoId}?title={title}" 中，
-   *  {videoId} 替换为 videoId 字段值，{title} 替换为 title 字段值。 */
+   *  {videoId} 替换为 videoId 字段值，{title} 替换为 title 字段值。
+   *  当 urlTemplate 为空时，直接返回原始值（字段值本身就是可下载的URL）。 */
   private applyUrlTransform(originalUrl: string, fieldName: string, transforms: UrlTransform[], extraData?: Record<string, any>): string {
     const rule = transforms.find(t => t.fieldName === fieldName)
     if (!rule) return originalUrl
+    // urlTemplate 为空 → 字段原始值即为可下载链接（如带 yt-dlp 参数下载）
+    if (!rule.urlTemplate) return originalUrl
     return rule.urlTemplate.replace(/\{(\w+)\}/g, (_, key) => {
       // 优先从 extraData 中查找任意字段的值
       if (extraData && extraData[key] != null && extraData[key] !== '') {
@@ -1426,13 +1668,13 @@ export class CrawlerController {
           this.db.db.prepare(`UPDATE crawl_items SET status = 'error' WHERE id = ?`).run(itemId)
           return { error: `详情页不可访问，该项可能已下架: ${err.message}` }
         }
-        const detailResults = this.crawler.parseHtml(detailHtml, payload.detailRules || payload.rules)
+        const detailResults = this.crawler.parseHtml(detailHtml, payload.detailRules || payload.rules, undefined, item.detail_url)
         if (detailResults.length > 0) {
           data = detailResults[0]
           if (item.source_url && item.source_url !== item.detail_url) {
             try {
               const listHtml = await this.crawler.fetchHtml(item.source_url)
-              const listResults = this.crawler.parseHtml(listHtml, payload.rules, payload.itemSelector)
+              const listResults = this.crawler.parseHtml(listHtml, payload.rules, payload.itemSelector, item.source_url)
               const matched = this.findMatchingItem(listResults, item, payload.idField)
               if (matched) {
                 delete (matched as any)._detail_url
@@ -1449,7 +1691,7 @@ export class CrawlerController {
           this.db.db.prepare(`UPDATE crawl_items SET status = 'error' WHERE id = ?`).run(itemId)
           return { error: `列表页不可访问: ${err.message}` }
         }
-        const listResults = this.crawler.parseHtml(listHtml, payload.rules, payload.itemSelector)
+        const listResults = this.crawler.parseHtml(listHtml, payload.rules, payload.itemSelector, item.source_url)
         data = this.findMatchingItem(listResults, item, payload.idField)
         if (!data) {
           this.db.db.prepare(`UPDATE crawl_items SET status = 'error' WHERE id = ?`).run(itemId)
@@ -1462,19 +1704,84 @@ export class CrawlerController {
 
       if (!data) return { error: '未能重新提取到数据' }
 
+      // ── 协议补全基准：有详情页优先用详情页协议，否则用源页面 ──
+      const normalizeSource = item.detail_url || item.source_url
+      const urlTransforms = payload.urlTransforms || []
+
       // 媒体 URL
       const mediaUrlField = payload.mediaUrlField
       let mediaUrl = ''
       if (mediaUrlField?.fields?.length) {
-        mediaUrl = mediaUrlField.mode === 'all'
-          ? (this.crawler.collectAll(data, mediaUrlField.fields).filter(v => isUrl(v))[0] || '')
-          : this.crawler.pickFirst(data, mediaUrlField.fields)
+        if (mediaUrlField.mode === 'all') {
+          const urlEntries: Array<{ url: string; fieldName: string; method: string }> = []
+          for (const fieldName of mediaUrlField.fields) {
+            const val = data[fieldName]
+            if (val === null || val === undefined || val === '') continue
+            const valStr = String(val)
+            const transform = urlTransforms.find(t => t.fieldName === fieldName)
+
+            let effectiveUrl: string
+            let method: string
+
+            if (isUrl(valStr)) {
+              effectiveUrl = normalizeUrl(valStr, normalizeSource)
+              method = transform?.downloadMethod || this.inferDownloadMethod(effectiveUrl)
+            } else if (transform) {
+              effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, data)
+              method = transform.downloadMethod || this.inferDownloadMethod(effectiveUrl)
+            } else {
+              continue
+            }
+            urlEntries.push({ url: effectiveUrl, fieldName, method })
+          }
+          mediaUrl = urlEntries[0]?.url || ''
+          ;(data as any)._media_urls = urlEntries.map(e => e.url)
+          ;(data as any)._media_url_fields = urlEntries.map(e => e.fieldName)
+          ;(data as any)._media_methods = urlEntries.map(e => e.method)
+        } else {
+          let found = false
+          for (const fieldName of mediaUrlField.fields) {
+            const val = data[fieldName]
+            if (val === null || val === undefined || val === '') continue
+            const valStr = String(val)
+            const transform = urlTransforms.find(t => t.fieldName === fieldName)
+
+            if (isUrl(valStr)) {
+              mediaUrl = normalizeUrl(valStr, normalizeSource)
+              ;(data as any)._media_urls = [mediaUrl]
+              ;(data as any)._media_url_fields = [fieldName]
+              ;(data as any)._media_methods = [transform?.downloadMethod || this.inferDownloadMethod(mediaUrl)]
+              found = true
+              break
+            } else if (transform) {
+              mediaUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, data)
+              ;(data as any)._media_urls = [mediaUrl]
+              ;(data as any)._media_url_fields = [fieldName]
+              ;(data as any)._media_methods = [transform.downloadMethod || this.inferDownloadMethod(mediaUrl)]
+              found = true
+              break
+            }
+          }
+          if (!found) {
+            ;(data as any)._media_urls = []
+            ;(data as any)._media_url_fields = []
+            ;(data as any)._media_methods = []
+          }
+        }
       }
       if (!mediaUrl) {
-        mediaUrl = this.crawler.pickFirst(data, ['videoUrl', 'audioUrl', 'mediaUrl', 'imageUrl', 'picUrl', 'thumbnail', 'image', 'url', 'link'])
+        mediaUrl = normalizeUrl(this.crawler.pickFirst(data, ['videoUrl', 'audioUrl', 'mediaUrl', 'imageUrl', 'picUrl', 'thumbnail', 'image', 'url', 'link']), normalizeSource)
+        if (mediaUrl) {
+          ;(data as any)._media_urls = [mediaUrl]
+          ;(data as any)._media_url_fields = ['_auto']
+          ;(data as any)._media_methods = ['file']
+        }
       }
 
-      const { type, source } = this.crawler.detectMediaType(mediaUrl)
+      // ── 聚合来源：URL转写优先 → 原始URL兜底 → 源页面兜底 ──
+      const aggregatedSource = this.aggregateMediaSources(data, mediaUrl, urlTransforms, item.source_url)
+      // type 保留向后兼容，UI 不再使用
+      const { type } = this.crawler.detectMediaType(mediaUrl)
       const titleFields = payload.titleField?.fields?.length
         ? payload.titleField.fields
         : ['title', 'name', 'articleTitle', 'productName', 'heading']
@@ -1484,7 +1791,7 @@ export class CrawlerController {
       this.db.db.prepare(`
         UPDATE crawl_items SET title = ?, media_url = ?, media_type = ?, media_source = ?, status = 'crawled', extra_data = ?, source_url = ?
         WHERE id = ?
-      `).run(title, mediaUrl, type, source, JSON.stringify(data), item.source_url, itemId)
+      `).run(title, mediaUrl, type, aggregatedSource, JSON.stringify(data), item.source_url, itemId)
 
       return { ok: true, title }
     } catch (err: any) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, computed, nextTick, reactive } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed, nextTick, reactive, h } from 'vue'
 import { useRoute } from 'vue-router'
 import { crawlerAPI } from '../api'
 import { usePagination } from '../composables/usePagination'
@@ -12,7 +12,6 @@ const tasks = ref<any[]>([])
 const items = ref<any[]>([])
 const selectedTaskId = ref((route.query.taskId as string) || '')
 const statusFilter = ref('all')
-const typeFilter = ref('all')
 const sourceFilter = ref('all')
 const keyword = ref('')
 let sseConnection: EventSource | null = null
@@ -92,7 +91,6 @@ async function fetchItems() {
     }
     if (selectedTaskId.value) params.taskId = selectedTaskId.value
     if (statusFilter.value !== 'all') params.status = statusFilter.value
-    if (typeFilter.value !== 'all') params.mediaType = typeFilter.value
     if (sourceFilter.value !== 'all') params.mediaSource = sourceFilter.value
     if (keyword.value.trim()) params.keyword = keyword.value.trim()
 
@@ -116,8 +114,8 @@ function findSelected(id: string) { return items.value.find((x: any) => x.id ===
 const deletableItemIds = computed(() => selectedIds.value)
 const crawlableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'pending' }))
 const recrawlableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && (item.status === 'crawled' || item.status === 'error') }))
-const importableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'crawled' && !item.download_status }))
-const reimportableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'crawled' && item.download_status === 'imported' }))
+const importableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'crawled' && (!item.download_status || item.download_status === 'pending') }))
+const reimportableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'crawled' && item.download_status && item.download_status === 'imported' }))
 const pipelineableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'crawled' }))
 
 async function batchDeleteItems() {
@@ -161,10 +159,28 @@ async function batchImportDownload() {
   const ids = importableItemIds.value
   if (!ids.length) { ElMessage.warning('所选项目中没有可带入下载的项（需要已采集且未带入）'); return }
   try {
-    await ElMessageBox.confirm(`确定要将选中的 ${ids.length} 个采集项带入下载队列吗？`, '批量带入下载确认', { type: 'info', confirmButtonText: '确定带入', cancelButtonText: '取消' })
-    const res = await crawlerAPI.batchImportDownload(ids)
+    const autoDownloadRef = ref(false)
+    const msg = h('div', { class: 'space-y-3' }, [
+      h('div', { class: 'text-sm' }, `确定要将选中的 ${ids.length} 个采集项带入下载队列吗？`),
+      h('div', { class: 'flex items-center gap-2' }, [
+        h('input', {
+          type: 'checkbox', id: 'batch-auto-dl',
+          checked: autoDownloadRef.value,
+          onChange: (e: Event) => { autoDownloadRef.value = (e.target as HTMLInputElement).checked },
+          style: 'accent-color: #409eff;',
+        }),
+        h('label', { for: 'batch-auto-dl', class: 'text-xs text-gray-400 cursor-pointer', style: 'margin-left: 4px;' }, '带入后立即开始下载'),
+      ]),
+    ])
+    await ElMessageBox.confirm(msg, '批量带入下载确认', { type: 'info', confirmButtonText: '确定带入', cancelButtonText: '取消' })
+    const res = await crawlerAPI.batchImportDownload(ids, false, autoDownloadRef.value)
     const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
-    ElMessage.success(`已带入 ${okCount} 个项到下载队列`)
+    const pendingCount = res.data?.filter?.((r: any) => r.pendingReimport)?.length ?? 0
+    if (pendingCount) {
+      ElMessage.success(`已带入 ${okCount} 个项，${pendingCount} 个将在下载完成后自动重新带入`)
+    } else {
+      ElMessage.success(`已带入 ${okCount} 个项到下载队列`)
+    }
     refresh()
   } catch { /* cancelled */ }
 }
@@ -173,10 +189,28 @@ async function batchReimportDownload() {
   const ids = reimportableItemIds.value
   if (!ids.length) { ElMessage.warning('所选项目中没有可重新带入的项（需要已带入状态）'); return }
   try {
-    await ElMessageBox.confirm(`确定要将选中的 ${ids.length} 个采集项重新带入下载队列吗？旧的下载记录将被清除。`, '批量重新带入确认', { type: 'warning', confirmButtonText: '确定重新带入', cancelButtonText: '取消' })
-    const res = await crawlerAPI.batchImportDownload(ids, true)
+    const autoDownloadRef = ref(false)
+    const msg = h('div', { class: 'space-y-3' }, [
+      h('div', { class: 'text-sm' }, `确定要将选中的 ${ids.length} 个采集项重新带入下载队列吗？旧的下载记录将被清除。`),
+      h('div', { class: 'flex items-center gap-2' }, [
+        h('input', {
+          type: 'checkbox', id: 'batch-re-auto-dl',
+          checked: autoDownloadRef.value,
+          onChange: (e: Event) => { autoDownloadRef.value = (e.target as HTMLInputElement).checked },
+          style: 'accent-color: #409eff;',
+        }),
+        h('label', { for: 'batch-re-auto-dl', class: 'text-xs text-gray-400 cursor-pointer', style: 'margin-left: 4px;' }, '带入后立即开始下载'),
+      ]),
+    ])
+    await ElMessageBox.confirm(msg, '批量重新带入确认', { type: 'warning', confirmButtonText: '确定重新带入', cancelButtonText: '取消' })
+    const res = await crawlerAPI.batchImportDownload(ids, true, autoDownloadRef.value)
     const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
-    ElMessage.success(`已重新带入 ${okCount} 个项到下载队列`)
+    const pendingCount = res.data?.filter?.((r: any) => r.pendingReimport)?.length ?? 0
+    if (pendingCount) {
+      ElMessage.success(`已重新带入 ${okCount} 个项，${pendingCount} 个将在下载完成后自动重新带入`)
+    } else {
+      ElMessage.success(`已重新带入 ${okCount} 个项到下载队列`)
+    }
     refresh()
   } catch { /* cancelled */ }
 }
@@ -347,7 +381,6 @@ function copyJson() {
   const obj: Record<string, any> = {
     title: detailItem.value.title,
     media_url: detailItem.value.media_url,
-    media_type: detailItem.value.media_type,
     media_source: detailItem.value.media_source,
     source_url: detailItem.value.source_url,
     ...detailItem.value.extra,
@@ -356,14 +389,15 @@ function copyJson() {
   ElMessage.success('已复制到剪贴板')
 }
 
-// 获取所有来源选项（从已加载数据中收集）
-const sourceOptions = computed(() => {
-  const sources = new Set<string>()
-  items.value.forEach((i: any) => {
-    if (i.media_source) sources.add(i.media_source)
-  })
-  return Array.from(sources).sort()
-})
+// 来源选项（动态从数据中提取，支持用户手动输入自定义值）
+const sourceOptions = ref<string[]>([])
+
+async function loadSourceOptions() {
+  try {
+    const { data } = await crawlerAPI.getSources()
+    sourceOptions.value = data
+  } catch { /* ignore */ }
+}
 
 const currentTask = computed(() => {
   if (!selectedTaskId.value) return null
@@ -380,7 +414,7 @@ const taskNameMap = computed(() => {
 })
 
 // Watch filters — reset page via composable, then fetch
-watch([selectedTaskId, statusFilter, typeFilter, sourceFilter, keyword], () => {
+watch([selectedTaskId, statusFilter, sourceFilter, keyword], () => {
   page.value = 1
   fetchItems()
 })
@@ -438,7 +472,6 @@ async function clearAllSelections() {
 function resetFilters() {
   keyword.value = ''
   selectedTaskId.value = ''
-  typeFilter.value = 'all'
   sourceFilter.value = 'all'
   statusFilter.value = 'all'
   page.value = 1
@@ -464,19 +497,73 @@ function canRecrawl(s: string) { return s === 'error' || s === 'crawled' }
 // 导入下载：将采集项的媒体资源拆分为下载任务
 async function importToDownload(id: string, retry = false) {
   try {
-    if (retry) {
-      await ElMessageBox.confirm('将采集项重新加入到下载队列中', '确认', { type: 'info' })
-    } else {
-      await ElMessageBox.confirm('将采集项的媒体资源加入到下载队列中', '确认', { type: 'info' })
-    }
-    const res = await crawlerAPI.importToDownloadQueue(id, retry)
+    const autoDownloadRef = ref(false)
+    const msg = h('div', { class: 'space-y-3' }, [
+      h('div', { class: 'text-sm' }, retry ? '将采集项重新加入到下载队列中' : '将采集项的媒体资源加入到下载队列中'),
+      h('div', { class: 'flex items-center gap-2' }, [
+        h('input', {
+          type: 'checkbox',
+          id: `auto-dl-${id.slice(0, 8)}`,
+          checked: autoDownloadRef.value,
+          onChange: (e: Event) => { autoDownloadRef.value = (e.target as HTMLInputElement).checked },
+          style: 'accent-color: #409eff;',
+        }),
+        h('label', { for: `auto-dl-${id.slice(0, 8)}`, class: 'text-xs text-gray-400 cursor-pointer', style: 'margin-left: 4px;' }, '带入后立即开始下载'),
+      ]),
+    ])
+    await ElMessageBox.confirm(msg, retry ? '重新带入确认' : '带入下载确认', {
+      type: 'info',
+      confirmButtonText: retry ? '确定重新带入' : '确定带入',
+      cancelButtonText: '取消',
+    })
+    const res = await crawlerAPI.importToDownloadQueue(id, retry, autoDownloadRef.value)
     if (res.data?.error) { ElMessage.error(res.data.error) }
+    else if (res.data?.pendingReimport) {
+      ElMessage.success(res.data.message || '将在当前下载完成后自动重新带入')
+    }
     else {
-      ElMessage.success(retry ? '已重新加入下载队列' : '已加入下载队列')
-      // 直接刷新当前页数据，确保与后端状态一致
+      const msg2 = retry
+        ? '已重新加入下载队列'
+        : (autoDownloadRef.value ? '已加入下载队列并开始下载' : '已加入下载队列')
+      ElMessage.success(msg2)
       await fetchItems()
     }
-  } catch { ElMessage.error('操作失败') }
+  } catch { /* cancelled */ }
+}
+
+/** 计算采集项包含的媒体资源数量（从 _media_urls 数组或 media_url 字段） */
+function mediaCount(item: any): number {
+  if (!item.extra_data) return item.media_url ? 1 : 0
+  try {
+    const data = typeof item.extra_data === 'string' ? JSON.parse(item.extra_data) : item.extra_data
+    if (data._media_urls && Array.isArray(data._media_urls)) {
+      return data._media_urls.length
+    }
+  } catch { /* ignore */ }
+  return item.media_url ? 1 : 0
+}
+
+/** 解析资源的下载方式列表（从 _media_methods 数组） */
+function mediaMethods(item: any): string[] {
+  if (!item.extra_data) return []
+  try {
+    const data = typeof item.extra_data === 'string' ? JSON.parse(item.extra_data) : item.extra_data
+    if (data._media_methods && Array.isArray(data._media_methods)) {
+      return data._media_methods
+    }
+  } catch { /* ignore */ }
+  return []
+}
+
+/** 下载方式汇总标签 */
+function downloadMethodLabel(item: any): { text: string; color: string } {
+  const methods = mediaMethods(item)
+  if (!methods.length) return { text: '-', color: 'text-gray-500' }
+  const hasYtDlp = methods.some(m => m === 'yt-dlp')
+  const hasFile = methods.some(m => m === 'file')
+  if (hasYtDlp && hasFile) return { text: '混合', color: 'text-amber-400' }
+  if (hasYtDlp) return { text: 'yt-dlp', color: 'text-orange-400' }
+  return { text: '直链', color: 'text-emerald-400' }
 }
 
 // 下载状态标签
@@ -484,6 +571,8 @@ function downloadStatusLabel(s: string) {
   const map: Record<string, string> = {
     imported: '已带入',
   }
+  // 'pending' is a legacy default artifact — treat same as not imported
+  if (s === 'pending') return '未带入'
   return map[s] || s || '未带入'
 }
 
@@ -571,6 +660,7 @@ function teardownSSE() {
 
 onMounted(() => {
   refresh()
+  loadSourceOptions()
   setupSSE()
 })
 onUnmounted(teardownSSE)
@@ -658,19 +748,8 @@ onUnmounted(teardownSSE)
           </el-select>
         </span>
         <span class="inline-flex items-center gap-1">
-          <span class="text-xs text-gray-400 flex-shrink-0">类型：</span>
-          <el-select v-model="typeFilter" size="small" class="!w-20">
-            <el-option label="全部" value="all" />
-            <el-option label="视频" value="video" />
-            <el-option label="音频" value="audio" />
-            <el-option label="图片" value="image" />
-            <el-option label="链接" value="link" />
-            <el-option label="文本" value="text" />
-          </el-select>
-        </span>
-        <span class="inline-flex items-center gap-1">
           <span class="text-xs text-gray-400 flex-shrink-0">来源：</span>
-          <el-select v-model="sourceFilter" size="small" class="!w-24">
+          <el-select v-model="sourceFilter" size="small" class="!w-24" filterable allow-create default-first-option>
             <el-option label="全部" value="all" />
             <el-option v-for="s in sourceOptions" :key="s" :label="s" :value="s" />
           </el-select>
@@ -719,14 +798,18 @@ onUnmounted(teardownSSE)
             <span class="text-xs text-gray-300">{{ row.title || pickDisplayField(row) || '(无标题)' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="类型" width="80">
+        <el-table-column label="资源" width="85" align="center">
           <template #default="{ row }">
-            <span class="text-xs" :class="row.media_type === 'video' ? 'text-blue-400' : row.media_type === 'audio' ? 'text-emerald-400' : 'text-gray-500'">
-              {{ row.media_type || '-' }}
-            </span>
+            <div v-if="mediaCount(row) > 0" class="flex flex-col items-center gap-0.5">
+              <span class="text-xs font-mono text-blue-400">{{ mediaCount(row) }}</span>
+              <span class="text-[10px]" :class="downloadMethodLabel(row).color">
+                {{ downloadMethodLabel(row).text }}
+              </span>
+            </div>
+            <span v-else class="text-xs text-gray-500">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="来源" width="90">
+        <el-table-column label="来源" width="110">
           <template #default="{ row }">
             <span class="text-xs text-gray-400">{{ row.media_source || '-' }}</span>
           </template>
@@ -742,7 +825,7 @@ onUnmounted(teardownSSE)
                 'text-gray-500': !row.status,
               }">{{ itemStatusLabel(row.status) }}</span>
               <span class="text-[10px]" :class="{
-                'text-gray-500': !row.download_status || row.status !== 'crawled',
+                'text-gray-500': !row.download_status || row.download_status === 'pending' || row.status !== 'crawled',
                 'text-emerald-400': row.download_status === 'imported' && row.status === 'crawled',
               }">{{ row.status === 'crawled' ? downloadStatusLabel(row.download_status) : '' }}</span>
             </div>
@@ -769,8 +852,8 @@ onUnmounted(teardownSSE)
               <!-- 已采集：重采、带入下载/重新带入、删除 -->
               <template v-if="row.status === 'crawled'">
                 <el-button size="small" plain @click="recrawlSingleItem(row.id)">重采</el-button>
-                <el-button v-if="!row.download_status" size="small" type="success" plain @click="importToDownload(row.id)">带入下载</el-button>
-                <el-button v-else size="small" type="warning" plain @click="importToDownload(row.id, true)">重新带入</el-button>
+                <el-button v-if="!row.download_status || row.download_status === 'pending'" size="small" type="success" plain @click="importToDownload(row.id)">带入下载</el-button>
+                <el-button v-if="row.download_status === 'imported'" size="small" type="warning" plain @click="importToDownload(row.id, true)">重新带入</el-button>
               </template>
               <!-- 采集失败：重采、删除 -->
               <el-button v-if="canRecrawl(row.status) && row.status === 'error'" size="small" type="warning" plain @click="retrySingleItem(row.id)">重采</el-button>
@@ -793,7 +876,7 @@ onUnmounted(teardownSSE)
         />
       </div>
       <div v-if="!items.length && !loading" class="text-center py-16 text-gray-500 text-sm">
-        <i class="fas fa-table text-3xl mb-3 block opacity-30"></i>
+        <i class="fas fa-table text-3xl mb-3 inline-block opacity-30"></i>
         {{ selectedTaskId ? '该任务暂无采集结果' : '暂无采集数据，请先在任务列表中创建并运行采集任务' }}
       </div>
     </div>
@@ -832,12 +915,17 @@ onUnmounted(teardownSSE)
                   <td class="px-4 py-2.5 text-gray-200 break-all">{{ detailItem.media_url || '(空)' }}</td>
                 </tr>
                 <tr class="border-b border-gray-700/30">
-                  <td class="px-4 py-2.5 text-gray-400 w-28 font-mono align-top">media_type</td>
-                  <td class="px-4 py-2.5 text-gray-200">{{ detailItem.media_type || '(空)' }}</td>
-                </tr>
-                <tr class="border-b border-gray-700/30">
                   <td class="px-4 py-2.5 text-gray-400 w-28 font-mono align-top">media_source</td>
                   <td class="px-4 py-2.5 text-gray-200">{{ detailItem.media_source || '(空)' }}</td>
+                </tr>
+                <tr class="border-b border-gray-700/30">
+                  <td class="px-4 py-2.5 text-gray-400 w-28 font-mono align-top">资源数</td>
+                  <td class="px-4 py-2.5 text-gray-200">
+                    {{ mediaCount(detailItem) }}
+                    <span class="text-[11px] ml-2" :class="downloadMethodLabel(detailItem).color">
+                      ({{ downloadMethodLabel(detailItem).text }})
+                    </span>
+                  </td>
                 </tr>
                 <tr>
                   <td class="px-4 py-2.5 text-gray-400 w-28 font-mono align-top">source_url</td>
@@ -877,7 +965,6 @@ onUnmounted(teardownSSE)
           const obj: Record<string, any> = {
             title: detailItem.title,
             media_url: detailItem.media_url,
-            media_type: detailItem.media_type,
             media_source: detailItem.media_source,
             source_url: detailItem.source_url,
             ...detailItem.extra,

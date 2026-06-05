@@ -134,9 +134,9 @@ onMounted(refresh)
       >
         <el-table-column type="selection" width="40" />
         <el-table-column prop="title" label="标题" show-overflow-tooltip min-width="200" />
-        <el-table-column label="类型" width="120">
+        <el-table-column label="来源" width="140">
           <template #default="{ row }">
-            <span class="text-xs text-gray-400">{{ row.media_type || '-' }} / {{ row.media_source || '-' }}</span>
+            <span class="text-xs text-gray-400">{{ row.media_source || '-' }}</span>
           </template>
         </el-table-column>
       </el-table>

@@ -446,8 +446,8 @@ async function submitForm() {
       ? { fields: formIdField.value, mode: formIdFieldAll.value ? 'all' : 'first' }
       : undefined,
 
-    urlTransforms: formUrlTransforms.value.filter(t => t.fieldName && t.urlTemplate).length
-      ? formUrlTransforms.value.filter(t => t.fieldName && t.urlTemplate).map(t => ({
+    urlTransforms: formUrlTransforms.value.filter(t => t.fieldName).length
+      ? formUrlTransforms.value.filter(t => t.fieldName).map(t => ({
           fieldName: t.fieldName,
           urlTemplate: t.urlTemplate,
           downloadMethod: t.downloadMethod,
@@ -864,7 +864,7 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
         <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizes" :total="total" layout="total, sizes, prev, pager, next" size="small" background @size-change="onPageSizeChange" @current-change="onPageChange" />
       </div>
       <div v-if="!tasks.length" class="text-center py-12 text-gray-500 text-sm">
-        <i class="fas fa-bug text-3xl mb-3 block opacity-30"></i>暂无任务
+        <i class="fas fa-bug text-3xl mb-3 inline-block opacity-30"></i>暂无任务
       </div>
     </div>
 
@@ -1360,9 +1360,3 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
   </div>
 </template>
 
-<style scoped>
-:deep(.el-dialog__body) {
-  max-height: 65vh;
-  overflow-y: auto;
-}
-</style>

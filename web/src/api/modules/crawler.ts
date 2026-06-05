@@ -4,10 +4,10 @@ export const crawlerAPI = {
   start: (payload: any) => api.post('/crawler/crawl', payload),
   getTasks: (keyword?: string) => api.get('/crawler/tasks', keyword ? { params: { keyword } } : {}),
   getTasksWithPagination: (params?: { status?: string; keyword?: string }) => api.get('/crawler/tasks/paginated', { params }),
+  getSources: () => api.get('/crawler/sources'),
   getItems: (params?: {
     taskId?: string
     status?: string
-    mediaType?: string
     mediaSource?: string
     keyword?: string
     page?: number
@@ -17,8 +17,8 @@ export const crawlerAPI = {
   retryItem: (id: string) => api.post(`/crawler/items/${id}/retry`),
   recrawlItem: (id: string) => api.post(`/crawler/items/${id}/recrawl`),
   cancelItem: (id: string) => api.post(`/crawler/items/${id}/cancel`),
-  importToDownloadQueue: (id: string, retry = false) =>
-    api.post(`/crawler/items/${id}/import-download`, retry ? { retry: true } : {}),
+  importToDownloadQueue: (id: string, retry = false, autoDownload = false) =>
+    api.post(`/crawler/items/${id}/import-download`, { retry, autoDownload }),
   clearItems: (id: string) => api.post(`/crawler/tasks/${id}/clear-items`),
   startTask: (id: string) => api.post(`/crawler/tasks/${id}/start`),
   pauseTask: (id: string) => api.post(`/crawler/tasks/${id}/pause`),
@@ -35,8 +35,8 @@ export const crawlerAPI = {
   batchDeleteItems: (ids: string[]) => api.post('/crawler/items/batch-delete', { ids }),
   batchCrawlItems: (ids: string[]) => api.post('/crawler/items/batch-crawl', { ids }),
   batchRecrawlItems: (ids: string[]) => api.post('/crawler/items/batch-recrawl', { ids }),
-  batchImportDownload: (ids: string[], retry = false) =>
-    api.post('/crawler/items/batch-import-download', { ids, retry }),
+  batchImportDownload: (ids: string[], retry = false, autoDownload = false) =>
+    api.post('/crawler/items/batch-import-download', { ids, retry, autoDownload }),
   batchItemsAutoPipeline: (ids: string[]) => api.post('/crawler/items/batch-auto-pipeline', { ids }),
   updateTask: (id: string, payload: any) => api.put(`/crawler/tasks/${id}`, payload),
   // Export

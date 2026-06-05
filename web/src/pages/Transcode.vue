@@ -314,7 +314,7 @@ onMounted(() => { checkFfmpeg(); refresh() })
         </el-table-column>
       </el-table>
       <div v-else class="text-center py-12 text-gray-500 text-sm">
-        <i class="fas fa-gear text-3xl mb-3 block opacity-30"></i>暂无转码任务
+        <i class="fas fa-gear text-3xl mb-3 inline-block opacity-30"></i>暂无转码任务
       </div>
     </div>
 

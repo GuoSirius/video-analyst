@@ -64,21 +64,43 @@ html.dark { color-scheme: dark; }
 .el-select-dropdown__item.hover, .el-select-dropdown__item:hover { background-color: rgba(55, 65, 81, 0.5); }
 .el-select-dropdown__item.selected { color: #93c5fd; }
 
-/* Dialog */
+/* Dialog — overlay lock, fixed header/footer, body-only scroll */
+.el-overlay {
+  overflow: hidden !important;
+}
+.el-overlay-dialog {
+  overflow: hidden !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .el-dialog {
   --el-dialog-bg-color: #111827;
   border-radius: 12px;
+  max-height: 88vh;
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden !important;
+  margin: 0 !important;
+  position: relative !important;
+  top: 0 !important;
+  transform: none !important;
 }
 .el-dialog__header {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   padding: 16px 20px;
+  flex-shrink: 0;
 }
 .el-dialog__body {
   padding: 20px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .el-dialog__footer {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   padding: 12px 20px;
+  flex-shrink: 0;
 }
 .el-dialog__headerbtn .el-dialog__close {
   color: #6b7280;

@@ -106,8 +106,8 @@ onUnmounted(()=>clearInterval(timer))
           <div v-for="item in recentItems" :key="item.id" class="px-3 py-2.5 rounded-lg bg-gray-900/40">
             <div class="text-xs text-gray-300 truncate mb-1">{{ item.title||'(无标题)' }}</div>
             <div class="flex items-center gap-2 text-[11px] text-gray-500">
-              <span>{{ item.media_type||'-' }}</span>
-              <span v-if="item.media_source&&item.media_source!=='direct'" class="text-gray-600">{{ item.media_source }}</span>
+              <span v-if="item.media_source" class="text-gray-600">{{ item.media_source }}</span>
+              <span v-else>-</span>
             </div>
           </div>
         </div>
