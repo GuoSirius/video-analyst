@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch, computed, nextTick, reactive } from 'vue'
 import api from '../api/client'
 import { usePagination } from '../composables/usePagination'
+import { usePipelineSteps } from '../composables/usePipelineSteps'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { downloadAPI } from '../api/modules/download'
 
@@ -67,10 +68,15 @@ const linkShowYtOpts = ref(false)
 const cookieBrowsers = ['chrome', 'firefox', 'edge', 'brave', 'opera', 'vivaldi', 'chromium']
 // yt-dlp 参数（仅 linkDownloadMethod='yt-dlp' 时有效）
 const linkYtOpts = reactive({
-  cookiesFromBrowser: '', cookies: '', proxy: '', format: '',
+  cookiesMode: 'file' as 'browser' | 'file' | 'text',
+  cookiesFromBrowser: '', cookies: '', cookiesText: '',
+  proxy: '', qualityPreset: '' as '' | 'compatible' | 'high-mp4' | 'single', format: '',
   userAgent: '', referer: '', limitRate: '',
   username: '', password: '', retries: null as number | null,
   sleepInterval: null as number | null,
+  noPlaylist: null as boolean | null,
+  socketTimeout: null as number | null,
+  extractorRetries: null as number | null,
   geoBypass: false, noCheckCert: false, rawArgs: '',
 })
 
@@ -81,6 +87,24 @@ const filterTasks = ref<{ item_id: string; label: string }[]>([])
 
 // --- Data ---
 const stats = ref<any>({})
+const maxConcurrent = ref(3)
+
+async function fetchMaxConcurrent() {
+  try {
+    const { data } = await downloadAPI.getMaxConcurrent()
+    maxConcurrent.value = data.value || 3
+  } catch { /* ignore */ }
+}
+
+async function setMaxConcurrent(val: number) {
+  const n = Math.max(1, Math.min(20, Math.round(val)))
+  try {
+    await downloadAPI.setMaxConcurrent(n)
+    maxConcurrent.value = n
+  } catch {
+    ElMessage.error('设置失败')
+  }
+}
 
 async function fetchFilters() {
   try {
@@ -180,7 +204,10 @@ const downloadingIds = computed(() => selectedIds.value.filter(id => findSelecte
 const failedIds = computed(() => selectedIds.value.filter(id => findSelected(id)?.status === 'failed'))
 const completedIds = computed(() => selectedIds.value.filter(id => findSelected(id)?.status === 'completed'))
 const deletableIds = computed(() => selectedIds.value.filter(id => findSelected(id)?.status !== 'downloading'))
-const pipelineIds = computed(() => selectedIds.value.filter(id => findSelected(id)?.status === 'completed'))
+const pipelineIds = computed(() => selectedIds.value.filter(id => {
+  const s = findSelected(id)?.status
+  return s && s !== 'downloading'
+}))
 
 // ── Single actions ──
 async function startDownload(id: string) {
@@ -266,6 +293,18 @@ async function batchRetry() {
   } catch { /* cancelled */ }
 }
 
+async function handleProcessAll() {
+  try {
+    const { data } = await downloadAPI.processAll()
+    if (data.count > 0) {
+      ElMessage.success(`已启动 ${data.count} 个下载任务`)
+    } else {
+      ElMessage.info('没有需要开始的下载任务')
+    }
+    fetchItems()
+  } catch { ElMessage.error('操作失败') }
+}
+
 async function batchRedownload() {
   const ids = completedIds.value
   if (!ids.length) { ElMessage.warning('所选项目中没有已下载的任务'); return }
@@ -290,22 +329,39 @@ async function batchDelete() {
   } catch { /* cancelled */ }
 }
 
-async function batchAutoPipeline() {
-  const ids = pipelineIds.value
-  if (!ids.length) { ElMessage.warning('所选项目中没有已完成的下载任务'); return }
+// ── Pipeline step selection dialog for batch auto pipeline ──
+const DOWNLOAD_PIPELINE_STEPS = [
+  { key: 'start_download', label: '启动下载' },
+  { key: 'transcode', label: '转码处理' },
+  { key: 'whisper', label: '语音识别' },
+  { key: 'ai', label: 'AI 分析总结' },
+]
+const downloadPipeline = usePipelineSteps(DOWNLOAD_PIPELINE_STEPS)
+const pipelineDialogVisible = ref(false)
+const pipelineTargetIds = ref<string[]>([])
+const pipelineTargetCount = ref(0)
+const pipelineLoading = ref(false)
+
+function openPipelineDialog() {
+  pipelineTargetIds.value = pipelineIds.value
+  pipelineTargetCount.value = pipelineTargetIds.value.length
+  downloadPipeline.reset()
+  pipelineDialogVisible.value = true
+}
+
+async function confirmPipeline() {
+  const steps = downloadPipeline.getStepFlags()
+  pipelineLoading.value = true
   try {
-    await ElMessageBox.confirm(
-      `将对选中的 ${ids.length} 个已完成下载的资源一键自动执行后续流水线：\n\n① FFmpeg转码(16kHz WAV) → ② Whisper语音识别 → ③ AI分析总结\n\n各环节按顺序自动执行。`,
-      '一键自动执行后续流程',
-      { type: 'info', confirmButtonText: '开始执行', cancelButtonText: '取消' },
-    )
-    const res = await downloadAPI.batchAutoPipeline(ids)
+    const res = await downloadAPI.batchAutoPipeline(pipelineTargetIds.value, steps)
     const results = res.data?.results || []
     const okCount = results.filter((r: any) => r.ok).length
     const failCount = results.filter((r: any) => !r.ok).length
     if (failCount) { ElMessage.warning(`成功 ${okCount} 个，${failCount} 个失败`) }
-    else { ElMessage.success(`已启动 ${okCount} 个资源的完整流水线`) }
+    else { ElMessage.success(`已启动 ${okCount} 个资源的流水线`) }
+    pipelineDialogVisible.value = false
   } catch { /* cancelled */ }
+  pipelineLoading.value = false
 }
 
 // ── Upload dialog ──
@@ -577,9 +633,12 @@ async function retryAllFailed() {
 function buildYtDlpOptionsFromLink(): any | null {
   const o = linkYtOpts
   const opts: any = {}
-  if (o.cookiesFromBrowser) opts.cookiesFromBrowser = o.cookiesFromBrowser
-  if (o.cookies) opts.cookies = o.cookies
+  opts.cookies_mode = o.cookiesMode
+  if (o.cookiesMode === 'browser' && o.cookiesFromBrowser) opts.cookiesFromBrowser = o.cookiesFromBrowser
+  if (o.cookiesMode === 'file' && o.cookies) opts.cookies = o.cookies
+  if (o.cookiesMode === 'text' && o.cookiesText.trim()) opts.cookies_text = o.cookiesText.trim()
   if (o.proxy) opts.proxy = o.proxy
+  if (o.qualityPreset) opts.qualityPreset = o.qualityPreset
   if (o.format) opts.format = o.format
   if (o.userAgent) opts.userAgent = o.userAgent
   if (o.referer) opts.referer = o.referer
@@ -588,6 +647,9 @@ function buildYtDlpOptionsFromLink(): any | null {
   if (o.password) opts.password = o.password
   if (o.retries != null) opts.retries = o.retries
   if (o.sleepInterval != null) opts.sleepInterval = o.sleepInterval
+  if (o.noPlaylist != null) opts.noPlaylist = o.noPlaylist
+  if (o.socketTimeout != null) opts.socketTimeout = o.socketTimeout
+  if (o.extractorRetries != null) opts.extractorRetries = o.extractorRetries
   if (o.geoBypass) opts.geoBypass = true
   if (o.noCheckCert) opts.noCheckCertificates = true
   if (o.rawArgs.trim()) {
@@ -597,9 +659,12 @@ function buildYtDlpOptionsFromLink(): any | null {
 }
 
 function resetLinkYtOpts() {
+  linkYtOpts.cookiesMode = 'file'
   linkYtOpts.cookiesFromBrowser = ''
   linkYtOpts.cookies = ''
+  linkYtOpts.cookiesText = ''
   linkYtOpts.proxy = ''
+  linkYtOpts.qualityPreset = ''
   linkYtOpts.format = ''
   linkYtOpts.userAgent = ''
   linkYtOpts.referer = ''
@@ -608,6 +673,9 @@ function resetLinkYtOpts() {
   linkYtOpts.password = ''
   linkYtOpts.retries = null
   linkYtOpts.sleepInterval = null
+  linkYtOpts.noPlaylist = null
+  linkYtOpts.socketTimeout = null
+  linkYtOpts.extractorRetries = null
   linkYtOpts.geoBypass = false
   linkYtOpts.noCheckCert = false
   linkYtOpts.rawArgs = ''
@@ -754,18 +822,32 @@ function buildDownloadCommand(task: any): string {
   let opts: any = null
   try { opts = task.yt_dlp_options ? JSON.parse(task.yt_dlp_options) : null } catch { /* ignore */ }
 
-  // Format (任务自定义 > 系统默认)
-  parts.push(`--format "${opts?.format || 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'}"`)
+  // 画质预设映射
+  const PRESET_FORMATS: Record<string, string> = {
+    'compatible': 'bestvideo*+bestaudio*/best',
+    'high-mp4': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+    'single': 'best[ext=mp4]/best',
+  }
+  const formatStr = opts?.format || (opts?.qualityPreset && PRESET_FORMATS[opts.qualityPreset]) || 'bestvideo*+bestaudio*/best'
+
+  // Format（任务自定义 > 预设 > 默认最佳兼容）
+  parts.push(`--format "${formatStr}"`)
   parts.push('--merge-output-format mp4')
 
-  // 安全参数（任务可覆盖）
-  if (opts?.noPlaylist !== false) parts.push('--no-playlist')
-  parts.push(`--socket-timeout ${opts?.socketTimeout || 30}`)
-  parts.push(`--extractor-retries ${opts?.extractorRetries || 3}`)
+  // 安全参数（任务可覆盖，null = 不设置）
+  if (opts?.noPlaylist !== false && opts?.noPlaylist !== null && opts?.noPlaylist !== undefined) parts.push('--no-playlist')
+  if (opts?.socketTimeout != null) parts.push(`--socket-timeout ${opts.socketTimeout}`)
+  else if (opts?.socketTimeout === undefined) parts.push('--socket-timeout 30')
+  if (opts?.extractorRetries != null) parts.push(`--extractor-retries ${opts.extractorRetries}`)
+  else if (opts?.extractorRetries === undefined) parts.push('--extractor-retries 3')
 
   if (opts) {
     if (opts.cookiesFromBrowser) parts.push(`--cookies-from-browser ${opts.cookiesFromBrowser}`)
-    if (opts.cookies) parts.push(`--cookies "${opts.cookies}"`)
+    if (opts.cookies) {
+      parts.push(`--cookies "${opts.cookies}"`)
+    } else if (opts.cookies_text) {
+      parts.push(`--cookies "(首次下载后自动解析为文件路径)"`)
+    }
     if (opts.proxy) parts.push(`--proxy "${opts.proxy}"`)
     if (opts.limitRate) parts.push(`--limit-rate ${opts.limitRate}`)
     if (opts.userAgent) parts.push(`--user-agent "${opts.userAgent}"`)
@@ -816,7 +898,15 @@ function isDirectUrl(url: string): boolean {
   return ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v', 'mp3', 'wav', 'ogg', 'aac', 'pdf', 'jpg', 'png', 'gif'].includes(ext)
 }
 
-function showErrorDetail(task: any) {
+async function showErrorDetail(task: any) {
+  // 下载完成后 cookies_text 会被回写为 cookies 文件路径，但本地 items 不会同步
+  // 如果本地还有 cookies_text，先刷新获取最新的 yt_dlp_options
+  const opts = task.yt_dlp_options ? (typeof task.yt_dlp_options === 'string' ? JSON.parse(task.yt_dlp_options) : task.yt_dlp_options) : {}
+  if (opts.cookies_text && !opts.cookies && (task.status === 'completed' || task.status === 'failed')) {
+    await fetchItems()
+    const fresh = items.value.find((i: any) => i.id === task.id)
+    if (fresh) task = fresh
+  }
   errorTask.value = task
   errorDialog.value = true
 }
@@ -876,6 +966,7 @@ function teardownSSE() {
 
 onMounted(() => {
   fetchFilters()
+  fetchMaxConcurrent()
   refresh()
   setupSSE()
 })
@@ -900,29 +991,44 @@ onUnmounted(teardownSSE)
           <span class="text-red-400">{{ stats.failed || 0 }}</span> 失败
         </span>
 
+        <!-- 并发下载数控制 -->
+        <el-tooltip content="同时下载的最大任务数" placement="top">
+          <div class="flex items-center gap-1 text-xs text-gray-500 ml-2">
+            <i class="fas fa-layer-group text-[11px]"></i>
+            <span>并发:</span>
+            <el-input-number
+              v-model="maxConcurrent"
+              :min="1" :max="20" :step="1" size="small"
+              controls-position="right"
+              style="width: 80px"
+              @change="setMaxConcurrent"
+            />
+          </div>
+        </el-tooltip>
+
         <!-- Batch action buttons -->
-        <el-button v-if="pipelineIds.length" type="success" size="small" plain @click="batchAutoPipeline">
-          <i class="fas fa-forward-step mr-1.5"></i>一键自动执行 ({{ pipelineIds.length }})
+        <el-button v-if="pipelineIds.length" type="success" size="small" plain @click="openPipelineDialog">
+          <i class="fas fa-forward-step mr-1.5"></i>一键自动执行后续流程 ({{ pipelineIds.length }})
         </el-button>
         <el-button v-if="pendingIds.length" type="primary" size="small" plain @click="batchStart">
           <i class="fas fa-play mr-1.5"></i>批量下载 ({{ pendingIds.length }})
         </el-button>
-        <el-button v-if="downloadingIds.length" type="warning" size="small" plain @click="batchStop">
-          <i class="fas fa-stop mr-1.5"></i>批量终止 ({{ downloadingIds.length }})
-        </el-button>
-        <el-button v-if="failedIds.length" type="warning" size="small" plain @click="batchRetry">
-          <i class="fas fa-rotate-right mr-1.5"></i>批量重试 ({{ failedIds.length }})
-        </el-button>
-        <el-button v-if="completedIds.length" size="small" plain @click="batchRedownload">
-          <i class="fas fa-repeat mr-1.5"></i>批量重新下载 ({{ completedIds.length }})
-        </el-button>
 
-        <el-dropdown v-if="deletableIds.length || selectedIds.length" trigger="click">
+        <el-dropdown v-if="selectedIds.length" trigger="click">
           <el-button size="small" plain>
-            更多 <i class="fas fa-chevron-down ml-1 text-[10px]"></i>
+            批量操作 <i class="fas fa-chevron-down ml-1 text-[10px]"></i>
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item v-if="downloadingIds.length" @click="batchStop">
+                <i class="fas fa-stop mr-1.5 text-amber-400"></i>批量终止 ({{ downloadingIds.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="failedIds.length" @click="batchRetry">
+                <i class="fas fa-rotate-right mr-1.5 text-amber-400"></i>批量重试 ({{ failedIds.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="completedIds.length" @click="batchRedownload">
+                <i class="fas fa-repeat mr-1.5"></i>批量重新下载 ({{ completedIds.length }})
+              </el-dropdown-item>
               <el-dropdown-item v-if="deletableIds.length" @click="batchDelete">
                 <i class="fas fa-trash-can mr-1.5 text-red-400"></i><span class="text-red-400">批量删除 ({{ deletableIds.length }})</span>
               </el-dropdown-item>
@@ -936,7 +1042,7 @@ onUnmounted(teardownSSE)
         <el-button type="primary" size="small" @click="openUploadDialog">
           <i class="fas fa-upload mr-1.5"></i>上传文件
         </el-button>
-        <el-button type="primary" size="small" plain @click="downloadAPI.processAll().then(refresh)">
+        <el-button type="primary" size="small" plain @click="handleProcessAll">
           <i class="fas fa-play mr-1.5"></i>全部开始
         </el-button>
       </div>
@@ -1124,6 +1230,50 @@ onUnmounted(teardownSSE)
         加载中...
       </div>
     </div>
+
+    <!-- Pipeline Step Selection Dialog -->
+    <el-dialog v-model="pipelineDialogVisible" title="一键自动执行后续流程" width="520px" destroy-on-close :close-on-click-modal="false">
+      <div class="space-y-3">
+        <div class="text-xs text-gray-400">
+          将对选中的 <span class="text-gray-200 font-semibold">{{ pipelineTargetCount }}</span> 个资源执行流水线。勾选的步骤按顺序自动执行，所选步骤必须连续不能跳跃。
+        </div>
+
+        <div class="flex items-center gap-2">
+          <el-checkbox :model-value="downloadPipeline.allSelected" size="small" @change="downloadPipeline.toggleAll()" />
+          <span class="text-xs text-gray-300">全选 / 取消全选</span>
+        </div>
+
+        <div class="flex flex-col gap-2.5 ml-5">
+          <el-checkbox v-model="downloadPipeline.stepValues.start_download" size="small" @change="downloadPipeline.onStepChange('start_download')">
+            <span class="text-xs">启动下载</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">执行下载任务获取媒体文件</span>
+          </el-checkbox>
+          <el-checkbox v-model="downloadPipeline.stepValues.transcode" size="small" @change="downloadPipeline.onStepChange('transcode')">
+            <span class="text-xs">转码处理</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">FFmpeg 转码为 16kHz 单声道 WAV</span>
+          </el-checkbox>
+          <el-checkbox v-model="downloadPipeline.stepValues.whisper" size="small" @change="downloadPipeline.onStepChange('whisper')">
+            <span class="text-xs">语音识别</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">Whisper 自动语音识别</span>
+          </el-checkbox>
+          <el-checkbox v-model="downloadPipeline.stepValues.ai" size="small" @change="downloadPipeline.onStepChange('ai')">
+            <span class="text-xs">AI 分析总结</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">调用 AI 模型进行内容分析总结</span>
+          </el-checkbox>
+        </div>
+
+        <div class="text-[11px] text-gray-500 mt-2">
+          不同状态的处理：<span class="text-purple-400">未开始</span>→启动 · <span class="text-blue-400">进行中</span>→等待完成 · <span class="text-amber-400">失败</span>→重试，成功后自动进入后续环节 · <span class="text-emerald-400">已完成</span>→直接进入后续环节
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="pipelineDialogVisible = false">取消</el-button>
+        <el-button type="success" :loading="pipelineLoading" @click="confirmPipeline">
+          <i class="fas fa-forward-step mr-1.5"></i>开始执行 ({{ pipelineTargetCount }})
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- Upload Dialog -->
@@ -1327,17 +1477,31 @@ onUnmounted(teardownSSE)
           <div v-if="linkShowYtOpts" class="mt-2 pt-2 border-t border-gray-700/30 space-y-2">
             <!-- 登录认证 -->
             <div class="text-[11px] text-gray-400 font-semibold">登录认证</div>
-            <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+            <div class="space-y-2">
               <div>
-                <div class="text-[11px] text-gray-500 mb-1">Cookies from browser</div>
+                <div class="text-[11px] text-gray-500 mb-1">Cookies 来源</div>
+                <el-select v-model="linkYtOpts.cookiesMode" size="small" class="w-full">
+                  <el-option label="浏览器获取 (--cookies-from-browser)" value="browser" />
+                  <el-option label="指定文件路径 (--cookies)" value="file" />
+                  <el-option label="文本输入 (自动生成文件)" value="text" />
+                </el-select>
+              </div>
+              <div v-if="linkYtOpts.cookiesMode === 'browser'">
+                <div class="text-[11px] text-gray-500 mb-1">浏览器</div>
                 <el-select v-model="linkYtOpts.cookiesFromBrowser" placeholder="选择或输入浏览器" size="small" filterable allow-create clearable class="w-full">
                   <el-option v-for="b in cookieBrowsers" :key="b" :label="b" :value="b" />
                 </el-select>
               </div>
-              <div>
-                <div class="text-[11px] text-gray-500 mb-1">Cookies 文件</div>
+              <div v-if="linkYtOpts.cookiesMode === 'file'">
+                <div class="text-[11px] text-gray-500 mb-1">Cookies 文件路径</div>
                 <el-input v-model="linkYtOpts.cookies" placeholder="/path/to/cookies.txt" size="small" />
               </div>
+              <div v-if="linkYtOpts.cookiesMode === 'text'">
+                <div class="text-[11px] text-gray-500 mb-1">Cookies 文本</div>
+                <el-input v-model="linkYtOpts.cookiesText" type="textarea" :rows="4" placeholder="支持多种格式，系统自动识别并转为 Netscape 格式：&#10;&#10;• 分号分隔: key=value; key2=value2&#10;• 每行一个: key=value 或 key: value&#10;• JSON 数组: [{&quot;name&quot;:&quot;sid&quot;,&quot;value&quot;:&quot;xxx&quot;,&quot;domain&quot;:&quot;.example.com&quot;}]&#10;• Netscape 格式（直接粘贴原文件内容）" size="small" />
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-2">
               <div>
                 <div class="text-[11px] text-gray-500 mb-1">用户名</div>
                 <el-input v-model="linkYtOpts.username" placeholder="站点登录用户名" size="small" />
@@ -1352,20 +1516,27 @@ onUnmounted(teardownSSE)
             <div class="text-[11px] text-gray-400 font-semibold pt-1">网络 &amp; 格式</div>
             <div class="grid grid-cols-2 gap-x-4 gap-y-2">
               <div>
+                <div class="text-[11px] text-gray-500 mb-1">画质策略</div>
+                <el-select v-model="linkYtOpts.qualityPreset" size="small" class="w-full" clearable placeholder="不设置（使用 yt-dlp 默认）">
+                  <el-option label="🎯 最佳兼容（推荐）" value="compatible" />
+                  <el-option label="📺 最高画质 MP4" value="high-mp4" />
+                  <el-option label="⚡ 单文件优先" value="single" />
+                </el-select>
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">
+                  格式选择器
+                  <span class="text-gray-600">（留空=使用画质策略）</span>
+                </div>
+                <el-input v-model="linkYtOpts.format" :placeholder="linkYtOpts.qualityPreset ? '已选画质策略，留空即可' : 'bv*+ba / bestvideo*+bestaudio*/best'" size="small" />
+              </div>
+              <div>
                 <div class="text-[11px] text-gray-500 mb-1">代理地址</div>
                 <el-input v-model="linkYtOpts.proxy" placeholder="http://127.0.0.1:7890 或 socks5://" size="small" />
               </div>
               <div>
                 <div class="text-[11px] text-gray-500 mb-1">限速</div>
                 <el-input v-model="linkYtOpts.limitRate" placeholder="5M / 500K" size="small" />
-              </div>
-              <div>
-                <div class="text-[11px] text-gray-500 mb-1">格式选择器</div>
-                <el-input v-model="linkYtOpts.format" placeholder="bv*+ba" size="small" />
-              </div>
-              <div>
-                <div class="text-[11px] text-gray-500 mb-1">重试次数</div>
-                <el-input-number v-model="linkYtOpts.retries" :min="0" :max="99" size="small" />
               </div>
               <div>
                 <div class="text-[11px] text-gray-500 mb-1">User-Agent</div>
@@ -1379,6 +1550,10 @@ onUnmounted(teardownSSE)
                 <div class="text-[11px] text-gray-500 mb-1">请求间隔（秒）</div>
                 <el-input-number v-model="linkYtOpts.sleepInterval" :min="0" :max="3600" size="small" />
               </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">重试次数</div>
+                <el-input-number v-model="linkYtOpts.retries" :min="0" :max="99" size="small" />
+              </div>
               <div class="flex items-end gap-3 pb-px">
                 <el-checkbox v-model="linkYtOpts.geoBypass" size="small">
                   <span class="text-[11px] text-gray-500">绕过地域限制</span>
@@ -1391,9 +1566,29 @@ onUnmounted(teardownSSE)
 
             <!-- 高级 -->
             <div class="text-[11px] text-gray-400 font-semibold pt-1">高级</div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">
+                  连接超时（秒）
+                  <el-tooltip content="设为空 = 不限制，使用 yt-dlp 默认" placement="top">
+                    <i class="fas fa-circle-question text-gray-600 text-[10px] ml-0.5"></i>
+                  </el-tooltip>
+                </div>
+                <el-input-number v-model="linkYtOpts.socketTimeout" :min="0" :max="300" size="small" :placeholder="null" />
+              </div>
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">
+                  提取器重试
+                  <el-tooltip content="设为空 = 不限制，使用 yt-dlp 默认" placement="top">
+                    <i class="fas fa-circle-question text-gray-600 text-[10px] ml-0.5"></i>
+                  </el-tooltip>
+                </div>
+                <el-input-number v-model="linkYtOpts.extractorRetries" :min="0" :max="99" size="small" />
+              </div>
+            </div>
             <div>
               <div class="text-[11px] text-gray-500 mb-1">额外命令行参数</div>
-              <el-input v-model="linkYtOpts.rawArgs" type="textarea" :rows="2" placeholder="--extractor-args youtube:player_client=web&#10;--add-header Referer:https://www.youtube.com/" size="small" />
+              <el-input v-model="linkYtOpts.rawArgs" type="textarea" :rows="2" placeholder="--extractor-args youtube:player_client=web&#10;--add-header Referer:https://www.youtube.com/&#10;--no-playlist / --socket-timeout 60 等可覆盖默认参数" size="small" />
             </div>
           </div>
         </div>
@@ -1460,7 +1655,7 @@ onUnmounted(teardownSSE)
     </el-dialog>
 
     <!-- Error / Command Detail Dialog -->
-    <el-dialog v-model="errorDialog" :title="errorTask?.error ? '下载异常详情' : '等效命令行'" width="720px" destroy-on-close>
+    <el-dialog v-model="errorDialog" :title="errorTask?.error ? '下载异常详情' : '等效命令行'" width="720px" destroy-on-close :close-on-click-modal="false">
       <div v-if="errorTask" class="space-y-4">
         <!-- Error message (only when there is an error) -->
         <div v-if="errorTask.error">

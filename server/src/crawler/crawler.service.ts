@@ -29,8 +29,20 @@ export interface UrlTransform {
   ytDlpOptions?: YtDlpOptions
 }
 
+/** yt-dlp 画质预设 */
+export type QualityPreset = 'compatible' | 'high-mp4' | 'single'
+
+/** 画质预设 → format 映射 */
+export const QUALITY_PRESET_FORMATS: Record<QualityPreset, string> = {
+  'compatible': 'bestvideo*+bestaudio*/best',
+  'high-mp4': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+  'single': 'best[ext=mp4]/best',
+}
+
 /** yt-dlp 下载参数配置 */
 export interface YtDlpOptions {
+  /** 画质预设（优先级低于 format 自定义输入） */
+  qualityPreset?: QualityPreset
   /** 从浏览器读取 cookies（如 chrome、firefox、edge） */
   cookiesFromBrowser?: string
   /** cookies 文件路径 */
@@ -57,12 +69,18 @@ export interface YtDlpOptions {
   sleepInterval?: number
   /** 重试次数 */
   retries?: number
-  /** 自定义格式选择器（覆盖默认的 bv*+ba） */
+  /** 自定义格式选择器（覆盖预设，留空则使用预设值） */
   format?: string
   /** 提取器专属参数，如 { youtube: ['player_client=web'] } */
   extractorArgs?: Record<string, string[]>
   /** 额外的原始命令行参数（直接传递给 yt-dlp） */
   rawArgs?: string[]
+  /** 禁止下载播放列表（null = 不设置，允许下载播放列表） */
+  noPlaylist?: boolean | null
+  /** 连接超时秒数（null = 不设置，使用 yt-dlp 默认） */
+  socketTimeout?: number | null
+  /** 提取器重试次数（null = 不设置，使用 yt-dlp 默认） */
+  extractorRetries?: number | null
 }
 
 export interface CrawlPayload {
@@ -121,7 +139,7 @@ export class CrawlerService {
   async fetchHtml(url: string): Promise<string> {
     const resp = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
       },
     })
     if (!resp.ok) {

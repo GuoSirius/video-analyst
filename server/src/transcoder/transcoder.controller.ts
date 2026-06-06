@@ -175,8 +175,8 @@ export class TranscoderController {
       // 持久化存储使用相对路径，结果中存相对路径
       this.queue.updateTaskResult(taskId, { outputPath: toRelative(outputPath) })
 
-      // 任务级自动转码→识别：检查爬虫任务是否开启了 autoTranscode / autoPipeline
-      if (crawlerTaskId && this.pipeline.shouldAutoTranscode(crawlerTaskId) && fs.existsSync(outputPath)) {
+      // 任务级自动识别：检查爬虫任务是否开启了 autoWhisper / autoTranscode / autoPipeline
+      if (crawlerTaskId && this.pipeline.shouldAutoWhisper(crawlerTaskId) && fs.existsSync(outputPath)) {
         const whisperTask = this.queue.createTask('whisper', { filePath: toRelative(outputPath), crawlerTaskId })
         this.processWhisperChain(whisperTask.id, outputPath, crawlerTaskId)
       }

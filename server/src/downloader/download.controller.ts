@@ -137,6 +137,18 @@ export class DownloadController {
     return this.download.getStats()
   }
 
+  @Get('max-concurrent')
+  getMaxConcurrent() {
+    return { value: this.download.getMaxConcurrent() }
+  }
+
+  @Post('max-concurrent')
+  setMaxConcurrent(@Body() body: { value: number }) {
+    if (!body.value || body.value < 1) return { error: '并发数必须 >= 1' }
+    this.download.setMaxConcurrent(body.value)
+    return { ok: true, value: this.download.getMaxConcurrent() }
+  }
+
   @Post('upload')
   @UseInterceptors(FilesInterceptor('files', 50, {
     storage: diskStorage({
@@ -221,10 +233,17 @@ export class DownloadController {
   /** Process all pending/paused tasks */
   @Post('queue/process')
   async processAll() {
+    // Count pending/paused tasks before processing
+    const countRow = this.db.db.prepare(
+      "SELECT COUNT(*) as count FROM download_queue WHERE status IN ('pending', 'paused')"
+    ).get() as any
+    const count = countRow?.count || 0
     // Change all paused tasks to pending first
     this.db.db.prepare(`UPDATE download_queue SET status = 'pending' WHERE status = 'paused'`).run()
-    await this.download.processDownloads()
-    return { ok: true }
+    if (count > 0) {
+      setImmediate(() => this.download.processDownloads())
+    }
+    return { ok: true, count }
   }
 
   @Delete('queue/:id')
@@ -319,11 +338,11 @@ export class DownloadController {
   }
 
   @Post('queue/batch-auto-pipeline')
-  async batchAutoPipeline(@Body() body: { ids: string[] }) {
+  async batchAutoPipeline(@Body() body: { ids: string[]; steps?: { start_download?: boolean; transcode?: boolean; whisper?: boolean; ai?: boolean } }) {
     if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
       return { error: 'ids array is required' }
     }
-    const results = await this.download.batchAutoPipeline(body.ids, this.queue)
+    const results = await this.download.batchAutoPipeline(body.ids, body.steps)
     return { ok: true, results }
   }
 

@@ -12,6 +12,8 @@ export const downloadAPI = {
   }) => api.get('/download/queue', { params }),
   getFiles: () => api.get('/download/files'),
   getStats: () => api.get('/download/stats'),
+  getMaxConcurrent: () => api.get('/download/max-concurrent'),
+  setMaxConcurrent: (value: number) => api.post('/download/max-concurrent', { value }),
   getFilters: () => api.get('/download/filters'),
   uploadFiles: (fd: FormData) => api.post('/download/upload', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -29,7 +31,7 @@ export const downloadAPI = {
   batchStop: (ids: string[]) => api.post('/download/queue/batch-stop', { ids }),
   batchRetry: (ids: string[]) => api.post('/download/queue/batch-retry', { ids }),
   batchDelete: (ids: string[]) => api.post('/download/queue/batch-delete', { ids }),
-  batchAutoPipeline: (ids: string[]) => api.post('/download/queue/batch-auto-pipeline', { ids }),
+  batchAutoPipeline: (ids: string[], steps?: Record<string, boolean>) => api.post('/download/queue/batch-auto-pipeline', { ids, steps }),
 
   // Link operations
   testLink: (url: string, downloadMethod?: string) => api.post('/download/test', { url, downloadMethod }),

@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, watch, computed, nextTick, reactive, h } f
 import { useRoute } from 'vue-router'
 import { crawlerAPI } from '../api'
 import { usePagination } from '../composables/usePagination'
+import { usePipelineSteps } from '../composables/usePipelineSteps'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 
@@ -216,22 +217,40 @@ async function batchReimportDownload() {
   } catch { /* cancelled */ }
 }
 
-async function batchItemsAutoPipeline() {
-  const ids = pipelineableItemIds.value
-  if (!ids.length) { ElMessage.warning('所选项目中没有可执行流水线的项（需要已采集状态）'); return }
+// ── Pipeline step selection dialog for batch auto pipeline ──
+const ITEM_PIPELINE_STEPS = [
+  { key: 'import', label: '带入下载' },
+  { key: 'start_download', label: '启动下载' },
+  { key: 'transcode', label: '转码处理' },
+  { key: 'whisper', label: '语音识别' },
+  { key: 'ai', label: 'AI 分析总结' },
+]
+const itemPipeline = usePipelineSteps(ITEM_PIPELINE_STEPS)
+const pipelineDialogVisible = ref(false)
+const pipelineTargetIds = ref<string[]>([])
+const pipelineTargetCount = ref(0)
+const pipelineLoading = ref(false)
+
+function openPipelineDialog() {
+  pipelineTargetIds.value = pipelineableItemIds.value
+  pipelineTargetCount.value = pipelineTargetIds.value.length
+  itemPipeline.reset()
+  pipelineDialogVisible.value = true
+}
+
+async function confirmPipeline() {
+  const steps = itemPipeline.getStepFlags()
+  pipelineLoading.value = true
   try {
-    await ElMessageBox.confirm(
-      `将对选中的 ${ids.length} 个采集项一键自动执行后续流水线：\n\n① 带入下载队列 → ② FFmpeg转码(16kHz WAV) → ③ Whisper语音识别 → ④ AI分析总结\n\n系统将自动开启全自动模式，各环节按顺序自动流转。`,
-      '一键自动执行后续流程',
-      { type: 'info', confirmButtonText: '开始执行', cancelButtonText: '取消' },
-    )
-    const res = await crawlerAPI.batchItemsAutoPipeline(ids)
+    const res = await crawlerAPI.batchItemsAutoPipeline(pipelineTargetIds.value, steps)
     const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
     const failCount = res.data?.filter?.((r: any) => !r.ok)?.length ?? 0
     if (failCount) { ElMessage.warning(`成功 ${okCount} 个，${failCount} 个失败`) }
-    else { ElMessage.success(`已启动 ${okCount} 个项的完整流水线`) }
+    else { ElMessage.success(`已启动 ${okCount} 个项的流水线`) }
+    pipelineDialogVisible.value = false
     refresh()
   } catch { /* cancelled */ }
+  pipelineLoading.value = false
 }
 
 // ── Export (item-level) ──
@@ -675,27 +694,36 @@ onUnmounted(teardownSSE)
         <p class="text-[13px] text-gray-500">查看和管理所有采集到的结构化数据</p>
       </div>
       <div class="flex items-center gap-2">
-        <el-button v-if="pipelineableItemIds.length" type="success" size="small" plain @click="batchItemsAutoPipeline">
+        <el-button v-if="pipelineableItemIds.length" type="success" size="small" plain @click="openPipelineDialog">
           <i class="fas fa-forward-step mr-1.5"></i>一键自动执行后续流程 ({{ pipelineableItemIds.length }})
         </el-button>
-        <el-button v-if="crawlableItemIds.length" type="primary" size="small" plain @click="batchCrawlItems">
-          <i class="fas fa-play mr-1.5"></i>批量采集 ({{ crawlableItemIds.length }})
-        </el-button>
-        <el-button v-if="recrawlableItemIds.length" size="small" plain @click="batchRecrawlItems">
-          <i class="fas fa-rotate-right mr-1.5"></i>批量重采 ({{ recrawlableItemIds.length }})
-        </el-button>
-        <el-button v-if="importableItemIds.length" type="success" size="small" plain @click="batchImportDownload">
-          <i class="fas fa-download mr-1.5"></i>批量带入下载 ({{ importableItemIds.length }})
-        </el-button>
-        <el-button v-if="reimportableItemIds.length" type="warning" size="small" plain @click="batchReimportDownload">
-          <i class="fas fa-repeat mr-1.5"></i>批量重新带入 ({{ reimportableItemIds.length }})
-        </el-button>
-        <el-button v-if="deletableItemIds.length" type="danger" size="small" plain @click="batchDeleteItems">
-          <i class="fas fa-trash-can mr-1.5"></i>批量删除 ({{ deletableItemIds.length }})
-        </el-button>
-        <el-button v-if="selectedIds.length" type="info" size="small" plain @click="openExportDialog">
-          <i class="fas fa-download mr-1.5"></i>导出 ({{ selectedIds.length }})
-        </el-button>
+        <el-dropdown v-if="selectedIds.length" trigger="click">
+          <el-button size="small" plain>
+            批量操作 <i class="fas fa-chevron-down ml-1 text-[10px]"></i>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-if="crawlableItemIds.length" @click="batchCrawlItems">
+                <i class="fas fa-play mr-1.5 text-blue-400"></i>批量采集 ({{ crawlableItemIds.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="recrawlableItemIds.length" @click="batchRecrawlItems">
+                <i class="fas fa-rotate-right mr-1.5"></i>批量重采 ({{ recrawlableItemIds.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="importableItemIds.length" @click="batchImportDownload">
+                <i class="fas fa-download mr-1.5 text-green-400"></i>批量带入下载 ({{ importableItemIds.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="reimportableItemIds.length" @click="batchReimportDownload">
+                <i class="fas fa-repeat mr-1.5 text-amber-400"></i>批量重新带入 ({{ reimportableItemIds.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="selectedIds.length" @click="openExportDialog">
+                <i class="fas fa-file-export mr-1.5 text-blue-400"></i>导出 ({{ selectedIds.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="deletableItemIds.length" @click="batchDeleteItems">
+                <i class="fas fa-trash-can mr-1.5 text-red-400"></i><span class="text-red-400">批量删除 ({{ deletableItemIds.length }})</span>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </div>
 
@@ -882,6 +910,54 @@ onUnmounted(teardownSSE)
       </div>
     </div>
 
+    <!-- Pipeline Step Selection Dialog -->
+    <el-dialog v-model="pipelineDialogVisible" title="一键自动执行后续流程" width="540px" destroy-on-close :close-on-click-modal="false">
+      <div class="space-y-3">
+        <div class="text-xs text-gray-400">
+          将对选中的 <span class="text-gray-200 font-semibold">{{ pipelineTargetCount }}</span> 个采集项执行流水线。勾选的步骤按顺序自动执行，所选步骤必须连续不能跳跃。
+        </div>
+
+        <div class="flex items-center gap-2">
+          <el-checkbox :model-value="itemPipeline.allSelected" size="small" @change="itemPipeline.toggleAll()" />
+          <span class="text-xs text-gray-300">全选 / 取消全选</span>
+        </div>
+
+        <div class="flex flex-col gap-2.5 ml-5">
+          <el-checkbox v-model="itemPipeline.stepValues.import" size="small" @change="itemPipeline.onStepChange('import')">
+            <span class="text-xs">带入下载</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">将媒体资源加入下载队列（不立即下载）</span>
+          </el-checkbox>
+          <el-checkbox v-model="itemPipeline.stepValues.start_download" size="small" @change="itemPipeline.onStepChange('start_download')">
+            <span class="text-xs">启动下载</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">执行下载任务获取媒体文件</span>
+          </el-checkbox>
+          <el-checkbox v-model="itemPipeline.stepValues.transcode" size="small" @change="itemPipeline.onStepChange('transcode')">
+            <span class="text-xs">转码处理</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">FFmpeg 转码为 16kHz 单声道 WAV</span>
+          </el-checkbox>
+          <el-checkbox v-model="itemPipeline.stepValues.whisper" size="small" @change="itemPipeline.onStepChange('whisper')">
+            <span class="text-xs">语音识别</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">Whisper 自动语音识别</span>
+          </el-checkbox>
+          <el-checkbox v-model="itemPipeline.stepValues.ai" size="small" @change="itemPipeline.onStepChange('ai')">
+            <span class="text-xs">AI 分析总结</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">调用 AI 模型进行内容分析总结</span>
+          </el-checkbox>
+        </div>
+
+        <div class="text-[11px] text-gray-500 mt-2">
+          不同状态的处理：<span class="text-purple-400">未开始</span>→启动 · <span class="text-blue-400">进行中</span>→等待完成 · <span class="text-amber-400">失败</span>→重试，成功后自动进入后续环节 · <span class="text-emerald-400">已完成</span>→直接进入后续环节
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="pipelineDialogVisible = false">取消</el-button>
+        <el-button type="success" :loading="pipelineLoading" @click="confirmPipeline">
+          <i class="fas fa-forward-step mr-1.5"></i>开始执行 ({{ pipelineTargetCount }})
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- Detail Dialog -->
     <el-dialog v-model="detailVisible" title="采集结果详情" width="700px" destroy-on-close :close-on-click-modal="false">
       <div v-if="detailItem" class="space-y-4">
@@ -981,7 +1057,7 @@ onUnmounted(teardownSSE)
     </el-dialog>
 
     <!-- Export Dialog -->
-    <el-dialog v-model="exportDialogVisible" title="导出采集数据" width="650px" destroy-on-close top="5vh">
+    <el-dialog v-model="exportDialogVisible" title="导出采集数据" width="650px" destroy-on-close top="5vh" :close-on-click-modal="false">
       <div class="space-y-4">
         <div>
           <div class="text-xs text-gray-400 mb-2">导出格式</div>

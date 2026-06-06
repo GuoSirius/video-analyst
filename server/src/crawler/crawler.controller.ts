@@ -12,6 +12,7 @@ import { QueueService } from '../common/queue/queue.service'
 import { SseService } from '../common/sse/sse.service'
 import { DatabaseService } from '../common/database/database.service'
 import { DownloadService } from '../downloader/download.service'
+import { PipelineService } from '../common/pipeline/pipeline.service'
 import { resolveFileType, extractExtFromUrl, extractVideoId, isVideoPlatform } from '../common/utils/url.util'
 import { v4 as uuid } from 'uuid'
 import { formatTimestamp } from '../common/utils/date.util'
@@ -36,6 +37,7 @@ export class CrawlerController {
     private readonly sse: SseService,
     private readonly db: DatabaseService,
     private readonly download: DownloadService,
+    private readonly pipeline: PipelineService,
   ) {}
 
   @Post('crawl')
@@ -465,33 +467,53 @@ export class CrawlerController {
   }
 
   @Post('tasks/batch-auto-pipeline')
-  batchAutoPipeline(@Body() body: { ids: string[] }) {
+  batchAutoPipeline(@Body() body: { ids: string[]; steps?: { crawl?: boolean; import?: boolean; start_download?: boolean; transcode?: boolean; whisper?: boolean; ai?: boolean } }) {
     if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
       return { error: 'ids array is required' }
     }
+    // Default: all steps enabled (backward compatible)
+    const s = { crawl: true, import: true, start_download: true, transcode: true, whisper: true, ai: true, ...body.steps }
+    const allOn = s.crawl && s.import && s.start_download && s.transcode && s.whisper && s.ai
+
     const results: { id: string; ok: boolean; error?: string }[] = []
     for (const id of body.ids) {
       const task = this.queue.getTask(id)
       if (!task) { results.push({ id, ok: false, error: '任务不存在' }); continue }
-      // Enable full pipeline on the task payload
-      const payload = { ...task.payload, autoPipeline: true, autoDownload: true, autoTranscode: true, autoAI: true }
+      // Enable selected granular pipeline steps on the task payload
+      const payload = {
+        ...task.payload,
+        autoPipeline: allOn,
+        autoImportDownload: s.import,
+        autoStartDownload: s.start_download,
+        autoTranscode: s.transcode,
+        autoWhisper: s.whisper,
+        autoAI: s.ai,
+        // Legacy flags for backward compat
+        autoDownload: s.import || s.start_download,
+      }
       this.queue.updateTaskPayload(id, payload)
       if (task.status === 'pending') {
-        this.processCrawlTask(id, payload)
+        if (s.crawl) this.processCrawlTask(id, payload)
         results.push({ id, ok: true })
       } else if (task.status === 'paused') {
-        const resumeState = task.result || {}
-        this.processCrawlTask(id, payload, resumeState)
+        if (s.crawl) {
+          const resumeState = task.result || {}
+          this.processCrawlTask(id, payload, resumeState)
+        }
         results.push({ id, ok: true })
       } else if (task.status === 'failed') {
-        this.queue.retryTask(id)
-        this.processCrawlTask(id, payload)
+        if (s.crawl) {
+          this.queue.retryTask(id)
+          this.processCrawlTask(id, payload)
+        }
         results.push({ id, ok: true })
       } else if (task.status === 'completed' || task.status === 'cancelled') {
-        // 已完成的任务：直接触发下载 → 转码 → 识别 → AI
-        this.autoDownloadItems(id, payload).catch(err => {
-          console.error(`[batchAutoPipeline] autoDownload failed for task ${id}:`, err.message)
-        })
+        // 已完成的任务：如果勾选了 import/start_download，触发下载 → 转码 → 识别 → AI
+        if (s.import) {
+          this.autoDownloadItems(id, payload, s.start_download).catch(err => {
+            console.error(`[batchAutoPipeline] autoDownload failed for task ${id}:`, err.message)
+          })
+        }
         results.push({ id, ok: true })
       } else {
         results.push({ id, ok: false, error: `不支持 ${task.status} 状态的任务` })
@@ -648,10 +670,14 @@ export class CrawlerController {
   }
 
   @Post('items/batch-auto-pipeline')
-  async batchItemsAutoPipeline(@Body() body: { ids: string[] }) {
+  async batchItemsAutoPipeline(@Body() body: { ids: string[]; steps?: { import?: boolean; start_download?: boolean; transcode?: boolean; whisper?: boolean; ai?: boolean } }) {
     if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
       return { error: 'ids array is required' }
     }
+    // Default: all steps enabled (backward compatible)
+    const s = { import: true, start_download: true, transcode: true, whisper: true, ai: true, ...body.steps }
+    const allOn = s.import && s.start_download && s.transcode && s.whisper && s.ai
+
     const results: { id: string; ok: boolean; error?: string }[] = []
     for (const id of body.ids) {
       const item = this.db.db.prepare('SELECT * FROM crawl_items WHERE id = ?').get(id) as any
@@ -660,34 +686,46 @@ export class CrawlerController {
       try {
         const task = this.queue.getTask(item.task_id)
         if (!task) { results.push({ id, ok: false, error: '所属任务不存在' }); continue }
-        // Enable full pipeline on parent task
-        const payload = { ...task.payload, autoPipeline: true, autoDownload: true, autoTranscode: true, autoAI: true }
-        this.queue.updateTaskPayload(item.task_id, payload)
-        // Trigger download import
-        const extraData = safeJsonParse(item.extra_data)
-        const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
-        const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [], item.title, item.id)
-        if (urlsToDownload.length === 0 && item.media_url && isUrl(item.media_url)) {
-          const url = normalizeUrl(item.media_url)
-          urlsToDownload.push({
-            url: this.applyUrlTransform(url, 'media_url', payload.urlTransforms || [], extraData),
-            fieldName: 'media_url',
-            filename: this.getFilename(url, 'media_url', item.title, item.id),
-            fileType: this.getFileType(url, extractExtFromUrl(url)),
-          })
+        // Enable selected granular pipeline steps on parent task
+        const payload = {
+          ...task.payload,
+          autoPipeline: allOn,
+          autoImportDownload: s.import,
+          autoStartDownload: s.start_download,
+          autoTranscode: s.transcode,
+          autoWhisper: s.whisper,
+          autoAI: s.ai,
+          autoDownload: s.import || s.start_download,
         }
-        if (urlsToDownload.length > 0) {
-          this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
-          const insertStmt = this.db.db.prepare(`
-            INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-          `)
-          for (const { url, fieldName, filename, fileType } of urlsToDownload) {
-            const dTaskId = uuid()
-            const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(fieldName, payload.urlTransforms || [])
-            insertStmt.run(dTaskId, id, url, filename, fileType, fieldName, dlMethod, ytDlpOptsJson)
+        this.queue.updateTaskPayload(item.task_id, payload)
+        // Trigger download import if import is selected
+        if (s.import) {
+          const extraData = safeJsonParse(item.extra_data)
+          const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
+          const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [], item.title, item.id)
+          if (urlsToDownload.length === 0 && item.media_url && isUrl(item.media_url)) {
+            const url = normalizeUrl(item.media_url)
+            urlsToDownload.push({
+              url: this.applyUrlTransform(url, 'media_url', payload.urlTransforms || [], extraData),
+              fieldName: 'media_url',
+              filename: this.getFilename(url, 'media_url', item.title, item.id),
+              fileType: this.getFileType(url, extractExtFromUrl(url)),
+            })
           }
-          this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
+          if (urlsToDownload.length > 0) {
+            this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
+            const status = s.start_download ? 'pending' : 'paused'
+            const insertStmt = this.db.db.prepare(`
+              INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `)
+            for (const { url, fieldName, filename, fileType } of urlsToDownload) {
+              const dTaskId = uuid()
+              const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(fieldName, payload.urlTransforms || [])
+              insertStmt.run(dTaskId, id, url, filename, fileType, fieldName, status, dlMethod, ytDlpOptsJson)
+            }
+            this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
+          }
         }
         results.push({ id, ok: true })
       } catch (err: any) {
@@ -1341,9 +1379,11 @@ export class CrawlerController {
       if (skippedItems > 0) result.skippedItems = skippedItems
       this.queue.updateTaskResult(taskId, result)
 
-      // ── 自动下载：采集完成后触发 ──
-      if (payload.autoDownload) {
-        this.autoDownloadItems(taskId, payload).catch((err) => {
+      // ── 自动导入下载队列 ──
+      const shouldImport = this.pipeline.shouldAutoImportDownload(taskId)
+      if (shouldImport) {
+        const shouldStart = this.pipeline.shouldAutoStartDownload(taskId)
+        this.autoDownloadItems(taskId, payload, shouldStart).catch((err) => {
           console.error(`[autoDownload] Task ${taskId} failed:`, err.message)
         })
       }
@@ -1544,7 +1584,7 @@ export class CrawlerController {
   // 自动下载
   // ════════════════════════════════════════════════════════════════
 
-  private async autoDownloadItems(taskId: string, payload: CrawlPayload) {
+  private async autoDownloadItems(taskId: string, payload: CrawlPayload, autoStart = true) {
     try {
       const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
       const urlTransforms = payload.urlTransforms || []
@@ -1575,15 +1615,16 @@ export class CrawlerController {
 
         if (urlsToDownload.length === 0) continue
 
+        const status = autoStart ? 'pending' : 'paused'
         const insertStmt = this.db.db.prepare(`
           INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
-          VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
 
         for (const { url, fieldName, filename, fileType } of urlsToDownload) {
           const dTaskId = uuid()
           const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(fieldName, urlTransforms)
-          insertStmt.run(dTaskId, item.id, url, filename, fileType, fieldName, dlMethod, ytDlpOptsJson)
+          insertStmt.run(dTaskId, item.id, url, filename, fileType, fieldName, status, dlMethod, ytDlpOptsJson)
           createdCount++
         }
 
@@ -1591,7 +1632,7 @@ export class CrawlerController {
         this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(item.id)
       }
 
-      console.log(`[autoDownload] Task ${taskId}: created ${createdCount} download tasks from ${items.length} items`)
+      console.log(`[autoDownload] Task ${taskId}: created ${createdCount} download tasks from ${items.length} items (autoStart=${autoStart})`)
     } catch (err: any) {
       console.error(`[autoDownload] Task ${taskId} error:`, err.message)
     }

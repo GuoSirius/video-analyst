@@ -6,10 +6,14 @@ import * as path from 'path'
 import { YtDlp } from 'ytdlp-nodejs'
 import { DatabaseService } from '../common/database/database.service'
 import { SseService } from '../common/sse/sse.service'
+import { QueueService } from '../common/queue/queue.service'
+import { PipelineService } from '../common/pipeline/pipeline.service'
 import { v4 as uuid } from 'uuid'
 import { formatDate } from '../common/utils/date.util'
 import { isVideoPlatform, classifyExt, extractExtFromUrl, extractVideoId, PSEUDO_STATIC_EXTS } from '../common/utils/url.util'
+import { cookiesTextToFilePath, writeCookiesTextToFile } from '../common/utils/cookies.util'
 import type { YtDlpOptions } from '../crawler/crawler.service'
+import { QUALITY_PRESET_FORMATS } from '../crawler/crawler.service'
 
 const projectRoot = path.resolve(process.cwd(), '..')
 
@@ -54,6 +58,7 @@ export interface ReimportOpts {
 @Injectable()
 export class DownloadService {
   private downloadDir: string
+  private dataDir: string
   private ytDlp: YtDlp
   /** 被终止的任务 ID 集合（yt-dlp 无法真正中断，完成后检查此集合忽略结果） */
   private cancelSet = new Set<string>()
@@ -63,7 +68,10 @@ export class DownloadService {
   constructor(
     private readonly db: DatabaseService,
     private readonly sse: SseService,
+    private readonly queue: QueueService,
+    private readonly pipeline: PipelineService,
   ) {
+    this.dataDir = path.resolve(projectRoot, 'data')
     this.downloadDir = path.resolve(projectRoot, 'data', 'downloads')
     if (!fs.existsSync(this.downloadDir)) {
       fs.mkdirSync(this.downloadDir, { recursive: true })
@@ -75,20 +83,52 @@ export class DownloadService {
     return this.downloadDir
   }
 
+  /** 默认最大并发下载数 */
+  private static readonly DEFAULT_MAX_CONCURRENT = 3
+
   /** Process pending download tasks — called by scheduler. Only picks up 'pending' status, not 'paused'. */
   async processDownloads() {
-    const pendingTasks = this.db.db.prepare(
-      "SELECT * FROM download_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 5"
-    ).all() as any[]
+    // 查询当前正在下载的任务数，控制并发上限
+    const downloadingRow = this.db.db.prepare(
+      "SELECT COUNT(*) as count FROM download_queue WHERE status = 'downloading'"
+    ).get() as any
+    const downloadingCount = downloadingRow?.count || 0
+    const maxConcurrent = this.getMaxConcurrent()
+    const slots = Math.max(0, maxConcurrent - downloadingCount)
 
-    for (const task of pendingTasks) {
-      if (this.cancelSet.has(task.id)) continue
+    if (slots <= 0) return
+
+    const pendingTasks = this.db.db.prepare(
+      "SELECT * FROM download_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?"
+    ).all(slots) as any[]
+
+    // 并发启动所有待处理任务（充分利用可用槽位）
+    await Promise.allSettled(pendingTasks.map(async (task) => {
+      if (this.cancelSet.has(task.id)) return
       try {
         await this.executeDownload(task)
       } catch (err: any) {
         console.error(`[DownloadScheduler] Task ${task.id} failed:`, err.message)
       }
-    }
+    }))
+  }
+
+  /** 获取最大并发下载数 */
+  getMaxConcurrent(): number {
+    try {
+      const row = this.db.db.prepare("SELECT value FROM settings WHERE key = 'download_max_concurrent'").get() as any
+      if (row?.value) {
+        const n = parseInt(row.value, 10)
+        if (!isNaN(n) && n >= 1 && n <= 20) return n
+      }
+    } catch { /* ignore */ }
+    return DownloadService.DEFAULT_MAX_CONCURRENT
+  }
+
+  /** 设置最大并发下载数 */
+  setMaxConcurrent(n: number): void {
+    const clamped = Math.max(1, Math.min(20, Math.round(n)))
+    this.db.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('download_max_concurrent', ?)").run(String(clamped))
   }
 
   /** Sanitize a string for use as a directory name */
@@ -159,7 +199,21 @@ export class DownloadService {
     const taskId = task.id
     const url = task.url
     const itemId = task.item_id
-    const filename = this.sanitizeFilename(task.filename || this.extractFilename(url, task.item_id))
+    const method = task.download_method  // NULL | 'yt-dlp' | 'file'
+    let filename = this.sanitizeFilename(task.filename || this.extractFilename(url, task.item_id))
+
+    // 修正视频平台 URL 的伪静态扩展名（如 .html → .mp4），yt-dlp 输出始终为 mp4
+    if (method !== 'file' && isVideoPlatform(url)) {
+      const dotIdx = filename.lastIndexOf('.')
+      if (dotIdx > 0) {
+        const ext = filename.slice(dotIdx + 1).toLowerCase()
+        if (PSEUDO_STATIC_EXTS.has(ext)) {
+          filename = filename.slice(0, dotIdx) + '.mp4'
+          this.db.db.prepare('UPDATE download_queue SET filename = ?, file_type = ? WHERE id = ?')
+            .run(filename, 'video', taskId)
+        }
+      }
+    }
 
     // 目录结构: {taskName}_{taskId8}/{itemId8}/ | uploads/{YYYY-MM}/ | manual/{taskId8}/
     const itemDir = this.resolveDownloadPath(task)
@@ -168,10 +222,10 @@ export class DownloadService {
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true })
     }
-    const filePath = path.join(itemDir, normalizedFilename)
+    let filePath = path.join(itemDir, normalizedFilename)
 
     // 方案A：先下载到临时文件，成功后 rename 覆盖正式文件（避免失败时损坏旧文件）
-    const tmpPath = filePath + '.tmp'
+    let tmpPath = filePath + '.tmp'
 
     // Check if cancelled before starting
     if (this.cancelSet.has(taskId)) {
@@ -183,8 +237,8 @@ export class DownloadService {
       this.db.db.prepare(`UPDATE download_queue SET status = 'downloading', error = NULL, updated_at = datetime('now') WHERE id = ?`).run(taskId)
       this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress: 0 })
 
-      // 根据 download_method 字段选择下载方式
-      const method = task.download_method  // NULL | 'yt-dlp' | 'file'
+      // 根据 download_method 字段选择下载方式，yt-dlp 返回实际输出路径
+      let actualOutputPath = tmpPath
 
       if (method === 'file') {
         await this.downloadFile(url, tmpPath, taskId, (progress) => {
@@ -193,7 +247,7 @@ export class DownloadService {
           this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress })
         })
       } else if (method === 'yt-dlp') {
-        await this.downloadWithYtDlpLib(url, tmpPath, taskId, itemId)
+        actualOutputPath = await this.downloadWithYtDlpLib(url, tmpPath, taskId, itemId)
       } else {
         // NULL：自动检测（兼容旧数据 + 手动添加的链接）
         const site = this.detectSite(url)
@@ -204,18 +258,34 @@ export class DownloadService {
             this.sse.emitEvent('download', { taskId, itemId, status: 'downloading', progress })
           })
         } else {
-          await this.downloadWithYtDlpLib(url, tmpPath, taskId, itemId)
+          actualOutputPath = await this.downloadWithYtDlpLib(url, tmpPath, taskId, itemId)
         }
       }
 
       // Check if cancelled after download completed
+      const cancelCheckPath = actualOutputPath || tmpPath
       if (this.cancelSet.has(taskId)) {
-        this.handleCancelled(taskId, tmpPath)
+        this.handleCancelled(taskId, cancelCheckPath)
         return
       }
 
-      // 下载成功：临时文件 → 正式文件
-      if (fs.existsSync(tmpPath)) {
+      // 重新读取 filename（downloadWithYtDlpLib 可能已同步扩展名）
+      const updatedRow = this.db.db.prepare('SELECT filename FROM download_queue WHERE id = ?').get(taskId) as any
+      if (updatedRow?.filename) {
+        filename = updatedRow.filename
+        const newItemDir = this.resolveDownloadPath(task)
+        const newNorm = this.normalizeFilePath(filename)
+        filePath = path.join(newItemDir, newNorm)
+      }
+
+      // 下载成功：实际输出文件 → 正式文件
+      if (actualOutputPath && fs.existsSync(actualOutputPath)) {
+        if (actualOutputPath !== filePath) {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+          fs.renameSync(actualOutputPath, filePath)
+        }
+      } else if (fs.existsSync(tmpPath)) {
+        // 兜底：如果 actualOutputPath 不存在但 tmpPath 存在（HTTP 直链下载场景）
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
         fs.renameSync(tmpPath, filePath)
       }
@@ -225,6 +295,9 @@ export class DownloadService {
       if (!didReimport) {
         this.db.db.prepare(`UPDATE download_queue SET status = 'completed', file_path = ?, progress = 100, updated_at = datetime('now') WHERE id = ?`).run(toRelative(filePath), taskId)
         this.sse.emitEvent('download', { taskId, itemId, status: 'completed', filePath, progress: 100 })
+
+        // 自动流水线：检查是否需要自动进入转码→识别→AI
+        await this.autoContinuePipeline(taskId, itemId, filePath)
       }
       return
 
@@ -308,6 +381,34 @@ export class DownloadService {
       setImmediate(() => this.processDownloads())
     }
     return true
+  }
+
+  /** 下载完成后检查是否需要自动进入转码→识别→AI 流水线 */
+  private async autoContinuePipeline(taskId: string, itemId: string, filePath: string) {
+    try {
+      if (!itemId || !filePath || !fs.existsSync(filePath)) return
+
+      // 追溯到爬虫任务
+      const item = this.db.db.prepare('SELECT task_id FROM crawl_items WHERE id = ?').get(itemId) as any
+      if (!item?.task_id) return
+
+      const crawlerTaskId = item.task_id
+      if (!this.pipeline.shouldAutoTranscode(crawlerTaskId)) return
+
+      const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
+      const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
+      const fileName = task?.filename || path.basename(filePath)
+
+      this.queue.createTask('transcode', {
+        file: toRelative(filePath),
+        outputDir: toRelative(outputDir),
+        source: 'download',
+        fileName,
+        crawlerTaskId,
+      })
+    } catch (err: any) {
+      console.error(`[autoContinuePipeline] Failed for download ${taskId}:`, err.message)
+    }
   }
 
   /** Stop (terminate) a download task — reset to pending */
@@ -427,42 +528,90 @@ export class DownloadService {
     return { ok: true, count }
   }
 
-  /** Batch auto pipeline: transcode → whisper → AI for completed downloads */
-  async batchAutoPipeline(ids: string[], queueService: any) {
+  /** Batch auto pipeline: smart handling for all download statuses */
+  async batchAutoPipeline(ids: string[], steps?: { start_download?: boolean; transcode?: boolean; whisper?: boolean; ai?: boolean }) {
     const results: Array<{ id: string; ok: boolean; error?: string }> = []
+    // Default: all steps enabled (backward compatible)
+    const s = { start_download: true, transcode: true, whisper: true, ai: true, ...steps }
+    const allOn = s.start_download && s.transcode && s.whisper && s.ai
 
     for (const id of ids) {
       try {
         const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
         if (!task) { results.push({ id, ok: false, error: '任务不存在' }); continue }
-        if (task.status !== 'completed') { results.push({ id, ok: false, error: '只能对已完成的下载执行流水线' }); continue }
-        const filePath = resolvePath(task.file_path)
-        if (!filePath || !fs.existsSync(filePath)) { results.push({ id, ok: false, error: '下载文件不存在' }); continue }
 
-        // 追溯爬虫任务 ID
+        // 追溯爬虫任务 ID 并根据勾选的步骤设置流水线标志
         let crawlerTaskId: string | undefined
         if (task.item_id) {
           const item = this.db.db.prepare('SELECT task_id FROM crawl_items WHERE id = ?').get(task.item_id) as any
           crawlerTaskId = item?.task_id || undefined
+          if (crawlerTaskId) {
+            const crawlerTask = this.queue.getTask(crawlerTaskId)
+            if (crawlerTask) {
+              const payload = {
+                ...crawlerTask.payload,
+                autoPipeline: allOn,
+                autoStartDownload: s.start_download,
+                autoTranscode: s.transcode,
+                autoWhisper: s.whisper,
+                autoAI: s.ai,
+                autoDownload: s.start_download,
+              }
+              this.queue.updateTaskPayload(crawlerTaskId, payload)
+            }
+          }
         }
 
-        const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
-        const fileName = task.filename || path.basename(filePath)
-
-        // Create transcode task — processing handled by caller (controller)
-        queueService.createTask('transcode', {
-          file: toRelative(filePath),
-          outputDir: toRelative(outputDir),
-          source: 'download',
-          fileName,
-          crawlerTaskId,
-        })
-        results.push({ id, ok: true })
+        if (task.status === 'completed') {
+          if (s.transcode) {
+            // 已完成 + 需要转码：直接创建转码任务进入后续流水线
+            const filePath = resolvePath(task.file_path)
+            if (!filePath || !fs.existsSync(filePath)) {
+              results.push({ id, ok: false, error: '下载文件不存在' })
+              continue
+            }
+            const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
+            const fileName = task.filename || path.basename(filePath)
+            this.queue.createTask('transcode', {
+              file: toRelative(filePath),
+              outputDir: toRelative(outputDir),
+              source: 'download',
+              fileName,
+              crawlerTaskId,
+            })
+            results.push({ id, ok: true })
+          } else {
+            // 已完成但不需要后续步骤
+            results.push({ id, ok: true })
+          }
+        } else if (task.status === 'pending' || task.status === 'paused') {
+          // 未开始/暂停：启动下载（如果 start_download 被选中）
+          if (s.start_download) {
+            this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0 WHERE id = ?`).run(id)
+          }
+          results.push({ id, ok: true })
+        } else if (task.status === 'failed') {
+          // 失败：重试下载（如果 start_download 被选中）
+          if (s.start_download) {
+            const oldPath = task.file_path ? resolvePath(task.file_path) : null
+            if (oldPath && fs.existsSync(oldPath)) {
+              try { fs.unlinkSync(oldPath) } catch { /* ignore */ }
+            }
+            this.db.db.prepare(`UPDATE download_queue SET status = 'pending', error = NULL, progress = 0, file_path = NULL, updated_at = datetime('now') WHERE id = ?`).run(id)
+          }
+          results.push({ id, ok: true })
+        } else if (task.status === 'downloading') {
+          results.push({ id, ok: false, error: '下载中，请等待完成后再操作' })
+        } else {
+          results.push({ id, ok: false, error: `不支持 ${task.status} 状态的下载任务` })
+        }
       } catch (err: any) {
         results.push({ id, ok: false, error: err.message })
       }
     }
 
+    // 触发下载处理
+    setImmediate(() => this.processDownloads())
     return results
   }
 
@@ -657,13 +806,13 @@ export class DownloadService {
   // 内部下载方法
   // ════════════════════════════════════════════════════════════════
 
-  /** 使用 ytdlp-nodejs 库下载站点视频 */
+  /** 使用 ytdlp-nodejs 库下载站点视频，返回实际输出文件路径 */
   private async downloadWithYtDlpLib(
     url: string,
     filePath: string,
     taskId: string,
     itemId: string,
-  ): Promise<void> {
+  ): Promise<string> {
     // 方案A：支持临时文件模式（filePath 以 .tmp 结尾时，输出到临时名，由调用方 rename 到正式文件）
     const isTmp = filePath.endsWith('.tmp')
     const realPath = isTmp ? filePath.slice(0, -4) : filePath
@@ -677,7 +826,6 @@ export class DownloadService {
 
     let dl = this.ytDlp
       .download(url)
-      .output(path.join(outputDir, outBase + '.%(ext)s'))
       .on('progress', (progress) => {
         if (this.cancelSet.has(taskId)) return
         if (progress.percentage !== undefined) {
@@ -694,11 +842,12 @@ export class DownloadService {
 
     // ════════════════════════════════════════════════════════
     // yt-dlp 参数（三层合并：硬编码安全默认 < 全局设置 < 任务配置）
+    // null 值 = 显式不设置该参数；undefined = 使用默认值
     // ════════════════════════════════════════════════════════
 
     // 1. 硬编码安全默认（可被覆盖）
     const mergedOpts: any = {
-      format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+      qualityPreset: 'compatible' as const,  // 默认画质预设（可被覆盖或留空）
       mergeOutputFormat: 'mp4',
       noPlaylist: true,         // 防止意外下载整个播放列表
       socketTimeout: 30,        // 避免连接挂起
@@ -726,11 +875,42 @@ export class DownloadService {
     }
 
     // 应用合并后的参数
-    dl = dl.format(mergedOpts.format)
+
+    // 画质预设 → format 解析（用户自定义 format 优先于预设）
+    const preset = mergedOpts.qualityPreset as keyof typeof QUALITY_PRESET_FORMATS | undefined
+    if (!mergedOpts.format && preset && QUALITY_PRESET_FORMATS[preset]) {
+      mergedOpts.format = QUALITY_PRESET_FORMATS[preset]
+    }
+    // qualityPreset 为 null/空 或无匹配 → format 不设置，使用 yt-dlp 默认行为
+    // 文本模式 cookies：解析写入 Netscape 格式文件，作为 --cookies 传入，并将解析后的路径回写数据库
+    if (mergedOpts.cookies_mode === 'text' && mergedOpts.cookies_text) {
+      const cookiesPath = cookiesTextToFilePath(this.dataDir, taskId)
+      const ok = writeCookiesTextToFile(mergedOpts.cookies_text, cookiesPath)
+      if (ok) {
+        mergedOpts.cookies = cookiesPath
+        mergedOpts.cookiesFromBrowser = ''  // 清除浏览器模式，避免冲突
+        console.log(`[DownloadService] Cookies text → ${cookiesPath}`)
+        // 回写：cookies_text → cookies（文件路径），前端等效命令可直接复制测试
+        try {
+          const row = this.db.db.prepare('SELECT yt_dlp_options FROM download_queue WHERE id = ?').get(taskId) as any
+          if (row?.yt_dlp_options) {
+            const saved = JSON.parse(row.yt_dlp_options)
+            saved.cookies = cookiesPath
+            delete saved.cookies_text
+            this.db.db.prepare('UPDATE download_queue SET yt_dlp_options = ? WHERE id = ?').run(JSON.stringify(saved), taskId)
+          }
+        } catch { /* ignore */ }
+      } else {
+        console.warn(`[DownloadService] Cookies text 为空或格式无效，跳过`)
+      }
+    }
+
+    dl = dl.output(path.join(outputDir, outBase + '.' + (mergedOpts.mergeOutputFormat || 'mp4')))
+    if (mergedOpts.format) dl = dl.format(mergedOpts.format)
     dl = dl.addOption('mergeOutputFormat', mergedOpts.mergeOutputFormat)
-    if (mergedOpts.noPlaylist) dl = dl.addOption('noPlaylist', true)
-    if (mergedOpts.socketTimeout) dl = dl.addOption('socketTimeout', mergedOpts.socketTimeout)
-    if (mergedOpts.extractorRetries) dl = dl.addOption('extractorRetries', mergedOpts.extractorRetries)
+    if (mergedOpts.noPlaylist != null) { if (mergedOpts.noPlaylist) dl = dl.addOption('noPlaylist', true) } else { /* null = 不设置 */ }
+    if (mergedOpts.socketTimeout != null) dl = dl.addOption('socketTimeout', mergedOpts.socketTimeout)
+    if (mergedOpts.extractorRetries != null) dl = dl.addOption('extractorRetries', mergedOpts.extractorRetries)
     if (mergedOpts.cookiesFromBrowser) dl = dl.cookiesFromBrowser(mergedOpts.cookiesFromBrowser)
     if (mergedOpts.cookies) dl = dl.cookies(mergedOpts.cookies)
     if (mergedOpts.proxy) dl = dl.proxy(mergedOpts.proxy)
@@ -750,16 +930,45 @@ export class DownloadService {
     const result = await dl.run()
 
     // Check cancelled after yt-dlp finishes
-    if (this.cancelSet.has(taskId)) return
+    if (this.cancelSet.has(taskId)) return filePath
 
-    // 如果下载的文件名与预期不同，重命名
+    // 确定实际输出文件路径（yt-dlp 可能产生与预期不同路径的文件）
+    let actualOutputPath = filePath
     if (result.filePaths && result.filePaths.length > 0) {
-      const actualPath = result.filePaths[0]
-      if (actualPath !== filePath && fs.existsSync(actualPath)) {
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-        fs.renameSync(actualPath, filePath)
-      }
+      actualOutputPath = result.filePaths[0]
     }
+
+    // 清理 yt-dlp 格式合并残留的中间片段（如 video.tmp.f137.mp4、video.tmp.f140.m4a）
+    // 这些片段由 yt-dlp 下载分离的视频/音频流时产生，合并后本应自动删除，但有时会残留
+    if (isTmp) {
+      try {
+        const outPrefix = path.basename(outBase)
+        const files = fs.readdirSync(outputDir)
+        for (const f of files) {
+          const fullPath = path.join(outputDir, f)
+          if (f.startsWith(outPrefix) && fullPath !== actualOutputPath) {
+            try { fs.unlinkSync(fullPath) } catch { /* 忽略单个文件清理失败 */ }
+          }
+        }
+      } catch { /* 忽略目录读取失败 */ }
+    }
+
+    // 同步 db 中的 filename 扩展名，确保与实际输出一致
+    const actualExt = path.extname(actualOutputPath).replace('.', '').toLowerCase()
+    if (actualExt) {
+      try {
+        const row = this.db.db.prepare('SELECT filename FROM download_queue WHERE id = ?').get(taskId) as any
+        if (row?.filename) {
+          const dbExt = path.extname(row.filename).replace('.', '').toLowerCase()
+          if (dbExt && dbExt !== actualExt) {
+            const newFilename = row.filename.replace(/\.[^.]+$/, `.${actualExt}`)
+            this.db.db.prepare('UPDATE download_queue SET filename = ? WHERE id = ?').run(newFilename, taskId)
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
+    return actualOutputPath
   }
 
   /** HTTP 直链下载（支持取消） */
@@ -778,7 +987,7 @@ export class DownloadService {
 
       const req = protocol.get(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
         },
         signal: controller.signal,
       }, (response) => {

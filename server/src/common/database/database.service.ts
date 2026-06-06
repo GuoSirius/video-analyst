@@ -121,6 +121,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
 
       INSERT OR IGNORE INTO settings (key, value) VALUES ('pipeline_auto', 'true');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('download_max_concurrent', '3');
 
       CREATE TABLE IF NOT EXISTS ai_providers (
         id TEXT PRIMARY KEY,

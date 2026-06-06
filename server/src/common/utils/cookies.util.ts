@@ -1,0 +1,192 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Netscape cookies.txt 格式：7个制表符分隔的字段
+interface CookieEntry {
+  domain: string;
+  subdomain: 'TRUE' | 'FALSE';
+  path: string;
+  secure: 'TRUE' | 'FALSE';
+  expires: string;
+  name: string;
+  value: string;
+}
+
+/** 一年后的时间戳（秒），用于未指定过期时间的 cookie */
+const ONE_YEAR_LATER = (): string =>
+  String(Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60);
+
+/** 尝试将各种日期格式转为 Unix 秒 */
+function parseExpires(raw: unknown): string {
+  if (raw === undefined || raw === null || raw === '' || raw === 0) {
+    return ONE_YEAR_LATER();
+  }
+  const n = Number(raw);
+  if (!isNaN(n)) {
+    // 秒级（>1e12 是毫秒）
+    return n > 1e12 ? String(Math.floor(n / 1000)) : String(Math.floor(n));
+  }
+  const d = new Date(raw as string);
+  return isNaN(d.getTime()) ? ONE_YEAR_LATER() : String(Math.floor(d.getTime() / 1000));
+}
+
+function makeEntry(domain: string, name: string, value: string, extra?: { secure?: boolean; path?: string; expires?: unknown }): CookieEntry {
+  const isSubdomain = domain.startsWith('.');
+  return {
+    domain: isSubdomain ? domain : `.${domain}`,
+    subdomain: isSubdomain ? 'TRUE' : 'FALSE',
+    path: extra?.path || '/',
+    secure: extra?.secure ? 'TRUE' : 'FALSE',
+    expires: parseExpires(extra?.expires),
+    name,
+    value,
+  };
+}
+
+// ─── 格式解析器 ───────────────────────────────────────
+
+/** JSON 数组：浏览器扩展导出格式 */
+function parseJsonFormat(text: string): CookieEntry[] {
+  try {
+    const arr = JSON.parse(text);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((c: any) => c.name && c.value && c.domain)
+      .map((c: any) => makeEntry(c.domain, c.name, c.value, {
+        secure: c.secure,
+        path: c.path,
+        expires: c.expires || c.expirationDate,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** 分号分隔：`key=value; key2=value2` */
+function parseSemicolonFormat(text: string, defaultDomain: string): CookieEntry[] {
+  return text
+    .split(';')
+    .map(pair => {
+      const eqIdx = pair.indexOf('=');
+      if (eqIdx <= 0) return null;
+      const key = pair.slice(0, eqIdx).trim();
+      const val = pair.slice(eqIdx + 1).trim();
+      if (!key || !val) return null;
+      // 过滤 URL 和含特殊字符的无效项
+      if (val.includes('://') || key.includes('://')) return null;
+      return makeEntry(defaultDomain, key, val);
+    })
+    .filter((e): e is CookieEntry => e !== null);
+}
+
+/** 逐行 key:value / key=value */
+function parseLinesFormat(text: string, defaultDomain: string): CookieEntry[] {
+  return text
+    .split('\n')
+    .map(line => {
+      line = line.trim();
+      if (!line || line.startsWith('#')) return null;
+      // 已经是 Netscape 格式
+      if (line.split('\t').length >= 7) return null;
+
+      let key: string, val: string;
+
+      if (line.includes('\t')) {
+        // tab 分隔：可能带 domain 等额外字段（domain\tname\tvalue 或 name\tvalue）
+        const parts = line.split('\t').map(s => s.trim()).filter(Boolean);
+        if (parts.length >= 3) {
+          const [dom, n, v, ...rest] = parts;
+          return makeEntry(dom, n, v, { secure: rest.some(r => /secure|true/i.test(r)) });
+        }
+        if (parts.length >= 2) {
+          return makeEntry(defaultDomain, parts[0], parts[1]);
+        }
+        return null;
+      }
+
+      // 等号分隔
+      const eqIdx = line.indexOf('=');
+      if (eqIdx > 0) {
+        key = line.slice(0, eqIdx).trim();
+        val = line.slice(eqIdx + 1).trim();
+      } else {
+        // 冒号分隔
+        const colonIdx = line.indexOf(':');
+        if (colonIdx <= 0) return null;
+        key = line.slice(0, colonIdx).trim();
+        val = line.slice(colonIdx + 1).trim();
+      }
+
+      if (!key || !val) return null;
+      return makeEntry(defaultDomain, key, val);
+    })
+    .filter((e): e is CookieEntry => e !== null);
+}
+
+// ─── 核心 API ─────────────────────────────────────────
+
+export function parseCookiesToNetscape(text: string, defaultDomain = '.example.com'): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+
+  let entries: CookieEntry[] = [];
+
+  // 1. JSON 数组
+  if (trimmed.startsWith('[')) {
+    entries = parseJsonFormat(trimmed);
+    if (entries.length) return entriesToNetscape(entries);
+  }
+
+  // 2. Netscape 格式检测
+  const lines = trimmed.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+  if (lines.length > 0) {
+    const tabCount = (lines[0].match(/\t/g) || []).length;
+    if (tabCount >= 6) return trimmed; // 已经是 Netscape 格式，原样返回
+  }
+
+  // 3. 分号分隔
+  if (trimmed.includes(';')) {
+    entries = parseSemicolonFormat(trimmed, defaultDomain);
+    if (entries.length) return entriesToNetscape(entries);
+  }
+
+  // 4. 逐行 key:value
+  entries = parseLinesFormat(trimmed, defaultDomain);
+  if (!entries.length) {
+    throw new Error('无法解析 cookies 格式，请检查输入内容');
+  }
+  return entriesToNetscape(entries);
+}
+
+function entriesToNetscape(entries: CookieEntry[]): string {
+  const header = '# Netscape HTTP Cookie File\n# Generated by video-analyst\n';
+  const body = entries
+    .map(e => [e.domain, e.subdomain, e.path, e.secure, e.expires, e.name, e.value].join('\t'))
+    .join('\n');
+  return header + body + '\n';
+}
+
+export function cookiesFileDir(dataDir: string): string {
+  return path.join(dataDir, 'cookies');
+}
+
+export function cookiesTextToFilePath(dataDir: string, taskId: string): string {
+  return path.join(cookiesFileDir(dataDir), `cookies_text_${taskId}.txt`);
+}
+
+/**
+ * 将 cookie 文本写入 Netscape 格式文件
+ * @returns true 成功 / false 文本为空或无效
+ */
+export function writeCookiesTextToFile(text: string, filePath: string, defaultDomain = '.example.com'): boolean {
+  if (!text?.trim()) return false;
+  try {
+    const netscape = parseCookiesToNetscape(text, defaultDomain);
+    if (!netscape.trim()) return false;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, netscape, 'utf-8');
+    return true;
+  } catch {
+    return false;
+  }
+}

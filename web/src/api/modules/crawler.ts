@@ -31,13 +31,13 @@ export const crawlerAPI = {
   batchRetryTasks: (ids: string[]) => api.post('/crawler/tasks/batch-retry', { ids }),
   batchRerunTasks: (ids: string[]) => api.post('/crawler/tasks/batch-rerun', { ids }),
   batchClearItems: (ids: string[]) => api.post('/crawler/tasks/batch-clear-items', { ids }),
-  batchAutoPipeline: (ids: string[]) => api.post('/crawler/tasks/batch-auto-pipeline', { ids }),
+  batchAutoPipeline: (ids: string[], steps?: Record<string, boolean>) => api.post('/crawler/tasks/batch-auto-pipeline', { ids, steps }),
   batchDeleteItems: (ids: string[]) => api.post('/crawler/items/batch-delete', { ids }),
   batchCrawlItems: (ids: string[]) => api.post('/crawler/items/batch-crawl', { ids }),
   batchRecrawlItems: (ids: string[]) => api.post('/crawler/items/batch-recrawl', { ids }),
   batchImportDownload: (ids: string[], retry = false, autoDownload = false) =>
     api.post('/crawler/items/batch-import-download', { ids, retry, autoDownload }),
-  batchItemsAutoPipeline: (ids: string[]) => api.post('/crawler/items/batch-auto-pipeline', { ids }),
+  batchItemsAutoPipeline: (ids: string[], steps?: Record<string, boolean>) => api.post('/crawler/items/batch-auto-pipeline', { ids, steps }),
   updateTask: (id: string, payload: any) => api.put(`/crawler/tasks/${id}`, payload),
   // Export
   getExportFields: (taskIds: string[]) => api.get('/crawler/export/fields', { params: { taskIds: taskIds.join(',') } }),

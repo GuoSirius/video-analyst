@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed, watch, nextTick, reactive } from
 import { useRouter } from 'vue-router'
 import { crawlerAPI } from '../api'
 import { usePagination } from '../composables/usePagination'
+import { usePipelineSteps } from '../composables/usePipelineSteps'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 
@@ -36,8 +37,10 @@ const formUrl = ref('')
 const formErrorMode = ref<'lenient' | 'standard' | 'strict'>('standard')
 const formAutoPipeline = ref(false)
 const formAutoStart = ref(false)
-const formAutoDownload = ref(false)
+const formAutoImportDownload = ref(false)
+const formAutoStartDownload = ref(false)
 const formAutoTranscode = ref(false)
+const formAutoWhisper = ref(false)
 const formAutoAI = ref(false)
 
 // Step 4: 列表配置
@@ -73,8 +76,11 @@ interface TransformRow {
   urlTemplate: string
   downloadMethod: 'yt-dlp' | 'file'
   // yt-dlp 参数（仅 downloadMethod='yt-dlp' 时有效）
+  ytDlpQualityPreset: '' | 'compatible' | 'high-mp4' | 'single'
+  ytDlpCookiesMode: 'browser' | 'file' | 'text'
   ytDlpCookiesFromBrowser: string
   ytDlpCookies: string
+  ytDlpCookiesText: string
   ytDlpProxy: string
   ytDlpFormat: string
   ytDlpUserAgent: string
@@ -84,6 +90,9 @@ interface TransformRow {
   ytDlpPassword: string
   ytDlpRetries: number | null
   ytDlpSleepInterval: number | null
+  ytDlpNoPlaylist: boolean | null
+  ytDlpSocketTimeout: number | null
+  ytDlpExtractorRetries: number | null
   ytDlpGeoBypass: boolean
   ytDlpNoCheckCert: boolean
   ytDlpRawArgs: string
@@ -93,9 +102,11 @@ interface TransformRow {
 function emptyTransform(): TransformRow {
   return {
     fieldName: '', urlTemplate: '', downloadMethod: 'yt-dlp',
-    ytDlpCookiesFromBrowser: '', ytDlpCookies: '', ytDlpProxy: '',
+    ytDlpQualityPreset: '',
+    ytDlpCookiesMode: 'browser', ytDlpCookiesFromBrowser: '', ytDlpCookies: '', ytDlpCookiesText: '', ytDlpProxy: '',
     ytDlpFormat: '', ytDlpUserAgent: '', ytDlpReferer: '', ytDlpLimitRate: '',
     ytDlpUsername: '', ytDlpPassword: '', ytDlpRetries: null, ytDlpSleepInterval: null,
+    ytDlpNoPlaylist: null, ytDlpSocketTimeout: null, ytDlpExtractorRetries: null,
     ytDlpGeoBypass: false, ytDlpNoCheckCert: false, ytDlpRawArgs: '',
     _showOptions: false,
   }
@@ -146,21 +157,102 @@ const availableFieldNames = computed(() => {
   return Array.from(fields)
 })
 
-const pipelineLocked = computed(() => formAutoPipeline.value)
+// ── Pipeline step checkbox sequential logic ──
+// Steps order: Start → Import → Start Download → Transcode → Whisper → AI
+// Checking a step auto-checks all prior steps; unchecking auto-unchecks all subsequent steps.
 
-watch(formAutoPipeline, (on) => {
+function onAutoPipelineChange(on: boolean) {
   if (on) {
     formAutoStart.value = true
-    formAutoDownload.value = true
+    formAutoImportDownload.value = true
+    formAutoStartDownload.value = true
     formAutoTranscode.value = true
+    formAutoWhisper.value = true
     formAutoAI.value = true
   } else {
-    // 取消流水线时同步取消所有子项，保证干净的状态切换
     formAutoStart.value = false
-    formAutoDownload.value = false
+    formAutoImportDownload.value = false
+    formAutoStartDownload.value = false
     formAutoTranscode.value = false
+    formAutoWhisper.value = false
     formAutoAI.value = false
   }
+}
+
+function onAutoStartChange(on: boolean) {
+  if (!on) {
+    formAutoImportDownload.value = false
+    formAutoStartDownload.value = false
+    formAutoTranscode.value = false
+    formAutoWhisper.value = false
+    formAutoAI.value = false
+    formAutoPipeline.value = false
+  }
+}
+
+function onAutoImportDownloadChange(on: boolean) {
+  if (on) {
+    formAutoStart.value = true
+  } else {
+    formAutoStartDownload.value = false
+    formAutoTranscode.value = false
+    formAutoWhisper.value = false
+    formAutoAI.value = false
+    formAutoPipeline.value = false
+  }
+}
+
+function onAutoStartDownloadChange(on: boolean) {
+  if (on) {
+    formAutoStart.value = true
+    formAutoImportDownload.value = true
+  } else {
+    formAutoTranscode.value = false
+    formAutoWhisper.value = false
+    formAutoAI.value = false
+    formAutoPipeline.value = false
+  }
+}
+
+function onAutoTranscodeChange(on: boolean) {
+  if (on) {
+    formAutoStart.value = true
+    formAutoImportDownload.value = true
+    formAutoStartDownload.value = true
+  } else {
+    formAutoWhisper.value = false
+    formAutoAI.value = false
+    formAutoPipeline.value = false
+  }
+}
+
+function onAutoWhisperChange(on: boolean) {
+  if (on) {
+    formAutoStart.value = true
+    formAutoImportDownload.value = true
+    formAutoStartDownload.value = true
+    formAutoTranscode.value = true
+  } else {
+    formAutoAI.value = false
+    formAutoPipeline.value = false
+  }
+}
+
+function onAutoAIChange(on: boolean) {
+  if (on) {
+    formAutoStart.value = true
+    formAutoImportDownload.value = true
+    formAutoStartDownload.value = true
+    formAutoTranscode.value = true
+    formAutoWhisper.value = true
+  } else {
+    formAutoPipeline.value = false
+  }
+}
+
+// Sync autoPipeline master when all 6 are toggled individually
+watch([formAutoStart, formAutoImportDownload, formAutoStartDownload, formAutoTranscode, formAutoWhisper, formAutoAI], ([a, b, c, d, e, f]) => {
+  formAutoPipeline.value = a && b && c && d && e && f
 })
 
 // --- Actions ---
@@ -237,8 +329,10 @@ function resetForm() {
   formErrorMode.value = 'standard'
   formAutoPipeline.value = false
   formAutoStart.value = false
-  formAutoDownload.value = false
+  formAutoImportDownload.value = false
+  formAutoStartDownload.value = false
   formAutoTranscode.value = false
+  formAutoWhisper.value = false
   formAutoAI.value = false
   formItemSelector.value = ''
   formPaginationMode.value = 'none'
@@ -282,8 +376,10 @@ function openEditDialog(task: any) {
   formErrorMode.value = p.errorMode || 'standard'
   formAutoPipeline.value = p.autoPipeline ?? false
   formAutoStart.value = p.autoStart ?? false
-  formAutoDownload.value = p.autoDownload ?? false
+  formAutoImportDownload.value = p.autoImportDownload ?? p.autoDownload ?? false
+  formAutoStartDownload.value = p.autoStartDownload ?? p.autoDownload ?? false
   formAutoTranscode.value = p.autoTranscode ?? false
+  formAutoWhisper.value = p.autoWhisper ?? p.autoTranscode ?? false
   formAutoAI.value = p.autoAI ?? false
 
   formItemSelector.value = p.itemSelector || ''
@@ -371,9 +467,12 @@ function removeUrlTransform(i: number) {
 
 function buildYtDlpOptionsFromRow(t: TransformRow): any | undefined {
   const opts: any = {}
-  if (t.ytDlpCookiesFromBrowser) opts.cookiesFromBrowser = t.ytDlpCookiesFromBrowser
-  if (t.ytDlpCookies) opts.cookies = t.ytDlpCookies
+  opts.cookies_mode = t.ytDlpCookiesMode
+  if (t.ytDlpCookiesMode === 'browser' && t.ytDlpCookiesFromBrowser) opts.cookiesFromBrowser = t.ytDlpCookiesFromBrowser
+  if (t.ytDlpCookiesMode === 'file' && t.ytDlpCookies) opts.cookies = t.ytDlpCookies
+  if (t.ytDlpCookiesMode === 'text' && t.ytDlpCookiesText.trim()) opts.cookies_text = t.ytDlpCookiesText.trim()
   if (t.ytDlpProxy) opts.proxy = t.ytDlpProxy
+  if (t.ytDlpQualityPreset) opts.qualityPreset = t.ytDlpQualityPreset
   if (t.ytDlpFormat) opts.format = t.ytDlpFormat
   if (t.ytDlpUserAgent) opts.userAgent = t.ytDlpUserAgent
   if (t.ytDlpReferer) opts.referer = t.ytDlpReferer
@@ -382,6 +481,9 @@ function buildYtDlpOptionsFromRow(t: TransformRow): any | undefined {
   if (t.ytDlpPassword) opts.password = t.ytDlpPassword
   if (t.ytDlpRetries != null) opts.retries = t.ytDlpRetries
   if (t.ytDlpSleepInterval != null) opts.sleepInterval = t.ytDlpSleepInterval
+  if (t.ytDlpNoPlaylist != null) opts.noPlaylist = t.ytDlpNoPlaylist
+  if (t.ytDlpSocketTimeout != null) opts.socketTimeout = t.ytDlpSocketTimeout
+  if (t.ytDlpExtractorRetries != null) opts.extractorRetries = t.ytDlpExtractorRetries
   if (t.ytDlpGeoBypass) opts.geoBypass = true
   if (t.ytDlpNoCheckCert) opts.noCheckCertificates = true
   if (t.ytDlpRawArgs.trim()) {
@@ -392,9 +494,19 @@ function buildYtDlpOptionsFromRow(t: TransformRow): any | undefined {
 
 function parseYtDlpOptionsToRow(t: TransformRow, opts: any) {
   if (!opts) return
+  // 检测 cookies 模式：优先使用显式 cookies_mode，否则根据哪个字段有值推断
+  if (opts.cookies_mode) {
+    t.ytDlpCookiesMode = opts.cookies_mode
+  } else if (opts.cookiesFromBrowser) {
+    t.ytDlpCookiesMode = 'browser'
+  } else if (opts.cookies) {
+    t.ytDlpCookiesMode = 'file'
+  }
   t.ytDlpCookiesFromBrowser = opts.cookiesFromBrowser || ''
   t.ytDlpCookies = opts.cookies || ''
+  t.ytDlpCookiesText = opts.cookies_text || ''
   t.ytDlpProxy = opts.proxy || ''
+  t.ytDlpQualityPreset = opts.qualityPreset || ''
   t.ytDlpFormat = opts.format || ''
   t.ytDlpUserAgent = opts.userAgent || ''
   t.ytDlpReferer = opts.referer || ''
@@ -403,6 +515,9 @@ function parseYtDlpOptionsToRow(t: TransformRow, opts: any) {
   t.ytDlpPassword = opts.password || ''
   t.ytDlpRetries = opts.retries ?? null
   t.ytDlpSleepInterval = opts.sleepInterval ?? null
+  t.ytDlpNoPlaylist = opts.noPlaylist ?? null
+  t.ytDlpSocketTimeout = opts.socketTimeout ?? null
+  t.ytDlpExtractorRetries = opts.extractorRetries ?? null
   t.ytDlpGeoBypass = opts.geoBypass ?? false
   t.ytDlpNoCheckCert = opts.noCheckCertificates ?? false
   t.ytDlpRawArgs = opts.rawArgs?.join('\n') || ''
@@ -429,8 +544,10 @@ async function submitForm() {
       ? formDetailRules.value.filter(r => r.name) : undefined,
 
     autoStart: editingTaskId.value ? undefined : formAutoStart.value,
-    autoDownload: formAutoDownload.value || undefined,
+    autoImportDownload: formAutoImportDownload.value || undefined,
+    autoStartDownload: formAutoStartDownload.value || undefined,
     autoTranscode: formAutoTranscode.value || undefined,
+    autoWhisper: formAutoWhisper.value || undefined,
     autoAI: formAutoAI.value || undefined,
     autoPipeline: formAutoPipeline.value || undefined,
     errorMode: formErrorMode.value,
@@ -491,6 +608,43 @@ const rerunnableSelected = computed(() => selectedIds.value.filter(id => { const
 const clearableSelected = computed(() => selectedIds.value.filter(id => { const t = findSelected(id); return t && canDelete(t.status) }))
 const pipelineableSelected = computed(() => selectedIds.value.filter(id => { const t = findSelected(id); return t && (t.status === 'pending' || t.status === 'paused' || t.status === 'failed' || t.status === 'completed' || t.status === 'cancelled') }))
 
+// ── Pipeline step selection dialog for batch auto pipeline ──
+const TASK_PIPELINE_STEPS = [
+  { key: 'crawl', label: '采集爬取' },
+  { key: 'import', label: '带入下载' },
+  { key: 'start_download', label: '启动下载' },
+  { key: 'transcode', label: '转码处理' },
+  { key: 'whisper', label: '语音识别' },
+  { key: 'ai', label: 'AI 分析总结' },
+]
+const pipelineDialog = usePipelineSteps(TASK_PIPELINE_STEPS)
+const pipelineDialogVisible = ref(false)
+const pipelineTargetIds = ref<string[]>([])
+const pipelineTargetCount = ref(0)
+const pipelineLoading = ref(false)
+
+function openPipelineDialog() {
+  pipelineTargetIds.value = pipelineableSelected.value
+  pipelineTargetCount.value = pipelineTargetIds.value.length
+  pipelineDialog.reset()
+  pipelineDialogVisible.value = true
+}
+
+async function confirmPipeline() {
+  const steps = pipelineDialog.getStepFlags()
+  pipelineLoading.value = true
+  try {
+    const res = await crawlerAPI.batchAutoPipeline(pipelineTargetIds.value, steps)
+    const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
+    const failCount = res.data?.filter?.((r: any) => !r.ok)?.length ?? 0
+    if (failCount) { ElMessage.warning(`成功启动 ${okCount} 个，${failCount} 个失败`) }
+    else { ElMessage.success(`已启动 ${okCount} 个任务的流水线`) }
+    pipelineDialogVisible.value = false
+    refresh()
+  } catch { /* cancelled */ }
+  pipelineLoading.value = false
+}
+
 async function batchStart() {
   const ids = startableSelected.value
   if (!ids.length) { ElMessage.warning('所选任务中没有可执行的（只能执行未开始/已暂停的任务）'); return }
@@ -540,24 +694,6 @@ async function batchClear() {
     await ElMessageBox.confirm(`确定要清空选中的 ${ids.length} 个任务下的所有采集项吗？采集任务本身不会被删除。`, '批量清空确认', { type: 'warning', confirmButtonText: '确定清空', cancelButtonText: '取消' })
     await crawlerAPI.batchClearItems(ids)
     ElMessage.success(`已清空 ${ids.length} 个任务的采集项`)
-    refresh()
-  } catch { /* cancelled */ }
-}
-
-async function batchAutoPipeline() {
-  const ids = pipelineableSelected.value
-  if (!ids.length) { ElMessage.warning('所选任务中没有可执行流水线的'); return }
-  try {
-    await ElMessageBox.confirm(
-      `将对选中的 ${ids.length} 个任务一键自动执行完整流水线：\n\n① 采集爬取 → ② 下载资源 → ③ FFmpeg转码(16kHz WAV) → ④ Whisper语音识别 → ⑤ AI分析总结\n\n系统将自动开启任务的全自动模式，各环节按顺序自动流转，无需人工干预。`,
-      '一键自动执行后续流程',
-      { type: 'info', confirmButtonText: '开始执行', cancelButtonText: '取消', dangerouslyUseHTMLString: false },
-    )
-    const res = await crawlerAPI.batchAutoPipeline(ids)
-    const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
-    const failCount = res.data?.filter?.((r: any) => !r.ok)?.length ?? 0
-    if (failCount) { ElMessage.warning(`成功启动 ${okCount} 个，${failCount} 个失败`) }
-    else { ElMessage.success(`已启动 ${okCount} 个任务的完整流水线`) }
     refresh()
   } catch { /* cancelled */ }
 }
@@ -719,31 +855,31 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
         <p class="text-[13px] text-gray-500">管理采集任务配置，查看任务执行状态与采集结果</p>
       </div>
       <div class="flex items-center gap-2">
-        <el-button v-if="pipelineableSelected.length" type="success" size="small" plain @click="batchAutoPipeline">
+        <el-button v-if="pipelineableSelected.length" type="success" size="small" plain @click="openPipelineDialog">
           <i class="fas fa-forward-step mr-1.5"></i>一键自动执行后续流程 ({{ pipelineableSelected.length }})
         </el-button>
-        <el-button v-if="startableSelected.length" type="primary" size="small" plain @click="batchStart">
-          <i class="fas fa-play mr-1.5"></i>批量执行 ({{ startableSelected.length }})
-        </el-button>
-        <el-button v-if="retryableSelected.length" type="warning" size="small" plain @click="batchRetry">
-          <i class="fas fa-rotate-right mr-1.5"></i>批量重试 ({{ retryableSelected.length }})
-        </el-button>
-        <el-button v-if="rerunnableSelected.length" size="small" plain @click="batchReRun">
-          <i class="fas fa-repeat mr-1.5"></i>批量重新执行 ({{ rerunnableSelected.length }})
-        </el-button>
-        <el-dropdown v-if="clearableSelected.length || deletableSelected.length || selectedIds.length" trigger="click">
+        <el-dropdown v-if="selectedIds.length" trigger="click">
           <el-button size="small" plain>
-            更多 <i class="fas fa-chevron-down ml-1 text-[10px]"></i>
+            批量操作 <i class="fas fa-chevron-down ml-1 text-[10px]"></i>
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item v-if="startableSelected.length" @click="batchStart">
+                <i class="fas fa-play mr-1.5 text-blue-400"></i>批量执行 ({{ startableSelected.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="retryableSelected.length" @click="batchRetry">
+                <i class="fas fa-rotate-right mr-1.5 text-amber-400"></i>批量重试 ({{ retryableSelected.length }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="rerunnableSelected.length" @click="batchReRun">
+                <i class="fas fa-repeat mr-1.5"></i>批量重新执行 ({{ rerunnableSelected.length }})
+              </el-dropdown-item>
               <el-dropdown-item v-if="clearableSelected.length" @click="batchClear">
                 <i class="fas fa-eraser mr-1.5"></i>批量清空采集项 ({{ clearableSelected.length }})
               </el-dropdown-item>
               <el-dropdown-item v-if="selectedIds.length" @click="openExportDialog">
-                <i class="fas fa-download mr-1.5"></i>导出 ({{ selectedIds.length }})
+                <i class="fas fa-file-export mr-1.5 text-blue-400"></i>导出 ({{ selectedIds.length }})
               </el-dropdown-item>
-              <el-dropdown-item v-if="deletableSelected.length" divided @click="batchDelete">
+              <el-dropdown-item v-if="deletableSelected.length" @click="batchDelete">
                 <i class="fas fa-trash-can mr-1.5 text-red-400"></i><span class="text-red-400">批量删除 ({{ deletableSelected.length }})</span>
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -921,30 +1057,40 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
           </div>
 
           <div class="flex items-center gap-2 mb-2">
-            <el-checkbox v-model="formAutoPipeline" size="small" />
+            <el-checkbox v-model="formAutoPipeline" size="small" @change="onAutoPipelineChange" />
             <span class="text-xs text-gray-300">自动流水线（一键全开）</span>
-            <el-tooltip content="勾选后自动开启全部环节：爬取 → 下载 → 转码 → AI 总结，一条线自动执行。下方四个子开关会被强制勾选。" placement="top">
+            <el-tooltip content="勾选后自动开启全部环节：爬取 → 带入下载 → 启动下载 → 转码 → 识别 → AI 总结，一条线自动执行。下方六个子开关会被强制勾选。" placement="top">
               <i class="fas fa-circle-question text-gray-600 cursor-help text-[12px]"></i>
             </el-tooltip>
           </div>
 
-          <div class="flex items-center gap-6 ml-5">
-            <el-checkbox v-model="formAutoStart" size="small" :disabled="pipelineLocked">自动执行爬取
+          <div class="flex items-center gap-5 ml-5 flex-wrap">
+            <el-checkbox v-model="formAutoStart" size="small" @change="onAutoStartChange">自动执行爬取
               <el-tooltip content="创建任务后立即开始采集，无需手动点击开始" placement="top">
                 <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
               </el-tooltip>
             </el-checkbox>
-            <el-checkbox v-model="formAutoDownload" size="small" :disabled="pipelineLocked">自动下载资源
-              <el-tooltip content="采集完成后自动将媒体资源 URL 带入下载队列开始下载" placement="top">
+            <el-checkbox v-model="formAutoImportDownload" size="small" @change="onAutoImportDownloadChange">自动导入下载
+              <el-tooltip content="采集完成后自动将媒体资源加入下载队列（不立即下载）" placement="top">
                 <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
               </el-tooltip>
             </el-checkbox>
-            <el-checkbox v-model="formAutoTranscode" size="small" :disabled="pipelineLocked">自动转码
+            <el-checkbox v-model="formAutoStartDownload" size="small" @change="onAutoStartDownloadChange">自动启动下载
+              <el-tooltip content="下载队列创建后自动开始下载任务" placement="top">
+                <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+              </el-tooltip>
+            </el-checkbox>
+            <el-checkbox v-model="formAutoTranscode" size="small" @change="onAutoTranscodeChange">自动转码
               <el-tooltip content="下载完成后自动调用 FFmpeg 转为 16kHz 单声道 WAV 格式" placement="top">
                 <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
               </el-tooltip>
             </el-checkbox>
-            <el-checkbox v-model="formAutoAI" size="small" :disabled="pipelineLocked">自动 AI 总结
+            <el-checkbox v-model="formAutoWhisper" size="small" @change="onAutoWhisperChange">自动语音识别
+              <el-tooltip content="转码完成后自动调用 Whisper 进行语音识别" placement="top">
+                <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
+              </el-tooltip>
+            </el-checkbox>
+            <el-checkbox v-model="formAutoAI" size="small" @change="onAutoAIChange">自动 AI 总结
               <el-tooltip content="语音识别完成后自动调用 AI 模型进行总结分析" placement="top">
                 <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
               </el-tooltip>
@@ -1196,17 +1342,31 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
                 <div v-if="t.downloadMethod === 'yt-dlp' && t._showOptions" class="mt-2.5 pt-2.5 border-t border-gray-700/30 space-y-2">
                   <!-- 登录认证 -->
                   <div class="text-[11px] text-gray-400 font-semibold">登录认证</div>
-                  <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                  <div class="space-y-2">
                     <div>
-                      <div class="text-[11px] text-gray-500 mb-1">Cookies from browser</div>
+                      <div class="text-[11px] text-gray-500 mb-1">Cookies 来源</div>
+                      <el-select v-model="t.ytDlpCookiesMode" size="small" class="w-full">
+                        <el-option label="浏览器获取 (--cookies-from-browser)" value="browser" />
+                        <el-option label="指定文件路径 (--cookies)" value="file" />
+                        <el-option label="文本输入 (自动生成文件)" value="text" />
+                      </el-select>
+                    </div>
+                    <div v-if="t.ytDlpCookiesMode === 'browser'">
+                      <div class="text-[11px] text-gray-500 mb-1">浏览器</div>
                       <el-select v-model="t.ytDlpCookiesFromBrowser" placeholder="选择或输入浏览器" size="small" filterable allow-create clearable class="w-full">
                         <el-option v-for="b in cookieBrowsers" :key="b" :label="b" :value="b" />
                       </el-select>
                     </div>
-                    <div>
-                      <div class="text-[11px] text-gray-500 mb-1">Cookies 文件</div>
+                    <div v-if="t.ytDlpCookiesMode === 'file'">
+                      <div class="text-[11px] text-gray-500 mb-1">Cookies 文件路径</div>
                       <el-input v-model="t.ytDlpCookies" placeholder="/path/to/cookies.txt" size="small" />
                     </div>
+                    <div v-if="t.ytDlpCookiesMode === 'text'">
+                      <div class="text-[11px] text-gray-500 mb-1">Cookies 文本</div>
+                      <el-input v-model="t.ytDlpCookiesText" type="textarea" :rows="4" placeholder="支持多种格式，系统自动识别并转为 Netscape 格式：&#10;&#10;• 分号分隔: key=value; key2=value2&#10;• 每行一个: key=value 或 key: value&#10;• JSON 数组: [{&quot;name&quot;:&quot;sid&quot;,&quot;value&quot;:&quot;xxx&quot;,&quot;domain&quot;:&quot;.example.com&quot;}]&#10;• Netscape 格式（直接粘贴原文件内容）" size="small" />
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-2 gap-x-4 gap-y-2">
                     <div>
                       <div class="text-[11px] text-gray-500 mb-1">用户名</div>
                       <el-input v-model="t.ytDlpUsername" placeholder="站点登录用户名" size="small" />
@@ -1221,20 +1381,27 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
                   <div class="text-[11px] text-gray-400 font-semibold pt-1">网络 &amp; 格式</div>
                   <div class="grid grid-cols-2 gap-x-4 gap-y-2">
                     <div>
+                      <div class="text-[11px] text-gray-500 mb-1">画质策略</div>
+                      <el-select v-model="t.ytDlpQualityPreset" size="small" class="w-full" clearable placeholder="不设置（使用默认）">
+                        <el-option label="🎯 最佳兼容（推荐）" value="compatible" />
+                        <el-option label="📺 最高画质 MP4" value="high-mp4" />
+                        <el-option label="⚡ 单文件优先" value="single" />
+                      </el-select>
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">
+                        格式选择器
+                        <span class="text-gray-600">（留空=使用画质策略）</span>
+                      </div>
+                      <el-input v-model="t.ytDlpFormat" :placeholder="t.ytDlpQualityPreset ? '已选画质策略，留空即可' : 'bv*+ba'" size="small" />
+                    </div>
+                    <div>
                       <div class="text-[11px] text-gray-500 mb-1">代理地址</div>
                       <el-input v-model="t.ytDlpProxy" placeholder="http://127.0.0.1:7890 或 socks5://" size="small" />
                     </div>
                     <div>
                       <div class="text-[11px] text-gray-500 mb-1">限速</div>
                       <el-input v-model="t.ytDlpLimitRate" placeholder="5M / 500K" size="small" />
-                    </div>
-                    <div>
-                      <div class="text-[11px] text-gray-500 mb-1">格式选择器</div>
-                      <el-input v-model="t.ytDlpFormat" placeholder="bv*+ba" size="small" />
-                    </div>
-                    <div>
-                      <div class="text-[11px] text-gray-500 mb-1">重试次数</div>
-                      <el-input-number v-model="t.ytDlpRetries" :min="0" :max="99" size="small" />
                     </div>
                     <div>
                       <div class="text-[11px] text-gray-500 mb-1">User-Agent</div>
@@ -1248,6 +1415,10 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
                       <div class="text-[11px] text-gray-500 mb-1">请求间隔（秒）</div>
                       <el-input-number v-model="t.ytDlpSleepInterval" :min="0" :max="3600" size="small" />
                     </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">重试次数</div>
+                      <el-input-number v-model="t.ytDlpRetries" :min="0" :max="99" size="small" />
+                    </div>
                     <div class="flex items-end gap-3 pb-px">
                       <el-checkbox v-model="t.ytDlpGeoBypass" size="small">
                         <span class="text-[11px] text-gray-500">绕过地域限制</span>
@@ -1260,9 +1431,29 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
 
                   <!-- 高级 -->
                   <div class="text-[11px] text-gray-400 font-semibold pt-1">高级</div>
+                  <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">
+                        连接超时（秒）
+                        <el-tooltip content="设为空 = 使用 yt-dlp 默认" placement="top">
+                          <i class="fas fa-circle-question text-gray-600 text-[10px] ml-0.5"></i>
+                        </el-tooltip>
+                      </div>
+                      <el-input-number v-model="t.ytDlpSocketTimeout" :min="0" :max="300" size="small" />
+                    </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">
+                        提取器重试
+                        <el-tooltip content="设为空 = 使用 yt-dlp 默认" placement="top">
+                          <i class="fas fa-circle-question text-gray-600 text-[10px] ml-0.5"></i>
+                        </el-tooltip>
+                      </div>
+                      <el-input-number v-model="t.ytDlpExtractorRetries" :min="0" :max="99" size="small" />
+                    </div>
+                  </div>
                   <div>
                     <div class="text-[11px] text-gray-500 mb-1">额外命令行参数</div>
-                    <el-input v-model="t.ytDlpRawArgs" type="textarea" :rows="2" placeholder="--extractor-args youtube:player_client=web&#10;--add-header Referer:https://www.youtube.com/" size="small" />
+                    <el-input v-model="t.ytDlpRawArgs" type="textarea" :rows="2" placeholder="--extractor-args youtube:player_client=web&#10;--add-header Referer:https://www.youtube.com/&#10;--no-playlist / --socket-timeout 60 等可覆盖默认参数" size="small" />
                   </div>
                 </div>
               </div>
@@ -1284,8 +1475,60 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
       </template>
     </el-dialog>
 
+    <!-- Pipeline Step Selection Dialog -->
+    <el-dialog v-model="pipelineDialogVisible" title="一键自动执行后续流程" width="560px" destroy-on-close :close-on-click-modal="false">
+      <div class="space-y-3">
+        <div class="text-xs text-gray-400">
+          将对选中的 <span class="text-gray-200 font-semibold">{{ pipelineTargetCount }}</span> 个任务执行流水线。勾选的步骤按顺序自动执行，所选步骤必须连续不能跳跃。
+        </div>
+
+        <div class="flex items-center gap-2">
+          <el-checkbox :model-value="pipelineDialog.allSelected" size="small" @change="pipelineDialog.toggleAll()" />
+          <span class="text-xs text-gray-300">全选 / 取消全选</span>
+        </div>
+
+        <div class="flex flex-col gap-2.5 ml-5">
+          <el-checkbox v-model="pipelineDialog.stepValues.crawl" size="small" @change="pipelineDialog.onStepChange('crawl')">
+            <span class="text-xs">采集爬取</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">执行网页采集任务，提取结构化数据</span>
+          </el-checkbox>
+          <el-checkbox v-model="pipelineDialog.stepValues.import" size="small" @change="pipelineDialog.onStepChange('import')">
+            <span class="text-xs">带入下载</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">将媒体资源加入下载队列（不立即下载）</span>
+          </el-checkbox>
+          <el-checkbox v-model="pipelineDialog.stepValues.start_download" size="small" @change="pipelineDialog.onStepChange('start_download')">
+            <span class="text-xs">启动下载</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">执行下载任务获取媒体文件</span>
+          </el-checkbox>
+          <el-checkbox v-model="pipelineDialog.stepValues.transcode" size="small" @change="pipelineDialog.onStepChange('transcode')">
+            <span class="text-xs">转码处理</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">FFmpeg 转码为 16kHz 单声道 WAV</span>
+          </el-checkbox>
+          <el-checkbox v-model="pipelineDialog.stepValues.whisper" size="small" @change="pipelineDialog.onStepChange('whisper')">
+            <span class="text-xs">语音识别</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">Whisper 自动语音识别</span>
+          </el-checkbox>
+          <el-checkbox v-model="pipelineDialog.stepValues.ai" size="small" @change="pipelineDialog.onStepChange('ai')">
+            <span class="text-xs">AI 分析总结</span>
+            <span class="text-[11px] text-gray-500 ml-1.5">调用 AI 模型进行内容分析总结</span>
+          </el-checkbox>
+        </div>
+
+        <div class="text-[11px] text-gray-500 mt-2">
+          不同状态的处理：<span class="text-purple-400">未开始</span>→启动 · <span class="text-blue-400">进行中</span>→等待完成 · <span class="text-amber-400">失败</span>→重试，成功后自动进入后续环节 · <span class="text-emerald-400">已完成</span>→直接进入后续环节
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="pipelineDialogVisible = false">取消</el-button>
+        <el-button type="success" :loading="pipelineLoading" @click="confirmPipeline">
+          <i class="fas fa-forward-step mr-1.5"></i>开始执行 ({{ pipelineTargetCount }})
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- Export Dialog -->
-    <el-dialog v-model="exportDialogVisible" title="导出采集数据" width="650px" destroy-on-close top="5vh">
+    <el-dialog v-model="exportDialogVisible" title="导出采集数据" width="650px" destroy-on-close top="5vh" :close-on-click-modal="false">
       <div class="space-y-4">
         <!-- Format selection -->
         <div>

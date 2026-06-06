@@ -5,11 +5,40 @@ import { DatabaseService } from '../database/database.service'
 export class PipelineService {
   constructor(private readonly db: DatabaseService) {}
 
+  /** 根据爬虫任务 ID 判断是否应该自动导入下载队列 */
+  shouldAutoImportDownload(crawlerTaskId: string): boolean {
+    const task = this.getCrawlerTask(crawlerTaskId)
+    if (!task) return false
+    const p = task.payload
+    // New granular flag takes precedence; fall back to legacy autoDownload
+    if (p.autoImportDownload !== undefined) return !!p.autoImportDownload
+    return !!(p.autoPipeline || p.autoDownload)
+  }
+
+  /** 根据爬虫任务 ID 判断是否应该自动启动下载 */
+  shouldAutoStartDownload(crawlerTaskId: string): boolean {
+    const task = this.getCrawlerTask(crawlerTaskId)
+    if (!task) return false
+    const p = task.payload
+    if (p.autoStartDownload !== undefined) return !!p.autoStartDownload
+    return !!(p.autoPipeline || p.autoDownload)
+  }
+
   /** 根据爬虫任务 ID 判断是否应该自动转码 */
   shouldAutoTranscode(crawlerTaskId: string): boolean {
     const task = this.getCrawlerTask(crawlerTaskId)
     if (!task) return false
     const p = task.payload
+    return !!(p.autoPipeline || p.autoTranscode)
+  }
+
+  /** 根据爬虫任务 ID 判断是否应该自动 Whisper 识别（转码完成后） */
+  shouldAutoWhisper(crawlerTaskId: string): boolean {
+    const task = this.getCrawlerTask(crawlerTaskId)
+    if (!task) return false
+    const p = task.payload
+    // New granular flag takes precedence; fall back to legacy autoTranscode
+    if (p.autoWhisper !== undefined) return !!p.autoWhisper
     return !!(p.autoPipeline || p.autoTranscode)
   }
 
