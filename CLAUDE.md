@@ -50,7 +50,7 @@ web/src/
 │   ├── client.ts    # axios 实例
 │   ├── index.ts     # barrel 统一导出
 │   └── modules/     # 按模块拆分: crawler/transcoder/whisper/ai/export/settings
-├── pages/           # 仪表盘/爬虫/转码/AI分析/导出/模型管理
+├── pages/           # 仪表盘/爬虫/转码/AI分析/导出/供应商管理
 └── composables/     # useSSE 实时进度
 ```
 
@@ -71,12 +71,14 @@ web/src/
 
 流水线链: transcode → whisper → AI，在 `processTranscodeTask`/`processWhisperTask` 中检查 `pipeline.isAutoMode()`
 
-### 3. AI 模型管理
-- `ai_providers` 表存储模型配置（api_key 加密存储）
-- 调用时按 priority 排序，失败自动 fallback 到下一个
+### 3. AI 供应商管理
+- `ai_providers` 表存储供应商配置（api_key 加密存储）
+- 每个供应商配置默认模型（必选）和回退模型（可选），通过 `models` JSON 列存储
+- 调用时按 priority 排序，单个供应商内先尝试默认模型，失败后尝试回退模型，全部失败切换下一个供应商
+- 模型列表通过供应商 API 动态获取（`POST /api/ai/fetch-models`）
 - 加密: `server/src/common/crypto/crypto.util.ts` (AES-256-GCM)
-- 前端: `/models` 页面增删改查，上下调优先级
-- 首次启动: `seedDefaults()` 从 .env 导入默认模型
+- 前端: `/providers` 页面增删改查，上下调优先级
+- 首次启动: `seedDefaults()` 从 .env 导入默认供应商
 
 ### 4. Whisper 双模式
 - API 模式: 设置 `MEMO_AI_BASE_URL` → 调用远端 `/inference`
@@ -91,7 +93,7 @@ web/src/
 - `crawl_items` - 爬虫采集结果
 - `transcriptions` - 语音识别结果
 - `ai_results` - AI 分析结果
-- `ai_providers` - AI 模型配置（加密）
+- `ai_providers` - AI 供应商配置（加密，含多模型）
 - `ai_prompts` - 提示词模板
 - `settings` - 键值对（pipeline_auto, whisper_model 等）
 

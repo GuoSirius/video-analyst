@@ -30,7 +30,7 @@ async function refresh() {
   stats.value.crawler=countByStatus(ct.data);stats.value.transcoder=countByStatus(tt.data);stats.value.whisper=countByStatus(wt.data);stats.value.ai=countByStatus(at.data)
   const all=[...ct.data,...tt.data,...wt.data,...at.data]
   recentTasks.value=all.sort((a:any,b:any)=>b.updated_at.localeCompare(a.updated_at)).slice(0,8)
-  recentItems.value=items.data.slice(0,6)
+  recentItems.value=(items.data?.data||[]).slice(0,6)
 }
 
 const runningCount=computed(()=>Object.values(stats.value).reduce((s:any,v:any)=>s+v.running,0))

@@ -39,7 +39,7 @@ const navItems: NavItem[] = [
     ],
   },
   { path: '/export', label: '数据导出', icon: 'DocumentCopy' },
-  { path: '/models', label: '模型管理', icon: 'Monitor' },
+  { path: '/providers', label: '供应商管理', icon: 'Monitor' },
   { path: '/prompts', label: '提示词管理', icon: 'EditPen' },
 ]
 

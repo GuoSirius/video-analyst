@@ -74,14 +74,18 @@ const router = createRouter({
       component: () => import('../pages/Export.vue'),
     },
     {
-      path: '/models',
-      name: 'models',
-      component: () => import('../pages/Models.vue'),
+      path: '/providers',
+      name: 'providers',
+      component: () => import('../pages/Providers.vue'),
     },
     {
       path: '/prompts',
       name: 'prompts',
       component: () => import('../pages/Prompts.vue'),
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      redirect: '/',
     },
   ],
 })

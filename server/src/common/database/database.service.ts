@@ -40,6 +40,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN yt_dlp_options TEXT`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN reimport_pending INTEGER DEFAULT 0`) } catch { /* column exists */ }
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN reimport_opts TEXT`) } catch { /* column exists */ }
+    // --- ai_providers 表补列（多模型支持） ---
+    try { this.db.exec(`ALTER TABLE ai_providers ADD COLUMN models TEXT NOT NULL DEFAULT '[]'`) } catch { /* column exists */ }
+    // 一次性迁移：将旧 default_model 同步到 models JSON（仅当 models 为空时）
+    try {
+      const rows = this.db.prepare(
+        `SELECT id, default_model FROM ai_providers WHERE models = '[]' AND default_model != ''`
+      ).all() as any[]
+      const stmt = this.db.prepare(`UPDATE ai_providers SET models = ? WHERE id = ?`)
+      for (const row of rows) {
+        stmt.run(JSON.stringify([{ name: row.default_model, role: 'default' }]), row.id)
+      }
+    } catch { /* ignore */ }
     // 修正旧数据的默认值：download_status 应为 NULL（未导入），而非 'pending'
     try { this.db.exec(`UPDATE crawl_items SET download_status = NULL WHERE download_status = 'pending'`) } catch { /* ignore */ }
   }
@@ -116,6 +128,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         api_key TEXT NOT NULL DEFAULT '',
         base_url TEXT NOT NULL DEFAULT '',
         default_model TEXT NOT NULL DEFAULT '',
+        models TEXT NOT NULL DEFAULT '[]',
         priority INTEGER NOT NULL DEFAULT 0,
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at TEXT DEFAULT (datetime('now'))
@@ -160,24 +173,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     `)
   }
 
-  /** 从 .env 导入默认模型（INSERT OR IGNORE，仅首次初始化时写入） */
+  /** 从 .env 导入默认供应商（INSERT OR IGNORE，仅首次初始化时写入） */
   private seedDefaults() {
     const stmt = this.db.prepare(`
-      INSERT OR IGNORE INTO ai_providers (id, name, api_key, base_url, default_model, priority, enabled)
+      INSERT OR IGNORE INTO ai_providers (id, name, api_key, base_url, models, priority, enabled)
       VALUES (?, ?, ?, ?, ?, ?, 1)
     `)
     stmt.run('agnes', 'Agnes',
       encrypt(process.env.AGNES_API_KEY || ''),
       process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1',
-      'agnes-2.0-flash', 0)
+      JSON.stringify([{ name: 'agnes-2.0-flash', role: 'default' }]), 0)
     stmt.run('minimax', 'minimax',
       encrypt(process.env.MINIMAX_API_KEY || ''),
       process.env.MINIMAX_BASE_URL || 'https://api.minimaxi.com/v1',
-      'MiniMax-M2.7', 1)
+      JSON.stringify([{ name: 'MiniMax-M2.7', role: 'default' }]), 1)
     stmt.run('deepseek', 'deepseek',
       encrypt(process.env.DEEPSEEK_API_KEY || ''),
       process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
-      'deepseek-v4-flash', 2)
+      JSON.stringify([{ name: 'deepseek-v4-flash', role: 'default' }]), 2)
 
     const promptStmt = this.db.prepare(`
       INSERT OR IGNORE INTO ai_prompts (id, name, content, is_default)

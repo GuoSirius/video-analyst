@@ -36,7 +36,7 @@ export class AIController {
       name: body.name,
       api_key: body.api_key || '',
       base_url: body.base_url || '',
-      default_model: body.default_model || '',
+      models: body.models || [],
       priority: body.priority ?? this.ai.getProviders().length + 1,
       enabled: body.enabled ?? 1,
     }
@@ -69,6 +69,19 @@ export class AIController {
   }
 
   // === Analysis ===
+
+  @Post('fetch-models')
+  async fetchModels(@Body() body: { base_url: string; api_key: string }) {
+    try {
+      const models = await this.ai.fetchModelsFromApi(body.base_url, body.api_key)
+      if (!models.length) {
+        return { error: '未获取到模型列表，请检查 Base URL 和 API Key 是否正确' }
+      }
+      return models
+    } catch (err: any) {
+      return { error: err.message || '获取模型列表失败' }
+    }
+  }
 
   @Post('analyze')
   async startAnalyze(@Body() body: {
@@ -176,14 +189,14 @@ export class AIController {
       if (!transcription) throw new Error('Transcription not found')
 
       this.queue.updateTaskProgress(taskId, 30)
-      const { text, provider } = await this.ai.callLLM(config, transcription.content)
+      const { text, provider, model } = await this.ai.callLLM(config, transcription.content)
       this.queue.updateTaskProgress(taskId, 80)
 
       const resultId = uuid()
       this.db.db.prepare(`
         INSERT INTO ai_results (id, transcription_id, model, prompt, result, status)
         VALUES (?, ?, ?, ?, ?, 'completed')
-      `).run(resultId, transcriptionId, `${provider}/${config.model || 'default'}`, config.prompt, text)
+      `).run(resultId, transcriptionId, `${provider}/${model}`, config.prompt, text)
 
       this.queue.updateTaskProgress(taskId, 100)
       this.queue.updateTaskResult(taskId, { resultId, text, provider })

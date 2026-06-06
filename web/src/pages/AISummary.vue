@@ -48,9 +48,9 @@ const enabledProviders = computed(() => providers.value.filter((p: any) => p.ena
 function ensureProviders(): boolean {
   if (!enabledProviders.value.length) {
     ElMessageBox.alert(
-      '尚未配置 AI 模型，请先在"模型管理"页面添加并启用至少一个模型。',
-      '无可用模型',
-      { confirmButtonText: '去配置', type: 'warning', callback: () => router.push('/models') },
+      '尚未配置 AI 供应商，请先在"供应商管理"页面添加并启用至少一个供应商。',
+      '无可用供应商',
+      { confirmButtonText: '去配置', type: 'warning', callback: () => router.push('/providers') },
     )
     return false
   }
@@ -147,9 +147,9 @@ onMounted(refresh)
     <!-- Provider warning -->
     <div v-if="!enabledProviders.length" class="rounded-xl bg-amber-500/8 border border-amber-500/20 p-4 mb-5 flex items-center justify-between">
       <div class="flex items-center gap-2 text-sm text-amber-300">
-        <i class="fas fa-triangle-exclamation"></i> 尚未配置 AI 模型
+        <i class="fas fa-triangle-exclamation"></i> 尚未配置 AI 供应商
       </div>
-      <el-button size="small" type="warning" @click="router.push('/models')">去配置模型</el-button>
+      <el-button size="small" type="warning" @click="router.push('/providers')">去配置供应商</el-button>
     </div>
 
     <!-- Config -->

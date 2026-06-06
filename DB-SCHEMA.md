@@ -220,22 +220,24 @@ pending ──→ running ──→ completed                │
 
 ---
 
-### 6. `ai_providers` — AI 模型配置
+### 6. `ai_providers` — AI 供应商配置
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | TEXT PK | 如 `minimax`、`deepseek` |
-| `name` | TEXT UNIQUE | 显示名称 |
+| `name` | TEXT UNIQUE | 供应商显示名称 |
 | `api_key` | TEXT | API 密钥（AES-256-GCM 加密存储） |
 | `base_url` | TEXT | API 地址 |
-| `default_model` | TEXT | 默认模型名 |
+| `models` | TEXT(JSON) | 模型配置数组，如 `[{"name":"deepseek-chat","role":"default"},{"name":"deepseek-reasoner","role":"fallback"}]` |
 | `priority` | INTEGER | 优先级（越小越优先，失败自动 fallback） |
 | `enabled` | INTEGER | 0=禁用 1=启用 |
 | `created_at` | TEXT | 创建时间 |
 
-种子数据: MiniMax (priority=1) + DeepSeek (priority=2)，Key 从 `.env` 导入。
+> 注：`default_model` 列为历史遗留，已不再使用，数据源为 `models` JSON 列。
 
-`/models` 页面 CRUD + 上下调优先级。AI 调用时按 priority 排序，失败自动尝试下一个启用的 provider。
+种子数据: Agnes (priority=0) + MiniMax (priority=1) + DeepSeek (priority=2)，Key 从 `.env` 导入。
+
+`/providers` 页面 CRUD + 上下调优先级。每个供应商配置默认模型（必选）和回退模型（可选），模型列表通过供应商 API 动态获取。调用时按 priority 排序，单个供应商内先尝试默认模型，失败后尝试回退模型，全部失败切换下一个供应商。
 
 ---
 
