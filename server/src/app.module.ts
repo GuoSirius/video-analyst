@@ -17,6 +17,7 @@ import { DownloadModule } from './downloader/download.module'
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', '..', '..', 'web', 'dist'),
       exclude: ['/api/(.*)'],
+      serveRoot: '/',
     }),
     DatabaseModule,
     QueueModule,

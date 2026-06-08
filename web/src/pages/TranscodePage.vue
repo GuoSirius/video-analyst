@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, reactive } from 'vue'
 import { transcoderAPI } from '../api'
 import api from '../api/client'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -13,9 +13,13 @@ const ffmpegStatus = ref<any>(null)
 // --- Data ---
 const tasks = ref<any[]>([])
 const selectedIds = ref<string[]>([])
+const selectedItemsMeta = reactive<Record<string, any>>({})
+const tableRef = ref<any>(null)
+let syncingSelection = false
+const loading = ref(false)
 
 // --- Filters ---
-const sourceFilter = ref('all')   // all | download | upload
+const sourceFilter = ref('all')
 const statusFilter = ref('all')
 const keyword = ref('')
 
@@ -24,9 +28,6 @@ const { page, pageSize, total, pageSizes, onPageChange, onPageSizeChange } = use
   defaultPageSize: 20,
   onFetch: () => fetchTasks(),
 })
-
-// --- SSE ---
-let sseConnection: EventSource | null = null
 
 // --- Command Dialog ---
 const cmdDialog = ref(false)
@@ -40,6 +41,9 @@ const uploadDialog = ref(false)
 const pendingFiles = ref<{ name: string; file: File }[]>([])
 const uploading = ref(false)
 
+// --- SSE ---
+let sseConnection: EventSource | null = null
+
 const statusLabels: Record<string, string> = {
   pending: '待转码',
   running: '转码中',
@@ -49,7 +53,8 @@ const statusLabels: Record<string, string> = {
   paused: '已暂停',
 }
 
-// --- Actions ---
+// === Actions ===
+
 async function checkFfmpeg() {
   try {
     const { data } = await transcoderAPI.checkFfmpeg()
@@ -58,38 +63,75 @@ async function checkFfmpeg() {
 }
 
 async function fetchTasks() {
-  const params: Record<string, any> = {
-    type: 'transcode',
-    page: page.value,
-    pageSize: pageSize.value,
+  loading.value = true
+  try {
+    const params: any = { page: page.value, pageSize: pageSize.value }
+    if (sourceFilter.value !== 'all') params.source = sourceFilter.value
+    if (statusFilter.value !== 'all') params.status = statusFilter.value
+    if (keyword.value.trim()) params.keyword = keyword.value.trim()
+
+    const { data } = await api.get('/tasks', { params: { ...params, type: 'transcode' } })
+    tasks.value = data.items || data
+    total.value = data.total || (Array.isArray(data) ? data.length : 0)
+    await nextTick()
+    syncTableSelection()
+  } catch {
+    ElMessage.error('获取任务列表失败')
   }
-  if (sourceFilter.value !== 'all') params.source = sourceFilter.value
-  if (statusFilter.value !== 'all') params.status = statusFilter.value
-  if (keyword.value) params.keyword = keyword.value
-
-  const { data } = await api.get('/tasks', { params })
-  tasks.value = data.items || data
-  total.value = data.total || (Array.isArray(data) ? data.length : 0)
+  loading.value = false
 }
 
-async function refresh() {
-  await checkFfmpeg()
-  await fetchTasks()
-}
-
-// Debounced keyword filter
-let keywordTimer: any
-watch([sourceFilter, statusFilter], () => {
+// --- Filters watch ---
+watch([sourceFilter, statusFilter, keyword], () => {
   page.value = 1
   fetchTasks()
 })
-watch(keyword, () => {
-  clearTimeout(keywordTimer)
-  keywordTimer = setTimeout(() => {
-    page.value = 1
-    fetchTasks()
-  }, 300)
-})
+
+function resetFilters() {
+  keyword.value = ''
+  sourceFilter.value = 'all'
+  statusFilter.value = 'all'
+  page.value = 1
+  fetchTasks()
+}
+
+// --- Selection ---
+function handleSelectionChange(rows: any[]) {
+  if (syncingSelection) return
+  const visibleIds = new Set(tasks.value.map((t: any) => t.id))
+  const newSelected = new Map(rows.map((r: any) => [r.id, r]))
+  for (const id of visibleIds) {
+    if (!newSelected.has(id)) {
+      selectedIds.value = selectedIds.value.filter(x => x !== id)
+      delete selectedItemsMeta[id]
+    }
+  }
+  for (const [id, row] of newSelected) {
+    if (!selectedIds.value.includes(id)) selectedIds.value.push(id)
+    selectedItemsMeta[id] = { id, status: row.status }
+  }
+}
+
+function syncTableSelection() {
+  if (!tableRef.value) return
+  syncingSelection = true
+  tasks.value.forEach((row: any) => {
+    if (selectedIds.value.includes(row.id)) tableRef.value.toggleRowSelection(row, true)
+  })
+  syncingSelection = false
+}
+
+async function clearAllSelections() {
+  try {
+    await ElMessageBox.confirm(
+      `确定要清空全部 ${selectedIds.value.length} 个选择吗？`, '清空选择',
+      { type: 'warning', confirmButtonText: '确定清空', cancelButtonText: '取消' },
+    )
+    for (const id of selectedIds.value) delete selectedItemsMeta[id]
+    selectedIds.value = []
+    tableRef.value?.clearSelection()
+  } catch { /* cancelled */ }
+}
 
 // --- Upload ---
 function handleFileSelect(e: Event) {
@@ -103,23 +145,14 @@ function handleFileSelect(e: Event) {
   input.value = ''
 }
 
-function removePendingFile(index: number) {
-  pendingFiles.value.splice(index, 1)
-}
-
-function openUploadDialog() {
-  pendingFiles.value = []
-  uploadDialog.value = true
-}
+function removePendingFile(index: number) { pendingFiles.value.splice(index, 1) }
 
 async function confirmUpload() {
   if (!pendingFiles.value.length) { ElMessage.warning('请先选择文件'); return }
   uploading.value = true
   try {
     const fd = new FormData()
-    for (const pf of pendingFiles.value) {
-      fd.append('files', pf.file)
-    }
+    for (const pf of pendingFiles.value) fd.append('files', pf.file)
     const { data: upData } = await transcoderAPI.upload(fd)
     const { data: convData } = await transcoderAPI.startConvert({
       files: upData.files,
@@ -187,31 +220,21 @@ function viewCommand(task: any) {
   cmdTitle.value = '转码命令详情'
   cmdDetails.value = [
     { label: '输入文件', value: task.payload?.fileName || task.payload?.file?.split(/[\\/]/).pop() || '-' },
-    { label: '文件大小', value: task.result?.inputSize || '-' },
     { label: '目标参数', value: '16kHz · mono · 16-bit PCM WAV' },
     { label: '输出文件', value: task.result?.outputPath?.split(/[\\/]/).pop() || '-' },
     { label: '状态', value: statusLabels[task.status] || task.status },
   ]
-  cmdCommands.value = [
-    { label: '等效命令', content: getFfmpegCommand(task) },
-  ]
+  cmdCommands.value = [{ label: '等效命令', content: getFfmpegCommand(task) }]
   cmdLoading.value = false
   cmdDialog.value = true
 }
 
-// --- Selection ---
-function handleSelectionChange(rows: any[]) {
-  selectedIds.value = rows.map((r: any) => r.id)
-}
-
-// Batch operations
+// --- Batch ---
 async function batchDelete() {
   if (!selectedIds.value.length) { ElMessage.warning('请先选择任务'); return }
   try {
     await ElMessageBox.confirm(`确定要删除选中的 ${selectedIds.value.length} 个任务吗？`, '批量删除', { type: 'warning' })
-    for (const id of selectedIds.value) {
-      await transcoderAPI.deleteTask(id).catch(() => {})
-    }
+    for (const id of selectedIds.value) await transcoderAPI.deleteTask(id).catch(() => {})
     ElMessage.success(`已删除 ${selectedIds.value.length} 个任务`)
     selectedIds.value = []
     fetchTasks()
@@ -222,9 +245,7 @@ async function batchStart() {
   if (!selectedIds.value.length) { ElMessage.warning('请先选择任务'); return }
   try {
     await ElMessageBox.confirm(`将为选中的 ${selectedIds.value.length} 个任务启动转码`, '批量转码', { type: 'info' })
-    for (const id of selectedIds.value) {
-      await transcoderAPI.startTask(id).catch(() => {})
-    }
+    for (const id of selectedIds.value) await transcoderAPI.startTask(id).catch(() => {})
     ElMessage.success('批量转码已提交')
     selectedIds.value = []
     fetchTasks()
@@ -232,18 +253,15 @@ async function batchStart() {
 }
 
 async function autoProcessAll() {
-  const pendingTasks = tasks.value.filter((t: any) => t.status === 'pending')
-  if (!pendingTasks.length) { ElMessage.info('没有待处理的转码任务'); return }
+  const pending = tasks.value.filter((t: any) => t.status === 'pending')
+  if (!pending.length) { ElMessage.info('没有待处理的转码任务'); return }
   try {
     await ElMessageBox.confirm(
-      `当前有 ${pendingTasks.length} 个待转码任务，确认一键自动转码全部吗？`,
-      '一键自动转码',
-      { type: 'info', confirmButtonText: '开始' },
+      `当前有 ${pending.length} 个待转码任务，确认一键自动转码全部吗？`,
+      '一键自动转码', { type: 'info', confirmButtonText: '开始' },
     )
-    for (const t of pendingTasks) {
-      await transcoderAPI.startTask(t.id).catch(() => {})
-    }
-    ElMessage.success(`已提交 ${pendingTasks.length} 个转码任务`)
+    for (const t of pending) await transcoderAPI.startTask(t.id).catch(() => {})
+    ElMessage.success(`已提交 ${pending.length} 个转码任务`)
     fetchTasks()
   } catch { /* cancelled */ }
 }
@@ -262,7 +280,7 @@ function outputName(t: any) {
   return t.result?.outputPath?.split(/[\\/]/).pop() || '-'
 }
 
-// SSE
+// --- SSE ---
 function connectSSE() {
   sseConnection = new EventSource('/api/transcoder/events')
   sseConnection.addEventListener('message', (e) => {
@@ -270,11 +288,8 @@ function connectSSE() {
       const evt = JSON.parse(e.data)
       if (evt.type === 'transcode' || !evt.type) {
         const idx = tasks.value.findIndex((t: any) => t.id === evt.taskId)
-        if (idx >= 0) {
-          tasks.value[idx] = { ...tasks.value[idx], ...evt }
-        } else {
-          fetchTasks()
-        }
+        if (idx >= 0) tasks.value[idx] = { ...tasks.value[idx], ...evt }
+        else fetchTasks()
       }
     } catch { /* ignore */ }
   })
@@ -282,13 +297,13 @@ function connectSSE() {
 }
 
 onMounted(() => {
-  refresh()
+  checkFfmpeg()
+  fetchTasks()
   connectSSE()
 })
 
 onUnmounted(() => {
   sseConnection?.close()
-  clearTimeout(keywordTimer)
 })
 </script>
 
@@ -301,37 +316,26 @@ onUnmounted(() => {
         <p class="text-[13px] text-gray-500">音视频文件 → FFmpeg 转码 → 16kHz mono WAV</p>
       </div>
       <div class="flex items-center gap-2">
-        <span v-if="selectedIds.length" class="text-xs text-gray-400">已选 {{ selectedIds.length }} 项</span>
-
-        <el-button v-if="selectedIds.length" type="primary" size="small" plain @click="batchStart">
-          <i class="fas fa-play mr-1"></i>批量转码
-        </el-button>
-        <el-button v-if="selectedIds.length" type="danger" size="small" plain @click="batchDelete">
-          <i class="fas fa-trash-can mr-1"></i>批量删除
-        </el-button>
-
-        <span class="text-gray-600 mx-1">|</span>
-
         <el-button type="primary" size="small" @click="autoProcessAll" :disabled="!tasks.filter((t: any) => t.status === 'pending').length">
           <i class="fas fa-forward-step mr-1"></i>一键自动转码
         </el-button>
-        <el-button type="primary" size="small" @click="openUploadDialog" :disabled="!ffmpegStatus?.found">
+        <el-button type="primary" size="small" @click="pendingFiles=[];uploadDialog=true" :disabled="!ffmpegStatus?.found">
           <i class="fas fa-upload mr-1"></i>上传文件
         </el-button>
       </div>
     </div>
 
     <!-- FFmpeg Status Bar -->
-    <div class="rounded-xl border p-4 mb-4 flex items-center justify-between"
+    <div class="rounded-xl border p-3 mb-4 flex items-center justify-between"
       :class="ffmpegStatus?.found ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'"
     >
       <div class="flex items-center gap-4">
         <span class="text-sm font-semibold" :class="ffmpegStatus?.found ? 'text-emerald-400' : 'text-red-400'">
           <i :class="ffmpegStatus?.found ? 'fas fa-circle-check' : 'fas fa-circle-exclamation'" class="mr-1.5"></i>
-          {{ ffmpegStatus?.found ? `FFmpeg ${ffmpegStatus.version?.split('-')[0] || ''} 已就绪` : 'FFmpeg 未检测到' }}
+          {{ ffmpegStatus?.found ? `FFmpeg ${(ffmpegStatus.version || '').split('-')[0]} 已就绪` : 'FFmpeg 未检测到' }}
         </span>
         <span class="text-[11px] text-gray-600">
-          {{ ffmpegStatus?.found ? `路径: ${ffmpegStatus.version || '-'}` : '请安装 FFmpeg 或设置 FFMPEG_PATH 环境变量' }}
+          {{ ffmpegStatus?.found ? ffmpegStatus.version || '' : '请安装 FFmpeg 或设置 FFMPEG_PATH 环境变量' }}
         </span>
       </div>
       <el-button size="small" text @click="checkFfmpeg">
@@ -340,45 +344,55 @@ onUnmounted(() => {
     </div>
 
     <!-- Filters -->
-    <div class="flex items-center justify-between mb-4 card-static">
-      <div class="flex items-center gap-3 flex-wrap">
-        <div class="flex items-center gap-2">
-          <span class="text-xs text-gray-500">来源:</span>
-          <el-button
-            v-for="f in [{ k: 'all', l: '全部' }, { k: 'download', l: '下载队列' }, { k: 'upload', l: '本地上传' }]"
-            :key="f.k" size="small"
-            :type="sourceFilter === f.k ? 'primary' : 'default'"
-            :plain="sourceFilter !== f.k"
-            @click="sourceFilter = f.k"
-          >{{ f.l }}</el-button>
-        </div>
-        <span class="text-gray-600 mx-1">|</span>
-        <div class="flex items-center gap-2">
-          <span class="text-xs text-gray-500">状态:</span>
-          <el-button
-            v-for="f in [
-              { k: 'all', l: '全部' }, { k: 'pending', l: '待转码' }, { k: 'running', l: '转码中' },
-              { k: 'completed', l: '已转码' }, { k: 'failed', l: '失败' },
-            ]"
-            :key="f.k" size="small"
-            :type="statusFilter === f.k ? 'primary' : 'default'"
-            :plain="statusFilter !== f.k"
-            @click="statusFilter = f.k"
-          >{{ f.l }}</el-button>
-        </div>
-      </div>
-      <el-input
-        v-model="keyword"
-        placeholder="搜索文件名..."
-        size="small"
-        class="!w-52"
-        clearable
-        :prefix-icon="undefined"
-      >
-        <template #prefix>
-          <i class="fas fa-search text-gray-500 text-[11px]"></i>
-        </template>
-      </el-input>
+    <div class="flex items-center gap-2 flex-wrap mb-4 card-static">
+      <span class="inline-flex items-center gap-1">
+        <span class="text-xs text-gray-400 flex-shrink-0">来源：</span>
+        <el-select v-model="sourceFilter" size="small" class="!w-28">
+          <el-option label="全部" value="all" />
+          <el-option label="下载队列" value="download" />
+          <el-option label="本地上传" value="upload" />
+        </el-select>
+      </span>
+      <span class="inline-flex items-center gap-1">
+        <span class="text-xs text-gray-400 flex-shrink-0">状态：</span>
+        <el-select v-model="statusFilter" size="small" class="!w-28">
+          <el-option label="全部" value="all" />
+          <el-option label="待转码" value="pending" />
+          <el-option label="转码中" value="running" />
+          <el-option label="已转码" value="completed" />
+          <el-option label="转码失败" value="failed" />
+        </el-select>
+      </span>
+      <span class="inline-flex items-center gap-1">
+        <span class="text-xs text-gray-400 flex-shrink-0">搜索：</span>
+        <el-input
+          v-model="keyword" size="small" placeholder="搜索文件名"
+          clearable @keyup.enter="page=1;fetchTasks()" @clear="page=1;fetchTasks()"
+          class="!w-52"
+        />
+      </span>
+      <span class="inline-flex items-center gap-1">
+        <el-button size="small" plain @click="page=1;fetchTasks()"><i class="fas fa-search mr-1"></i>搜索</el-button>
+        <el-button size="small" plain @click="resetFilters"><i class="fas fa-undo mr-1"></i>重置</el-button>
+        <el-button size="small" plain @click="fetchTasks()"><i class="fas fa-sync-alt mr-1"></i>刷新</el-button>
+        <el-button
+          v-if="selectedIds.length" size="small" plain type="warning"
+          @click="clearAllSelections"
+        >
+          <i class="fas fa-times-circle mr-1"></i>清空选择 ({{ selectedIds.length }})
+        </el-button>
+      </span>
+    </div>
+
+    <!-- Batch bar -->
+    <div v-if="selectedIds.length" class="flex items-center gap-2 mb-3">
+      <span class="text-xs text-gray-400">已选 {{ selectedIds.length }} 项</span>
+      <el-button type="primary" size="small" plain @click="batchStart">
+        <i class="fas fa-play mr-1"></i>批量转码
+      </el-button>
+      <el-button type="danger" size="small" plain @click="batchDelete">
+        <i class="fas fa-trash-can mr-1"></i>批量删除
+      </el-button>
     </div>
 
     <!-- Task Table -->
@@ -392,13 +406,13 @@ onUnmounted(() => {
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="40" fixed="left" :reserve-selection="true" />
-        <el-table-column type="index" label="#" width="50" align="center" fixed="left" />
+        <el-table-column type="index" label="序号" width="55" align="center" fixed="left" />
         <el-table-column label="文件名" min-width="200" show-overflow-tooltip fixed="left">
           <template #default="{ row }">
             <span class="text-xs text-gray-300">{{ fileName(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="来源" width="100">
+        <el-table-column label="来源" width="90">
           <template #default="{ row }">
             <span
               class="text-xs"
@@ -436,29 +450,21 @@ onUnmounted(() => {
         <el-table-column label="操作" min-width="280" align="center">
           <template #default="{ row }">
             <div class="flex items-center justify-center gap-1 flex-wrap">
-              <!-- pending / paused -->
               <el-button v-if="canStart(row.status)" size="small" type="primary" plain @click="startTask(row.id)">
                 <i class="fas fa-play mr-1"></i>转码
               </el-button>
-              <!-- running -->
               <el-button v-if="canStop(row.status)" size="small" type="danger" plain @click="stopTask(row.id)">
                 <i class="fas fa-stop mr-1"></i>停止
               </el-button>
-              <!-- completed -->
-              <el-button v-if="row.status === 'completed'" size="small" plain @click="viewCommand(row)">
+              <el-button v-if="row.status === 'completed' || row.status === 'failed'" size="small" plain @click="viewCommand(row)">
                 <i class="fas fa-terminal mr-1"></i>查看命令
               </el-button>
               <el-button v-if="row.status === 'completed'" size="small" plain @click="reRunTask(row.id)">
                 <i class="fas fa-rotate-right mr-1"></i>重新转码
               </el-button>
-              <!-- failed -->
-              <el-button v-if="row.status === 'failed'" size="small" plain @click="viewCommand(row)">
-                <i class="fas fa-terminal mr-1"></i>查看命令
-              </el-button>
               <el-button v-if="canRetry(row.status)" size="small" type="warning" plain @click="retryTask(row.id)">
                 <i class="fas fa-redo mr-1"></i>重试
               </el-button>
-              <!-- delete -->
               <el-button v-if="canDelete(row.status)" size="small" type="danger" plain @click="deleteTask(row.id)">
                 <i class="fas fa-trash-can mr-1"></i>删除
               </el-button>
@@ -467,24 +473,23 @@ onUnmounted(() => {
         </el-table-column>
       </el-table>
 
-      <div v-else class="text-center py-12 text-gray-500 text-sm">
+      <div v-if="!tasks.length && !loading" class="text-center py-16 text-gray-500 text-sm">
         <i class="fas fa-gear text-3xl mb-3 inline-block opacity-30"></i>
         <div>暂无转码任务</div>
         <div class="text-xs text-gray-600 mt-1">上传音视频文件或从下载队列导入以开始转码</div>
       </div>
 
-      <!-- Pagination -->
-      <div v-if="total > pageSize" class="flex justify-end mt-4">
+      <div v-if="total > 0" class="flex justify-end mt-4">
         <el-pagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :page-sizes="pageSizes"
           :total="total"
           layout="total, sizes, prev, pager, next"
-          small
+          size="small"
           background
-          @current-change="onPageChange"
           @size-change="onPageSizeChange"
+          @current-change="onPageChange"
         />
       </div>
     </div>
@@ -510,9 +515,7 @@ onUnmounted(() => {
               <span class="text-xs text-gray-300 truncate">{{ pf.name }}</span>
               <span class="text-[11px] text-gray-600 flex-shrink-0">{{ (pf.file.size / 1024 / 1024).toFixed(1) }} MB</span>
             </div>
-            <el-button size="small" type="danger" circle plain @click="removePendingFile(i)">
-              <i class="fas fa-xmark"></i>
-            </el-button>
+            <el-button size="small" type="danger" circle plain @click="removePendingFile(i)"><i class="fas fa-xmark"></i></el-button>
           </div>
         </div>
         <div v-else class="text-center py-4 text-xs text-gray-600">尚未选择文件</div>
@@ -531,12 +534,6 @@ onUnmounted(() => {
     </el-dialog>
 
     <!-- Command Dialog -->
-    <CommandDialog
-      v-model="cmdDialog"
-      :title="cmdTitle"
-      :commands="cmdCommands"
-      :details="cmdDetails"
-      :loading="cmdLoading"
-    />
+    <CommandDialog v-model="cmdDialog" :title="cmdTitle" :commands="cmdCommands" :details="cmdDetails" :loading="cmdLoading" />
   </div>
 </template>

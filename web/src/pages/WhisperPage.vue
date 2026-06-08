@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, reactive } from 'vue'
 import { whisperAPI } from '../api'
 import api from '../api/client'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -15,6 +15,10 @@ const statusLoading = ref(false)
 const tasks = ref<any[]>([])
 const results = ref<any[]>([])
 const selectedIds = ref<string[]>([])
+const selectedItemsMeta = reactive<Record<string, any>>({})
+const tableRef = ref<any>(null)
+let syncingSelection = false
+const loading = ref(false)
 
 // --- Filters ---
 const statusFilter = ref('all')
@@ -68,17 +72,21 @@ async function checkStatus() {
 }
 
 async function fetchTasks() {
-  const params: Record<string, any> = {
-    type: 'whisper',
-    page: page.value,
-    pageSize: pageSize.value,
-  }
-  if (statusFilter.value !== 'all') params.status = statusFilter.value
-  if (keyword.value) params.keyword = keyword.value
+  loading.value = true
+  try {
+    const params: any = { page: page.value, pageSize: pageSize.value }
+    if (statusFilter.value !== 'all') params.status = statusFilter.value
+    if (keyword.value.trim()) params.keyword = keyword.value.trim()
 
-  const { data } = await api.get('/tasks', { params })
-  tasks.value = data.items || data
-  total.value = data.total || (Array.isArray(data) ? data.length : 0)
+    const { data } = await api.get('/tasks', { params: { ...params, type: 'whisper' } })
+    tasks.value = data.items || data
+    total.value = data.total || (Array.isArray(data) ? data.length : 0)
+    await nextTick()
+    syncTableSelection()
+  } catch {
+    ElMessage.error('获取任务列表失败')
+  }
+  loading.value = false
 }
 
 async function fetchResults() {
@@ -86,25 +94,56 @@ async function fetchResults() {
   results.value = data
 }
 
-async function refresh() {
-  await checkStatus()
-  await fetchTasks()
-  await fetchResults()
-}
-
-// Debounced keyword filter
-let keywordTimer: any
-watch([statusFilter], () => {
+// --- Filters watch ---
+watch([statusFilter, keyword], () => {
   page.value = 1
   fetchTasks()
 })
-watch(keyword, () => {
-  clearTimeout(keywordTimer)
-  keywordTimer = setTimeout(() => {
-    page.value = 1
-    fetchTasks()
-  }, 300)
-})
+
+function resetFilters() {
+  keyword.value = ''
+  statusFilter.value = 'all'
+  page.value = 1
+  fetchTasks()
+}
+
+// --- Selection ---
+function handleSelectionChange(rows: any[]) {
+  if (syncingSelection) return
+  const visibleIds = new Set(tasks.value.map((t: any) => t.id))
+  const newSelected = new Map(rows.map((r: any) => [r.id, r]))
+  for (const id of visibleIds) {
+    if (!newSelected.has(id)) {
+      selectedIds.value = selectedIds.value.filter(x => x !== id)
+      delete selectedItemsMeta[id]
+    }
+  }
+  for (const [id, row] of newSelected) {
+    if (!selectedIds.value.includes(id)) selectedIds.value.push(id)
+    selectedItemsMeta[id] = { id, status: row.status }
+  }
+}
+
+function syncTableSelection() {
+  if (!tableRef.value) return
+  syncingSelection = true
+  tasks.value.forEach((row: any) => {
+    if (selectedIds.value.includes(row.id)) tableRef.value.toggleRowSelection(row, true)
+  })
+  syncingSelection = false
+}
+
+async function clearAllSelections() {
+  try {
+    await ElMessageBox.confirm(
+      `确定要清空全部 ${selectedIds.value.length} 个选择吗？`, '清空选择',
+      { type: 'warning', confirmButtonText: '确定清空', cancelButtonText: '取消' },
+    )
+    for (const id of selectedIds.value) delete selectedItemsMeta[id]
+    selectedIds.value = []
+    tableRef.value?.clearSelection()
+  } catch { /* cancelled */ }
+}
 
 // --- Task Operations ---
 async function startTask(id: string) {
@@ -164,9 +203,7 @@ function viewCommand(task: any) {
     { label: '模式', value: whisperStatus.value?.mode === 'api' ? 'API 远端' : '本地 CLI' },
     { label: '输出格式', value: task.payload?.options?.response_format || 'json' },
   ]
-  cmdCommands.value = [
-    { label: '等效命令', content: getWhisperCommand(task) },
-  ]
+  cmdCommands.value = [{ label: '等效命令', content: getWhisperCommand(task) }]
   cmdLoading.value = false
   cmdDialog.value = true
 }
@@ -190,18 +227,12 @@ function copyResultText() {
     .catch(() => ElMessage.error('复制失败'))
 }
 
-// --- Selection ---
-function handleSelectionChange(rows: any[]) {
-  selectedIds.value = rows.map((r: any) => r.id)
-}
-
+// --- Batch ---
 async function batchDelete() {
   if (!selectedIds.value.length) { ElMessage.warning('请先选择任务'); return }
   try {
     await ElMessageBox.confirm(`确定要删除选中的 ${selectedIds.value.length} 个任务吗？`, '批量删除', { type: 'warning' })
-    for (const id of selectedIds.value) {
-      await whisperAPI.deleteTask(id).catch(() => {})
-    }
+    for (const id of selectedIds.value) await whisperAPI.deleteTask(id).catch(() => {})
     ElMessage.success(`已删除 ${selectedIds.value.length} 个任务`)
     selectedIds.value = []
     fetchTasks()
@@ -212,9 +243,7 @@ async function batchStart() {
   if (!selectedIds.value.length) { ElMessage.warning('请先选择任务'); return }
   try {
     await ElMessageBox.confirm(`将为选中的 ${selectedIds.value.length} 个任务启动识别`, '批量识别', { type: 'info' })
-    for (const id of selectedIds.value) {
-      await whisperAPI.startTask(id).catch(() => {})
-    }
+    for (const id of selectedIds.value) await whisperAPI.startTask(id).catch(() => {})
     ElMessage.success('批量识别已提交')
     selectedIds.value = []
     fetchTasks()
@@ -222,18 +251,15 @@ async function batchStart() {
 }
 
 async function autoProcessAll() {
-  const pendingTasks = tasks.value.filter((t: any) => t.status === 'pending')
-  if (!pendingTasks.length) { ElMessage.info('没有待处理的识别任务'); return }
+  const pending = tasks.value.filter((t: any) => t.status === 'pending')
+  if (!pending.length) { ElMessage.info('没有待处理的识别任务'); return }
   try {
     await ElMessageBox.confirm(
-      `当前有 ${pendingTasks.length} 个待识别任务，确认一键自动识别全部吗？`,
-      '一键自动识别',
-      { type: 'info', confirmButtonText: '开始' },
+      `当前有 ${pending.length} 个待识别任务，确认一键自动识别全部吗？`,
+      '一键自动识别', { type: 'info', confirmButtonText: '开始' },
     )
-    for (const t of pendingTasks) {
-      await whisperAPI.startTask(t.id).catch(() => {})
-    }
-    ElMessage.success(`已提交 ${pendingTasks.length} 个识别任务`)
+    for (const t of pending) await whisperAPI.startTask(t.id).catch(() => {})
+    ElMessage.success(`已提交 ${pending.length} 个识别任务`)
     fetchTasks()
   } catch { /* cancelled */ }
 }
@@ -253,7 +279,7 @@ function resultText(t: any) {
   return typeof text === 'string' ? text.slice(0, 80) + (text.length > 80 ? '...' : '') : text
 }
 
-// SSE
+// --- SSE ---
 function connectSSE() {
   sseConnection = new EventSource('/api/whisper/events')
   sseConnection.addEventListener('message', (e) => {
@@ -264,9 +290,7 @@ function connectSSE() {
         if (idx >= 0) {
           tasks.value[idx] = { ...tasks.value[idx], ...evt }
           if (evt.status === 'completed') fetchResults()
-        } else {
-          fetchTasks()
-        }
+        } else { fetchTasks() }
       }
     } catch { /* ignore */ }
   })
@@ -274,14 +298,13 @@ function connectSSE() {
 }
 
 onMounted(() => {
-  refresh()
+  checkStatus()
+  fetchTasks()
+  fetchResults()
   connectSSE()
 })
 
-onUnmounted(() => {
-  sseConnection?.close()
-  clearTimeout(keywordTimer)
-})
+onUnmounted(() => { sseConnection?.close() })
 </script>
 
 <template>
@@ -293,17 +316,6 @@ onUnmounted(() => {
         <p class="text-[13px] text-gray-500">Whisper 语音识别，将音频转为文字</p>
       </div>
       <div class="flex items-center gap-2">
-        <span v-if="selectedIds.length" class="text-xs text-gray-400">已选 {{ selectedIds.length }} 项</span>
-
-        <el-button v-if="selectedIds.length" type="primary" size="small" plain @click="batchStart">
-          <i class="fas fa-play mr-1"></i>批量识别
-        </el-button>
-        <el-button v-if="selectedIds.length" type="danger" size="small" plain @click="batchDelete">
-          <i class="fas fa-trash-can mr-1"></i>批量删除
-        </el-button>
-
-        <span class="text-gray-600 mx-1">|</span>
-
         <el-button type="primary" size="small" @click="autoProcessAll" :disabled="!tasks.filter((t: any) => t.status === 'pending').length">
           <i class="fas fa-forward-step mr-1"></i>一键自动识别
         </el-button>
@@ -311,22 +323,20 @@ onUnmounted(() => {
     </div>
 
     <!-- Whisper Status Bar -->
-    <div class="rounded-xl border p-4 mb-4"
+    <div class="rounded-xl border p-3 mb-4 flex items-center justify-between"
       :class="whisperStatus?.mode === 'unavailable' ? 'bg-red-500/5 border-red-500/20' : 'bg-blue-500/5 border-blue-500/20'"
     >
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-4" v-if="whisperStatus">
-          <span class="text-sm font-semibold" :class="whisperStatus.mode === 'unavailable' ? 'text-red-400' : 'text-blue-400'">
-            <i :class="whisperStatus.mode === 'api' ? 'fas fa-globe' : whisperStatus.mode === 'local' ? 'fas fa-terminal' : 'fas fa-circle-exclamation'" class="mr-1.5"></i>
-            {{ whisperStatus.mode === 'api' ? 'API 模式' : whisperStatus.mode === 'local' ? '本地 CLI 模式' : '不可用' }}
-          </span>
-          <span class="text-[11px] text-gray-600">{{ whisperStatus.detail }}</span>
-        </div>
-        <div v-else class="text-sm text-gray-500">检测中...</div>
-        <el-button size="small" text @click="checkStatus" :loading="statusLoading">
-          <i class="fas fa-arrows-rotate mr-1"></i>重新检测
-        </el-button>
+      <div class="flex items-center gap-4" v-if="whisperStatus">
+        <span class="text-sm font-semibold" :class="whisperStatus.mode === 'unavailable' ? 'text-red-400' : 'text-blue-400'">
+          <i :class="whisperStatus.mode === 'api' ? 'fas fa-globe' : whisperStatus.mode === 'local' ? 'fas fa-terminal' : 'fas fa-circle-exclamation'" class="mr-1.5"></i>
+          {{ whisperStatus.mode === 'api' ? 'API 模式' : whisperStatus.mode === 'local' ? '本地 CLI 模式' : '不可用' }}
+        </span>
+        <span class="text-[11px] text-gray-600">{{ whisperStatus.detail }}</span>
       </div>
+      <div v-else class="text-sm text-gray-500">检测中...</div>
+      <el-button size="small" text @click="checkStatus" :loading="statusLoading">
+        <i class="fas fa-arrows-rotate mr-1"></i>重新检测
+      </el-button>
     </div>
 
     <!-- Whisper Config -->
@@ -359,31 +369,47 @@ onUnmounted(() => {
     </div>
 
     <!-- Filters -->
-    <div class="flex items-center justify-between mb-4 card-static">
-      <div class="flex items-center gap-2">
-        <span class="text-xs text-gray-500">状态:</span>
+    <div class="flex items-center gap-2 flex-wrap mb-4 card-static">
+      <span class="inline-flex items-center gap-1">
+        <span class="text-xs text-gray-400 flex-shrink-0">状态：</span>
+        <el-select v-model="statusFilter" size="small" class="!w-28">
+          <el-option label="全部" value="all" />
+          <el-option label="待识别" value="pending" />
+          <el-option label="识别中" value="running" />
+          <el-option label="已识别" value="completed" />
+          <el-option label="识别失败" value="failed" />
+        </el-select>
+      </span>
+      <span class="inline-flex items-center gap-1">
+        <span class="text-xs text-gray-400 flex-shrink-0">搜索：</span>
+        <el-input
+          v-model="keyword" size="small" placeholder="搜索文件名"
+          clearable @keyup.enter="page=1;fetchTasks()" @clear="page=1;fetchTasks()"
+          class="!w-52"
+        />
+      </span>
+      <span class="inline-flex items-center gap-1">
+        <el-button size="small" plain @click="page=1;fetchTasks()"><i class="fas fa-search mr-1"></i>搜索</el-button>
+        <el-button size="small" plain @click="resetFilters"><i class="fas fa-undo mr-1"></i>重置</el-button>
+        <el-button size="small" plain @click="fetchTasks()"><i class="fas fa-sync-alt mr-1"></i>刷新</el-button>
         <el-button
-          v-for="f in [
-            { k: 'all', l: '全部' }, { k: 'pending', l: '待识别' }, { k: 'running', l: '识别中' },
-            { k: 'completed', l: '已识别' }, { k: 'failed', l: '失败' },
-          ]"
-          :key="f.k" size="small"
-          :type="statusFilter === f.k ? 'primary' : 'default'"
-          :plain="statusFilter !== f.k"
-          @click="statusFilter = f.k"
-        >{{ f.l }}</el-button>
-      </div>
-      <el-input
-        v-model="keyword"
-        placeholder="搜索文件名..."
-        size="small"
-        class="!w-52"
-        clearable
-      >
-        <template #prefix>
-          <i class="fas fa-search text-gray-500 text-[11px]"></i>
-        </template>
-      </el-input>
+          v-if="selectedIds.length" size="small" plain type="warning"
+          @click="clearAllSelections"
+        >
+          <i class="fas fa-times-circle mr-1"></i>清空选择 ({{ selectedIds.length }})
+        </el-button>
+      </span>
+    </div>
+
+    <!-- Batch bar -->
+    <div v-if="selectedIds.length" class="flex items-center gap-2 mb-3">
+      <span class="text-xs text-gray-400">已选 {{ selectedIds.length }} 项</span>
+      <el-button type="primary" size="small" plain @click="batchStart">
+        <i class="fas fa-play mr-1"></i>批量识别
+      </el-button>
+      <el-button type="danger" size="small" plain @click="batchDelete">
+        <i class="fas fa-trash-can mr-1"></i>批量删除
+      </el-button>
     </div>
 
     <!-- Task Table -->
@@ -392,6 +418,7 @@ onUnmounted(() => {
         <i class="fas fa-list-check text-blue-400"></i>识别任务
       </h3>
       <el-table
+        ref="tableRef"
         v-if="tasks.length"
         :data="tasks"
         size="small"
@@ -399,7 +426,7 @@ onUnmounted(() => {
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="40" fixed="left" :reserve-selection="true" />
-        <el-table-column type="index" label="#" width="50" align="center" fixed="left" />
+        <el-table-column type="index" label="序号" width="55" align="center" fixed="left" />
         <el-table-column label="文件名" min-width="200" show-overflow-tooltip fixed="left">
           <template #default="{ row }">
             <span class="text-xs text-gray-300">{{ fileName(row) }}</span>
@@ -443,7 +470,7 @@ onUnmounted(() => {
               <el-button v-if="canStop(row.status)" size="small" type="danger" plain @click="stopTask(row.id)">
                 <i class="fas fa-stop mr-1"></i>停止
               </el-button>
-              <el-button v-if="row.status === 'completed'" size="small" plain @click="viewCommand(row)">
+              <el-button v-if="row.status === 'completed' || row.status === 'failed'" size="small" plain @click="viewCommand(row)">
                 <i class="fas fa-terminal mr-1"></i>查看命令
               </el-button>
               <el-button v-if="row.status === 'completed' && row.result?.text" size="small" plain @click="viewResult(row.result)">
@@ -451,9 +478,6 @@ onUnmounted(() => {
               </el-button>
               <el-button v-if="row.status === 'completed'" size="small" plain @click="retryTask(row.id)">
                 <i class="fas fa-rotate-right mr-1"></i>重新识别
-              </el-button>
-              <el-button v-if="row.status === 'failed'" size="small" plain @click="viewCommand(row)">
-                <i class="fas fa-terminal mr-1"></i>查看命令
               </el-button>
               <el-button v-if="canRetry(row.status)" size="small" type="warning" plain @click="retryTask(row.id)">
                 <i class="fas fa-redo mr-1"></i>重试
@@ -466,23 +490,23 @@ onUnmounted(() => {
         </el-table-column>
       </el-table>
 
-      <div v-else class="text-center py-12 text-gray-500 text-sm">
+      <div v-if="!tasks.length && !loading" class="text-center py-16 text-gray-500 text-sm">
         <i class="fas fa-microphone text-3xl mb-3 inline-block opacity-30"></i>
         <div>暂无识别任务</div>
         <div class="text-xs text-gray-600 mt-1">转码完成后可在转码页面或自动化流水线中创建识别任务</div>
       </div>
 
-      <div v-if="total > pageSize" class="flex justify-end mt-4">
+      <div v-if="total > 0" class="flex justify-end mt-4">
         <el-pagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :page-sizes="pageSizes"
           :total="total"
           layout="total, sizes, prev, pager, next"
-          small
+          size="small"
           background
-          @current-change="onPageChange"
           @size-change="onPageSizeChange"
+          @current-change="onPageChange"
         />
       </div>
     </div>
@@ -515,13 +539,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Command Dialog -->
-    <CommandDialog
-      v-model="cmdDialog"
-      :title="cmdTitle"
-      :commands="cmdCommands"
-      :details="cmdDetails"
-      :loading="cmdLoading"
-    />
+    <CommandDialog v-model="cmdDialog" :title="cmdTitle" :commands="cmdCommands" :details="cmdDetails" :loading="cmdLoading" />
 
     <!-- Result Dialog -->
     <el-dialog v-model="resultDialog" :title="resultTitle" width="700px" destroy-on-close :close-on-click-modal="false">
@@ -537,9 +555,7 @@ onUnmounted(() => {
         {{ resultContent || '暂无文本' }}
       </div>
       <template #footer>
-        <el-button @click="copyResultText()">
-          <i class="fas fa-copy mr-1"></i>复制文本
-        </el-button>
+        <el-button @click="copyResultText()"><i class="fas fa-copy mr-1"></i>复制文本</el-button>
         <el-button @click="resultDialog = false">关闭</el-button>
       </template>
     </el-dialog>
