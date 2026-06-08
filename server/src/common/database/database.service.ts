@@ -42,6 +42,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN reimport_opts TEXT`) } catch { /* column exists */ }
     // --- ai_providers 表补列（多模型支持） ---
     try { this.db.exec(`ALTER TABLE ai_providers ADD COLUMN models TEXT NOT NULL DEFAULT '[]'`) } catch { /* column exists */ }
+    try { this.db.exec(`ALTER TABLE ai_results ADD COLUMN item_id TEXT REFERENCES crawl_items(id) ON DELETE SET NULL`) } catch { /* column exists */ }
     // 一次性迁移：将旧 default_model 同步到 models JSON（仅当 models 为空时）
     try {
       const rows = this.db.prepare(

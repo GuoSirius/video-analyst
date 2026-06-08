@@ -9,7 +9,6 @@ import { CrawlerModule } from './crawler/crawler.module'
 import { TranscoderModule } from './transcoder/transcoder.module'
 import { WhisperModule } from './whisper/whisper.module'
 import { AIModule } from './ai/ai.module'
-import { ExportModule } from './export/export.module'
 import { SettingsModule } from './settings/settings.module'
 import { DownloadModule } from './downloader/download.module'
 
@@ -29,7 +28,6 @@ import { DownloadModule } from './downloader/download.module'
     TranscoderModule,
     WhisperModule,
     AIModule,
-    ExportModule,
   ],
 })
 export class AppModule {}

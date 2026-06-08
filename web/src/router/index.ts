@@ -9,69 +9,34 @@ const router = createRouter({
       component: () => import('../pages/Dashboard.vue'),
     },
     {
-      path: '/crawler',
-      component: () => import('../layouts/CrawlerLayout.vue'),
-      children: [
-        {
-          path: '',
-          redirect: '/crawler/tasks',
-        },
-        {
-          path: 'tasks',
-          name: 'crawler-tasks',
-          component: () => import('../pages/CrawlerTasks.vue'),
-        },
-        {
-          path: 'items',
-          name: 'crawler-items',
-          component: () => import('../pages/CrawlerItems.vue'),
-        },
-      ],
+      path: '/crawler/tasks',
+      name: 'crawler-tasks',
+      component: () => import('../pages/CrawlerTasks.vue'),
     },
     {
-      path: '/media',
-      component: () => import('../layouts/MediaLayout.vue'),
-      children: [
-        {
-          path: '',
-          redirect: '/media/resources',
-        },
-        {
-          path: 'resources',
-          name: 'media-download',
-          component: () => import('../pages/Download.vue'),
-        },
-        {
-          path: 'transcode',
-          name: 'media-transcode',
-          component: () => import('../pages/Transcode.vue'),
-        },
-      ],
+      path: '/crawler/items',
+      name: 'crawler-items',
+      component: () => import('../pages/CrawlerItems.vue'),
     },
     {
-      path: '/ai',
-      component: () => import('../layouts/AiLayout.vue'),
-      children: [
-        {
-          path: '',
-          redirect: '/ai/whisper',
-        },
-        {
-          path: 'whisper',
-          name: 'ai-whisper',
-          component: () => import('../pages/WhisperPage.vue'),
-        },
-        {
-          path: 'summary',
-          name: 'ai-summary',
-          component: () => import('../pages/AISummary.vue'),
-        },
-      ],
+      path: '/downloads',
+      name: 'downloads',
+      component: () => import('../pages/DownloadPage.vue'),
     },
     {
-      path: '/export',
-      name: 'export',
-      component: () => import('../pages/Export.vue'),
+      path: '/transcode',
+      name: 'transcode',
+      component: () => import('../pages/TranscodePage.vue'),
+    },
+    {
+      path: '/whisper',
+      name: 'whisper',
+      component: () => import('../pages/WhisperPage.vue'),
+    },
+    {
+      path: '/ai-analysis',
+      name: 'ai-analysis',
+      component: () => import('../pages/AiAnalysisPage.vue'),
     },
     {
       path: '/providers',

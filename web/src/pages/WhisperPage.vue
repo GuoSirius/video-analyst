@@ -1,250 +1,547 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { whisperAPI, crawlerAPI } from '../api'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { whisperAPI } from '../api'
+import api from '../api/client'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { usePagination } from '../composables/usePagination'
+import StatusBadge from '../components/StatusBadge.vue'
+import CommandDialog from '../components/CommandDialog.vue'
 
-// --- State ---
-const crawlItems = ref<any[]>([])
+// --- Whisper Status ---
+const whisperStatus = ref<any>(null)
+const statusLoading = ref(false)
+
+// --- Data ---
 const tasks = ref<any[]>([])
 const results = ref<any[]>([])
-const selectedItemIds = ref<string[]>([])
-const statusFilter = ref('all')
+const selectedIds = ref<string[]>([])
 
-// Whisper options
+// --- Filters ---
+const statusFilter = ref('all')
+const keyword = ref('')
+
+// --- Pagination ---
+const { page, pageSize, total, pageSizes, onPageChange, onPageSizeChange } = usePagination({
+  defaultPageSize: 20,
+  onFetch: () => fetchTasks(),
+})
+
+// --- Whisper Config ---
 const whispModel = ref('base')
+const whispFormat = ref('json')
 const whispTemp = ref(0.0)
 const whispTempInc = ref(0.2)
-const whispFormat = ref('json')
+
+// --- Command Dialog ---
+const cmdDialog = ref(false)
+const cmdTitle = ref('')
+const cmdCommands = ref<{ label: string; content: string }[]>([])
+const cmdDetails = ref<{ label: string; value: string }[]>([])
+const cmdLoading = ref(false)
+
+// --- Result Dialog ---
+const resultDialog = ref(false)
+const resultTitle = ref('')
+const resultContent = ref('')
+const resultMeta = ref<{ label: string; value: string }[]>([])
+
+// --- SSE ---
+let sseConnection: EventSource | null = null
+
+const statusLabels: Record<string, string> = {
+  pending: '待识别',
+  running: '识别中',
+  completed: '已识别',
+  failed: '识别失败',
+  cancelled: '已取消',
+  paused: '已暂停',
+}
 
 // --- Actions ---
+async function checkStatus() {
+  statusLoading.value = true
+  try {
+    const { data } = await whisperAPI.getStatus()
+    whisperStatus.value = data
+  } catch { whisperStatus.value = null }
+  statusLoading.value = false
+}
+
+async function fetchTasks() {
+  const params: Record<string, any> = {
+    type: 'whisper',
+    page: page.value,
+    pageSize: pageSize.value,
+  }
+  if (statusFilter.value !== 'all') params.status = statusFilter.value
+  if (keyword.value) params.keyword = keyword.value
+
+  const { data } = await api.get('/tasks', { params })
+  tasks.value = data.items || data
+  total.value = data.total || (Array.isArray(data) ? data.length : 0)
+}
+
+async function fetchResults() {
+  const { data } = await whisperAPI.getResults()
+  results.value = data
+}
+
 async function refresh() {
-  const [items, t, r] = await Promise.all([
-    crawlerAPI.getItems(),
-    whisperAPI.getTasks(),
-    whisperAPI.getResults(),
-  ])
-  crawlItems.value = items.data
-  tasks.value = t.data
-  results.value = r.data
+  await checkStatus()
+  await fetchTasks()
+  await fetchResults()
 }
 
-async function startTranscribe() {
-  if (!selectedItemIds.value.length) { ElMessage.warning('请先选择媒体项'); return }
-  const { data } = await whisperAPI.transcribe({
-    itemIds: selectedItemIds.value,
-    options: {
-      model: whispModel.value,
-      temperature: whispTemp.value,
-      temperature_inc: whispTempInc.value,
-      response_format: whispFormat.value,
-    },
-  })
-  if (data.error) { ElMessage.error(data.error); return }
-  ElMessage.success(`已创建 ${data.tasks.length} 个识别任务`)
-  selectedItemIds.value = []
-  refresh()
-}
+// Debounced keyword filter
+let keywordTimer: any
+watch([statusFilter], () => {
+  page.value = 1
+  fetchTasks()
+})
+watch(keyword, () => {
+  clearTimeout(keywordTimer)
+  keywordTimer = setTimeout(() => {
+    page.value = 1
+    fetchTasks()
+  }, 300)
+})
 
-// Task operations
+// --- Task Operations ---
 async function startTask(id: string) {
-  try { await whisperAPI.startTask(id); ElMessage.success('任务已开始'); refresh() }
+  try { await whisperAPI.startTask(id); ElMessage.success('识别任务已开始'); fetchTasks() }
   catch { ElMessage.error('操作失败') }
 }
-async function pauseTask(id: string) {
-  try { await whisperAPI.pauseTask(id); ElMessage.success('任务已暂停'); refresh() }
-  catch { ElMessage.error('操作失败') }
-}
+
 async function stopTask(id: string) {
   try {
-    await ElMessageBox.confirm('确定要终止此任务吗？', '确认', { type: 'warning' })
-    await whisperAPI.stopTask(id); ElMessage.success('任务已终止'); refresh()
+    await ElMessageBox.confirm('确定要停止此识别任务吗？', '确认停止', { type: 'warning' })
+    await whisperAPI.stopTask(id); ElMessage.success('任务已停止'); fetchTasks()
   } catch { /* cancelled */ }
 }
+
 async function retryTask(id: string) {
-  try { await whisperAPI.retryTask(id); ElMessage.success('已重新加入队列'); refresh() }
+  try { await whisperAPI.retryTask(id); ElMessage.success('已重新加入队列'); fetchTasks() }
   catch { ElMessage.error('操作失败') }
 }
-async function reRunTask(id: string) {
-  try {
-    await ElMessageBox.confirm('确定要重新运行吗？', '确认', { type: 'warning' })
-    await whisperAPI.reRunTask(id); ElMessage.success('任务已重新运行'); refresh()
-  } catch { /* cancelled */ }
-}
+
 async function deleteTask(id: string) {
   try {
-    await ElMessageBox.confirm('确定要删除此任务吗？', '确认删除', { type: 'warning' })
-    await whisperAPI.deleteTask(id); ElMessage.success('任务已删除'); refresh()
+    await ElMessageBox.confirm('确定要删除此识别任务吗？', '确认删除', { type: 'warning' })
+    await whisperAPI.deleteTask(id); ElMessage.success('任务已删除'); fetchTasks()
+  } catch { /* cancelled */ }
+}
+
+// --- View Command ---
+function getWhisperCommand(task: any): string {
+  const p = task.payload || {}
+  const filePath = p.filePath || 'audio.wav'
+  const model = p.options?.model || 'base'
+  if (whisperStatus.value?.mode === 'api') {
+    const baseUrl = whisperStatus.value.detail?.match(/远端服务: (.+)/)?.[1] || 'MEMO_AI_BASE_URL'
+    return [
+      `curl -X POST "${baseUrl}/inference" \\`,
+      `  -F "file=@${filePath}" \\`,
+      `  -F "temperature=${whispTemp.value}" \\`,
+      `  -F "temperature_inc=${whispTempInc.value}" \\`,
+      `  -F "response_format=${whispFormat.value}"`,
+    ].join('\n')
+  }
+  return [
+    'whisper \\',
+    `  "${filePath}" \\`,
+    `  --model ${model} \\`,
+    `  --output_format ${whispFormat.value === 'vtt' ? 'vtt' : whispFormat.value === 'srt' ? 'srt' : 'txt'} \\`,
+    '  --output_dir /tmp/video-analyst-whisper',
+  ].join('\n')
+}
+
+function viewCommand(task: any) {
+  cmdLoading.value = true
+  cmdTitle.value = '识别命令详情'
+  cmdDetails.value = [
+    { label: '输入文件', value: (task.payload?.filePath || '').split(/[\\/]/).pop() || '-' },
+    { label: '模型', value: task.payload?.options?.model || 'base' },
+    { label: '模式', value: whisperStatus.value?.mode === 'api' ? 'API 远端' : '本地 CLI' },
+    { label: '输出格式', value: task.payload?.options?.response_format || 'json' },
+  ]
+  cmdCommands.value = [
+    { label: '等效命令', content: getWhisperCommand(task) },
+  ]
+  cmdLoading.value = false
+  cmdDialog.value = true
+}
+
+// --- View Result ---
+function viewResult(transcription: any) {
+  resultTitle.value = '识别结果'
+  resultContent.value = transcription.content || transcription.text || '暂无文本'
+  resultMeta.value = [
+    { label: '语言', value: transcription.language || 'auto' },
+    { label: '时长', value: transcription.duration ? `${transcription.duration}s` : '-' },
+    { label: '状态', value: transcription.status || '-' },
+    { label: '创建时间', value: transcription.created_at || '-' },
+  ]
+  resultDialog.value = true
+}
+
+function copyResultText() {
+  navigator.clipboard.writeText(resultContent.value)
+    .then(() => ElMessage.success('已复制到剪贴板'))
+    .catch(() => ElMessage.error('复制失败'))
+}
+
+// --- Selection ---
+function handleSelectionChange(rows: any[]) {
+  selectedIds.value = rows.map((r: any) => r.id)
+}
+
+async function batchDelete() {
+  if (!selectedIds.value.length) { ElMessage.warning('请先选择任务'); return }
+  try {
+    await ElMessageBox.confirm(`确定要删除选中的 ${selectedIds.value.length} 个任务吗？`, '批量删除', { type: 'warning' })
+    for (const id of selectedIds.value) {
+      await whisperAPI.deleteTask(id).catch(() => {})
+    }
+    ElMessage.success(`已删除 ${selectedIds.value.length} 个任务`)
+    selectedIds.value = []
+    fetchTasks()
+  } catch { /* cancelled */ }
+}
+
+async function batchStart() {
+  if (!selectedIds.value.length) { ElMessage.warning('请先选择任务'); return }
+  try {
+    await ElMessageBox.confirm(`将为选中的 ${selectedIds.value.length} 个任务启动识别`, '批量识别', { type: 'info' })
+    for (const id of selectedIds.value) {
+      await whisperAPI.startTask(id).catch(() => {})
+    }
+    ElMessage.success('批量识别已提交')
+    selectedIds.value = []
+    fetchTasks()
+  } catch { /* cancelled */ }
+}
+
+async function autoProcessAll() {
+  const pendingTasks = tasks.value.filter((t: any) => t.status === 'pending')
+  if (!pendingTasks.length) { ElMessage.info('没有待处理的识别任务'); return }
+  try {
+    await ElMessageBox.confirm(
+      `当前有 ${pendingTasks.length} 个待识别任务，确认一键自动识别全部吗？`,
+      '一键自动识别',
+      { type: 'info', confirmButtonText: '开始' },
+    )
+    for (const t of pendingTasks) {
+      await whisperAPI.startTask(t.id).catch(() => {})
+    }
+    ElMessage.success(`已提交 ${pendingTasks.length} 个识别任务`)
+    fetchTasks()
   } catch { /* cancelled */ }
 }
 
 // --- Helpers ---
-const filteredTasks = computed(() => {
-  if (statusFilter.value === 'all') return tasks.value
-  return tasks.value.filter((t: any) => t.status === statusFilter.value)
-})
-
-function statusLabel(s: string) {
-  const map: Record<string, string> = {
-    pending: '等待中', running: '进行中', completed: '已完成',
-    failed: '失败', cancelled: '已取消', paused: '已暂停',
-  }
-  return map[s] || s
-}
-
-function statusClass(s: string) {
-  const map: Record<string, string> = {
-    completed: 'badge-completed', running: 'badge-running',
-    failed: 'badge-failed', cancelled: 'badge-cancelled',
-    paused: 'badge-paused', pending: 'badge-pending',
-  }
-  return map[s] || ''
-}
-
 function canStart(s: string) { return s === 'pending' || s === 'paused' }
-function canPause(s: string) { return s === 'running' }
-function canStop(s: string) { return s === 'running' || s === 'paused' }
-function canRetry(s: string) { return s === 'failed' }
-function canReRun(s: string) { return s === 'completed' || s === 'failed' || s === 'cancelled' }
+function canStop(s: string) { return s === 'running' }
+function canRetry(s: string) { return s === 'failed' || s === 'cancelled' }
 function canDelete(s: string) { return s !== 'running' }
 
-onMounted(refresh)
+function fileName(t: any) {
+  return (t.payload?.filePath || '').split(/[\\/]/).pop() || t.id.slice(0, 12) + '...'
+}
+
+function resultText(t: any) {
+  const text = t.result?.text || t.result?.transcriptionId || '-'
+  return typeof text === 'string' ? text.slice(0, 80) + (text.length > 80 ? '...' : '') : text
+}
+
+// SSE
+function connectSSE() {
+  sseConnection = new EventSource('/api/whisper/events')
+  sseConnection.addEventListener('message', (e) => {
+    try {
+      const evt = JSON.parse(e.data)
+      if (evt.type === 'whisper' || !evt.type) {
+        const idx = tasks.value.findIndex((t: any) => t.id === evt.taskId)
+        if (idx >= 0) {
+          tasks.value[idx] = { ...tasks.value[idx], ...evt }
+          if (evt.status === 'completed') fetchResults()
+        } else {
+          fetchTasks()
+        }
+      }
+    } catch { /* ignore */ }
+  })
+  sseConnection.onerror = () => { /* reconnect */ }
+}
+
+onMounted(() => {
+  refresh()
+  connectSSE()
+})
+
+onUnmounted(() => {
+  sseConnection?.close()
+  clearTimeout(keywordTimer)
+})
 </script>
 
 <template>
   <div class="px-7 py-6">
+    <!-- Header -->
     <div class="flex items-center justify-between mb-5">
       <div>
-        <h2 class="text-lg font-bold mb-1">文字提取</h2>
+        <h2 class="text-lg font-bold mb-1">语音识别</h2>
         <p class="text-[13px] text-gray-500">Whisper 语音识别，将音频转为文字</p>
       </div>
-    </div>
+      <div class="flex items-center gap-2">
+        <span v-if="selectedIds.length" class="text-xs text-gray-400">已选 {{ selectedIds.length }} 项</span>
 
-    <!-- Source items -->
-    <div class="card-static mb-5">
-      <h3 class="text-sm font-semibold mb-4 flex items-center gap-2">
-        <i class="fas fa-microphone text-violet-400"></i>选择媒体项进行识别
-      </h3>
-      <el-table
-        v-if="crawlItems.length"
-        :data="crawlItems"
-        size="small"
-        row-key="id"
-        max-height="250"
-        @selection-change="(rows: any) => selectedItemIds = rows.map((r: any) => r.id)"
-      >
-        <el-table-column type="selection" width="40" />
-        <el-table-column prop="title" label="标题" show-overflow-tooltip min-width="200" />
-        <el-table-column label="来源" width="140">
-          <template #default="{ row }">
-            <span class="text-xs text-gray-400">{{ row.media_source || '-' }}</span>
-          </template>
-        </el-table-column>
-      </el-table>
-      <div v-else class="text-xs text-gray-500 py-4">暂无采集数据，请先去爬虫页面采集内容</div>
-
-      <div class="mt-4 space-y-3">
-        <el-button type="primary" :disabled="!selectedItemIds.length" @click="startTranscribe">
-          <i class="fas fa-play mr-1.5"></i>开始识别 ({{ selectedItemIds.length }})
+        <el-button v-if="selectedIds.length" type="primary" size="small" plain @click="batchStart">
+          <i class="fas fa-play mr-1"></i>批量识别
+        </el-button>
+        <el-button v-if="selectedIds.length" type="danger" size="small" plain @click="batchDelete">
+          <i class="fas fa-trash-can mr-1"></i>批量删除
         </el-button>
 
-        <details class="text-xs text-gray-500">
-          <summary class="cursor-pointer text-gray-400">识别参数</summary>
-          <div class="grid grid-cols-2 gap-x-6 gap-y-2 mt-2 ml-4">
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-gray-500 w-20">模型</span>
-              <el-select v-model="whispModel" size="small" class="!w-28">
-                <el-option v-for="m in ['tiny', 'base', 'small', 'medium', 'large']" :key="m" :label="m" :value="m" />
-              </el-select>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-gray-500 w-20">输出格式</span>
-              <el-select v-model="whispFormat" size="small" class="!w-28">
-                <el-option v-for="f in ['json', 'text', 'srt', 'vtt']" :key="f" :label="f" :value="f" />
-              </el-select>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-gray-500 w-20">Temperature</span>
-              <el-input-number v-model="whispTemp" :min="0" :max="1" :step="0.1" :precision="1" size="small" class="!w-28" />
-              <span class="text-[10px] text-gray-600">仅API</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-gray-500 w-20">Temp Inc</span>
-              <el-input-number v-model="whispTempInc" :min="0" :max="1" :step="0.1" :precision="1" size="small" class="!w-28" />
-              <span class="text-[10px] text-gray-600">仅API</span>
-            </div>
-          </div>
-        </details>
+        <span class="text-gray-600 mx-1">|</span>
+
+        <el-button type="primary" size="small" @click="autoProcessAll" :disabled="!tasks.filter((t: any) => t.status === 'pending').length">
+          <i class="fas fa-forward-step mr-1"></i>一键自动识别
+        </el-button>
       </div>
     </div>
 
-    <!-- Task list -->
-    <div class="card-static mb-5">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-sm font-semibold flex items-center gap-2">
-          <i class="fas fa-list-check text-blue-400"></i>识别任务
-        </h3>
-        <div class="flex gap-2">
-          <el-button
-            v-for="f in [{ k: 'all', l: '全部' }, { k: 'running', l: '进行中' }, { k: 'completed', l: '已完成' }, { k: 'failed', l: '失败' }]"
-            :key="f.k" size="small"
-            :type="statusFilter === f.k ? 'primary' : 'default'"
-            :plain="statusFilter !== f.k"
-            @click="statusFilter = f.k"
-          >{{ f.l }}</el-button>
+    <!-- Whisper Status Bar -->
+    <div class="rounded-xl border p-4 mb-4"
+      :class="whisperStatus?.mode === 'unavailable' ? 'bg-red-500/5 border-red-500/20' : 'bg-blue-500/5 border-blue-500/20'"
+    >
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-4" v-if="whisperStatus">
+          <span class="text-sm font-semibold" :class="whisperStatus.mode === 'unavailable' ? 'text-red-400' : 'text-blue-400'">
+            <i :class="whisperStatus.mode === 'api' ? 'fas fa-globe' : whisperStatus.mode === 'local' ? 'fas fa-terminal' : 'fas fa-circle-exclamation'" class="mr-1.5"></i>
+            {{ whisperStatus.mode === 'api' ? 'API 模式' : whisperStatus.mode === 'local' ? '本地 CLI 模式' : '不可用' }}
+          </span>
+          <span class="text-[11px] text-gray-600">{{ whisperStatus.detail }}</span>
+        </div>
+        <div v-else class="text-sm text-gray-500">检测中...</div>
+        <el-button size="small" text @click="checkStatus" :loading="statusLoading">
+          <i class="fas fa-arrows-rotate mr-1"></i>重新检测
+        </el-button>
+      </div>
+    </div>
+
+    <!-- Whisper Config -->
+    <div class="card-static mb-4">
+      <h3 class="text-sm font-semibold mb-3 flex items-center gap-2">
+        <i class="fas fa-sliders text-blue-400"></i>识别配置
+      </h3>
+      <div class="grid grid-cols-4 gap-4">
+        <div>
+          <div class="text-xs text-gray-400 mb-1.5">模型</div>
+          <el-select v-model="whispModel" size="small" class="!w-full">
+            <el-option v-for="m in ['tiny', 'base', 'small', 'medium', 'large']" :key="m" :label="m" :value="m" />
+          </el-select>
+        </div>
+        <div>
+          <div class="text-xs text-gray-400 mb-1.5">输出格式</div>
+          <el-select v-model="whispFormat" size="small" class="!w-full">
+            <el-option v-for="f in ['json', 'text', 'srt', 'vtt']" :key="f" :label="f" :value="f" />
+          </el-select>
+        </div>
+        <div>
+          <div class="text-xs text-gray-400 mb-1.5">Temperature <span class="text-[10px] text-gray-600">(仅API)</span></div>
+          <el-input-number v-model="whispTemp" :min="0" :max="1" :step="0.1" :precision="1" size="small" class="!w-full" />
+        </div>
+        <div>
+          <div class="text-xs text-gray-400 mb-1.5">Temp Inc <span class="text-[10px] text-gray-600">(仅API)</span></div>
+          <el-input-number v-model="whispTempInc" :min="0" :max="1" :step="0.1" :precision="1" size="small" class="!w-full" />
         </div>
       </div>
+    </div>
 
-      <el-table v-if="filteredTasks.length" :data="filteredTasks" size="small" row-key="id">
-        <el-table-column label="文件" min-width="160" show-overflow-tooltip>
+    <!-- Filters -->
+    <div class="flex items-center justify-between mb-4 card-static">
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-500">状态:</span>
+        <el-button
+          v-for="f in [
+            { k: 'all', l: '全部' }, { k: 'pending', l: '待识别' }, { k: 'running', l: '识别中' },
+            { k: 'completed', l: '已识别' }, { k: 'failed', l: '失败' },
+          ]"
+          :key="f.k" size="small"
+          :type="statusFilter === f.k ? 'primary' : 'default'"
+          :plain="statusFilter !== f.k"
+          @click="statusFilter = f.k"
+        >{{ f.l }}</el-button>
+      </div>
+      <el-input
+        v-model="keyword"
+        placeholder="搜索文件名..."
+        size="small"
+        class="!w-52"
+        clearable
+      >
+        <template #prefix>
+          <i class="fas fa-search text-gray-500 text-[11px]"></i>
+        </template>
+      </el-input>
+    </div>
+
+    <!-- Task Table -->
+    <div class="card-static mb-5">
+      <h3 class="text-sm font-semibold mb-4 flex items-center gap-2">
+        <i class="fas fa-list-check text-blue-400"></i>识别任务
+      </h3>
+      <el-table
+        v-if="tasks.length"
+        :data="tasks"
+        size="small"
+        row-key="id"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="40" fixed="left" :reserve-selection="true" />
+        <el-table-column type="index" label="#" width="50" align="center" fixed="left" />
+        <el-table-column label="文件名" min-width="200" show-overflow-tooltip fixed="left">
           <template #default="{ row }">
-            <span class="text-xs text-gray-300">{{ row.payload?.filePath?.split(/[\\/]/).pop() || row.id.slice(0, 12) + '...' }}</span>
+            <span class="text-xs text-gray-300">{{ fileName(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="模型" width="90">
           <template #default="{ row }">
-            <span class="badge" :class="statusClass(row.status)">{{ statusLabel(row.status) }}</span>
+            <span class="text-xs text-gray-500">{{ row.payload?.options?.model || 'base' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <StatusBadge :status="row.status" :labels="statusLabels" />
           </template>
         </el-table-column>
         <el-table-column label="进度" width="140">
           <template #default="{ row }">
-            <el-progress :percentage="row.progress" :stroke-width="6"
-              :status="row.status === 'failed' ? 'exception' : row.status === 'completed' ? 'success' : undefined" />
+            <el-progress
+              :percentage="row.progress"
+              :stroke-width="6"
+              :status="row.status === 'failed' ? 'exception' : row.status === 'completed' ? 'success' : undefined"
+            />
           </template>
         </el-table-column>
-        <el-table-column label="操作" min-width="260" align="center">
+        <el-table-column label="结果预览" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="text-xs text-gray-500 font-mono">{{ resultText(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="150">
+          <template #default="{ row }">
+            <span class="text-xs text-gray-500">{{ row.created_at }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" min-width="300" align="center">
           <template #default="{ row }">
             <div class="flex items-center justify-center gap-1 flex-wrap">
               <el-button v-if="canStart(row.status)" size="small" type="primary" plain @click="startTask(row.id)">
-                {{ row.status === 'paused' ? '继续' : '开始' }}
+                <i class="fas fa-play mr-1"></i>识别
               </el-button>
-              <el-button v-if="canPause(row.status)" size="small" type="warning" plain @click="pauseTask(row.id)">暂停</el-button>
-              <el-button v-if="canStop(row.status)" size="small" type="danger" plain @click="stopTask(row.id)">终止</el-button>
-              <el-button v-if="canRetry(row.status)" size="small" type="warning" plain @click="retryTask(row.id)">重试</el-button>
-              <el-button v-if="canReRun(row.status)" size="small" plain @click="reRunTask(row.id)">重新运行</el-button>
-              <el-button v-if="canDelete(row.status)" size="small" type="danger" plain @click="deleteTask(row.id)">删除</el-button>
+              <el-button v-if="canStop(row.status)" size="small" type="danger" plain @click="stopTask(row.id)">
+                <i class="fas fa-stop mr-1"></i>停止
+              </el-button>
+              <el-button v-if="row.status === 'completed'" size="small" plain @click="viewCommand(row)">
+                <i class="fas fa-terminal mr-1"></i>查看命令
+              </el-button>
+              <el-button v-if="row.status === 'completed' && row.result?.text" size="small" plain @click="viewResult(row.result)">
+                <i class="fas fa-eye mr-1"></i>查看结果
+              </el-button>
+              <el-button v-if="row.status === 'completed'" size="small" plain @click="retryTask(row.id)">
+                <i class="fas fa-rotate-right mr-1"></i>重新识别
+              </el-button>
+              <el-button v-if="row.status === 'failed'" size="small" plain @click="viewCommand(row)">
+                <i class="fas fa-terminal mr-1"></i>查看命令
+              </el-button>
+              <el-button v-if="canRetry(row.status)" size="small" type="warning" plain @click="retryTask(row.id)">
+                <i class="fas fa-redo mr-1"></i>重试
+              </el-button>
+              <el-button v-if="canDelete(row.status)" size="small" type="danger" plain @click="deleteTask(row.id)">
+                <i class="fas fa-trash-can mr-1"></i>删除
+              </el-button>
             </div>
           </template>
         </el-table-column>
       </el-table>
-      <div v-else class="text-center py-8 text-gray-500 text-xs">暂无识别任务</div>
+
+      <div v-else class="text-center py-12 text-gray-500 text-sm">
+        <i class="fas fa-microphone text-3xl mb-3 inline-block opacity-30"></i>
+        <div>暂无识别任务</div>
+        <div class="text-xs text-gray-600 mt-1">转码完成后可在转码页面或自动化流水线中创建识别任务</div>
+      </div>
+
+      <div v-if="total > pageSize" class="flex justify-end mt-4">
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :page-sizes="pageSizes"
+          :total="total"
+          layout="total, sizes, prev, pager, next"
+          small
+          background
+          @current-change="onPageChange"
+          @size-change="onPageSizeChange"
+        />
+      </div>
     </div>
 
     <!-- Results -->
     <div v-if="results.length" class="card-static">
-      <h3 class="text-sm font-semibold mb-4">识别结果 ({{ results.length }})</h3>
+      <h3 class="text-sm font-semibold mb-4 flex items-center gap-2">
+        <i class="fas fa-file-lines text-violet-400"></i>识别结果 ({{ results.length }})
+      </h3>
       <div class="space-y-3 max-h-[500px] overflow-y-auto">
-        <div v-for="r in results" :key="r.id" class="p-4 rounded-lg bg-gray-900/40 border border-gray-700/30">
+        <div
+          v-for="r in results" :key="r.id"
+          class="p-4 rounded-lg bg-gray-900/40 border border-gray-700/30 hover:border-gray-600/40 cursor-pointer transition-colors"
+          @click="viewResult(r)"
+        >
           <div class="flex items-center justify-between mb-2">
-            <span class="badge" :class="r.status === 'completed' ? 'badge-completed' : 'badge-pending'">
-              {{ r.status === 'completed' ? '完成' : '处理中' }}
-            </span>
-            <span class="text-[11px] text-gray-600">{{ r.created_at }}</span>
+            <span class="text-xs text-gray-500 font-mono">{{ r.file_path?.split(/[\\/]/).pop() || '-' }}</span>
+            <div class="flex items-center gap-2">
+              <span v-if="r.language" class="text-[11px] text-gray-600">{{ r.language }}</span>
+              <span v-if="r.duration" class="text-[11px] text-gray-600">{{ r.duration }}s</span>
+              <span class="text-[11px] text-gray-600">{{ r.created_at }}</span>
+            </div>
           </div>
-          <div class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
+          <div class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap line-clamp-3">
             {{ r.content?.slice(0, 500) }}{{ r.content?.length > 500 ? '...' : '' }}
           </div>
+          <div v-if="!r.content" class="text-xs text-gray-600">暂无文本内容</div>
         </div>
       </div>
     </div>
+
+    <!-- Command Dialog -->
+    <CommandDialog
+      v-model="cmdDialog"
+      :title="cmdTitle"
+      :commands="cmdCommands"
+      :details="cmdDetails"
+      :loading="cmdLoading"
+    />
+
+    <!-- Result Dialog -->
+    <el-dialog v-model="resultDialog" :title="resultTitle" width="700px" destroy-on-close :close-on-click-modal="false">
+      <div v-if="resultMeta.length" class="rounded-lg bg-gray-900/50 border border-gray-700/30 p-3 mb-4">
+        <div class="flex items-center gap-4 flex-wrap">
+          <div v-for="m in resultMeta" :key="m.label" class="flex items-baseline gap-1.5 text-xs">
+            <span class="text-gray-500">{{ m.label }}:</span>
+            <span class="text-gray-300">{{ m.value }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="rounded-lg bg-[#0d1117] border border-gray-700/40 p-4 font-mono text-xs text-gray-300 leading-relaxed whitespace-pre-wrap max-h-[500px] overflow-y-auto">
+        {{ resultContent || '暂无文本' }}
+      </div>
+      <template #footer>
+        <el-button @click="copyResultText()">
+          <i class="fas fa-copy mr-1"></i>复制文本
+        </el-button>
+        <el-button @click="resultDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>

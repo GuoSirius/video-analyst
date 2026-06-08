@@ -4,10 +4,6 @@ import { computed } from 'vue'
 
 const route = useRoute()
 
-interface NavChild {
-  path: string
-  label: string
-}
 interface NavItem {
   path: string
   label: string
@@ -15,30 +11,24 @@ interface NavItem {
   children?: NavChild[]
 }
 
+interface NavChild {
+  path: string
+  label: string
+}
+
 const navItems: NavItem[] = [
   { path: '/', label: '仪表盘', icon: 'House' },
   {
-    path: '/crawler', label: '爬虫采集', icon: 'Connection',
+    path: '/crawler/list', label: '爬虫采集', icon: 'Connection',
     children: [
       { path: '/crawler/tasks', label: '任务列表' },
       { path: '/crawler/items', label: '采集列表' },
     ],
   },
-  {
-    path: '/media', label: '媒体资源', icon: 'Folder',
-    children: [
-      { path: '/media/resources', label: '资源管理' },
-      { path: '/media/transcode', label: '转码处理' },
-    ],
-  },
-  {
-    path: '/ai', label: 'AI 处理', icon: 'Cpu',
-    children: [
-      { path: '/ai/whisper', label: '文字提取' },
-      { path: '/ai/summary', label: '模型总结' },
-    ],
-  },
-  { path: '/export', label: '数据导出', icon: 'DocumentCopy' },
+  { path: '/downloads', label: '下载管理', icon: 'Folder' },
+  { path: '/transcode', label: '转码处理', icon: 'Film' },
+  { path: '/whisper', label: '语音识别', icon: 'Microphone' },
+  { path: '/ai-analysis', label: 'AI 分析', icon: 'Cpu' },
   { path: '/providers', label: '供应商管理', icon: 'Monitor' },
   { path: '/prompts', label: '提示词管理', icon: 'EditPen' },
 ]
@@ -55,7 +45,6 @@ const currentTitle = computed(() => {
 })
 
 const activeMenu = computed(() => {
-  // For submenu items, return the child path; for top-level, return the path
   for (const item of navItems) {
     if (item.children) {
       const child = item.children.find(c => c.path === route.path)
@@ -63,17 +52,6 @@ const activeMenu = computed(() => {
     }
   }
   return route.path
-})
-
-// Determine which sub-menus should be open
-const defaultOpeneds = computed(() => {
-  const opens: string[] = []
-  for (const item of navItems) {
-    if (item.children?.some(c => c.path === route.path)) {
-      opens.push(item.path)
-    }
-  }
-  return opens
 })
 </script>
 
@@ -97,7 +75,6 @@ const defaultOpeneds = computed(() => {
       <!-- Navigation -->
       <el-menu
         :default-active="activeMenu"
-        :default-openeds="defaultOpeneds"
         router
         class="flex-1 border-r-0 overflow-y-auto"
         background-color="transparent"

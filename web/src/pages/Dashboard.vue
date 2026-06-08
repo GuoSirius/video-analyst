@@ -2,10 +2,12 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { crawlerAPI, transcoderAPI, whisperAPI, aiAPI } from '../api'
+import { downloadAPI } from '../api/modules/download'
 
 const router = useRouter()
 const stats = ref<Record<string,any>>({
   crawler:{total:0,running:0,completed:0,failed:0},
+  download:{total:0,running:0,completed:0,failed:0},
   transcoder:{total:0,running:0,completed:0,failed:0},
   whisper:{total:0,running:0,completed:0,failed:0},
   ai:{total:0,running:0,completed:0,failed:0},
@@ -15,10 +17,11 @@ const recentItems = ref<any[]>([])
 let timer: any
 
 const modules = [
-  { key:'crawler',label:'爬虫采集',desc:'网页抓取与媒体链接提取',icon:'fa-bug',color:'text-blue-400',path:'/crawler' },
-  { key:'transcoder',label:'转码处理',desc:'FFmpeg 归一化转 WAV',icon:'fa-wand-magic-sparkles',color:'text-emerald-400',path:'/transcoder' },
-  { key:'whisper',label:'语音识别',desc:'Whisper 语音转文字',icon:'fa-microphone',color:'text-violet-400',path:'/ai' },
-  { key:'ai',label:'AI 分析',desc:'大模型总结与关键词提取',icon:'fa-robot',color:'text-amber-400',path:'/ai' },
+  { key:'crawler',label:'爬虫采集',desc:'网页抓取与媒体链接提取',icon:'fa-bug',color:'text-blue-400',path:'/crawler/tasks' },
+  { key:'download',label:'下载管理',desc:'文件下载与队列管理',icon:'fa-download',color:'text-sky-400',path:'/downloads' },
+  { key:'transcoder',label:'转码处理',desc:'FFmpeg 归一化转 WAV',icon:'fa-wand-magic-sparkles',color:'text-emerald-400',path:'/transcode' },
+  { key:'whisper',label:'语音识别',desc:'Whisper 语音转文字',icon:'fa-microphone',color:'text-violet-400',path:'/whisper' },
+  { key:'ai',label:'AI 分析',desc:'大模型总结与关键词提取',icon:'fa-robot',color:'text-amber-400',path:'/ai-analysis' },
 ]
 
 function countByStatus(tasks: any[]) {
@@ -26,11 +29,22 @@ function countByStatus(tasks: any[]) {
 }
 
 async function refresh() {
-  const [ct,tt,wt,at,items]=await Promise.all([crawlerAPI.getTasks(),transcoderAPI.getTasks(),whisperAPI.getTasks(),aiAPI.getTasks(),crawlerAPI.getItems()])
-  stats.value.crawler=countByStatus(ct.data);stats.value.transcoder=countByStatus(tt.data);stats.value.whisper=countByStatus(wt.data);stats.value.ai=countByStatus(at.data)
-  const all=[...ct.data,...tt.data,...wt.data,...at.data]
-  recentTasks.value=all.sort((a:any,b:any)=>b.updated_at.localeCompare(a.updated_at)).slice(0,8)
-  recentItems.value=(items.data?.data||[]).slice(0,6)
+  const [ct, dt, tt, wt, at, items] = await Promise.all([
+    crawlerAPI.getTasks(),
+    downloadAPI.getQueue(),
+    transcoderAPI.getTasks(),
+    whisperAPI.getTasks(),
+    aiAPI.getTasks(),
+    crawlerAPI.getItems(),
+  ])
+  stats.value.crawler = countByStatus(ct.data)
+  stats.value.download = countByStatus(dt.data || [])
+  stats.value.transcoder = countByStatus(tt.data)
+  stats.value.whisper = countByStatus(wt.data)
+  stats.value.ai = countByStatus(at.data)
+  const all = [...ct.data, ...(dt.data || []), ...tt.data, ...wt.data, ...at.data]
+  recentTasks.value = all.sort((a: any, b: any) => b.updated_at.localeCompare(a.updated_at)).slice(0, 10)
+  recentItems.value = (items.data?.data || []).slice(0, 6)
 }
 
 const runningCount=computed(()=>Object.values(stats.value).reduce((s:any,v:any)=>s+v.running,0))
@@ -38,10 +52,16 @@ const runningCount=computed(()=>Object.values(stats.value).reduce((s:any,v:any)=
 const taskName = (t: any) => {
   if (t.payload?.name) return t.payload.name
   if (t.type === 'crawl') return t.payload?.url || t.id.slice(0, 8)
+  if (t.type === 'download') return (t.payload?.fileName || t.payload?.url || '').slice(0, 40) || t.id.slice(0, 8)
   if (t.type === 'transcode') return (t.payload?.file || '').split(/[\\/]/).pop() || t.id.slice(0, 8)
   if (t.type === 'whisper') return (t.payload?.filePath || '').split(/[\\/]/).pop() || t.id.slice(0, 8)
   if (t.type === 'ai') return t.payload?.config?.prompt?.slice(0, 40) || 'AI 分析'
   return t.id.slice(0, 8)
+}
+
+const taskTypeLabel = (t: string) => {
+  const map: Record<string, string> = { crawl: '爬虫', download: '下载', transcode: '转码', whisper: '识别', ai: 'AI' }
+  return map[t] || t
 }
 
 const statusStyle=(s:string)=>({
@@ -60,7 +80,7 @@ onUnmounted(()=>clearInterval(timer))
     <h2 class="text-lg font-bold mb-1">工作台</h2>
     <p class="text-[13px] text-gray-500 mb-6">音视频采集 · 转码 · 识别 · 分析一站式处理</p>
 
-    <div class="grid grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-5 gap-4 mb-6">
       <div v-for="m in modules" :key="m.key" @click="router.push(m.path)"
         class="stat-card cursor-pointer border border-transparent hover:border-gray-600/40">
         <div class="flex items-start justify-between mb-3">
@@ -91,7 +111,7 @@ onUnmounted(()=>clearInterval(timer))
           <div v-for="t in recentTasks" :key="t.id" class="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-gray-900/40">
             <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] border" :class="statusStyle(t.status)">
               {{ t.status==='completed'?'完成':t.status==='running'?'进行中':t.status==='failed'?'失败':'等待' }}</span>
-            <span class="text-xs text-gray-500 w-10">{{ t.type==='crawl'?'爬虫':t.type==='transcode'?'转码':t.type==='whisper'?'识别':'AI' }}</span>
+            <span class="text-xs text-gray-500 w-10">{{ taskTypeLabel(t.type) }}</span>
             <span class="text-xs text-gray-400 truncate flex-1">{{ taskName(t) }}</span>
             <div v-if="t.status==='running'" class="w-16 bg-gray-700 rounded-full h-1"><div class="bg-blue-500 h-1 rounded-full" :style="{width:t.progress+'%'}"></div></div>
             <span class="text-[11px] text-gray-600 w-16 text-right">{{ t.updated_at?.slice(11,19) }}</span>
