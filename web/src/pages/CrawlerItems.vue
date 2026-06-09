@@ -5,6 +5,7 @@ import { crawlerAPI } from '../api'
 import { usePagination } from '../composables/usePagination'
 import { usePipelineSteps } from '../composables/usePipelineSteps'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { copyWithFeedback } from '../utils/clipboard'
 import dayjs from 'dayjs'
 
 const route = useRoute()
@@ -405,8 +406,7 @@ function copyJson() {
     source_url: detailItem.value.source_url,
     ...detailItem.value.extra,
   }
-  navigator.clipboard.writeText(JSON.stringify(obj, null, 2))
-  ElMessage.success('已复制到剪贴板')
+  copyWithFeedback(JSON.stringify(obj, null, 2))
 }
 
 // 来源选项（动态从数据中提取，支持用户手动输入自定义值）

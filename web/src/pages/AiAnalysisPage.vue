@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { aiAPI, whisperAPI, promptsAPI } from '../api'
 import api from '../api/client'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { copyWithFeedback } from '../utils/clipboard'
 import { usePagination } from '../composables/usePagination'
 import StatusBadge from '../components/StatusBadge.vue'
 
@@ -163,9 +164,7 @@ async function retryTask(id: string) {
 }
 
 function copyAnalysisResult() {
-  navigator.clipboard.writeText(resultContent.value)
-    .then(() => ElMessage.success('已复制到剪贴板'))
-    .catch(() => ElMessage.error('复制失败'))
+  copyWithFeedback(resultContent.value)
 }
 
 async function deleteTask(id: string) {

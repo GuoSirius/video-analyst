@@ -4,6 +4,7 @@ import api from '../api/client'
 import { usePagination } from '../composables/usePagination'
 import { usePipelineSteps } from '../composables/usePipelineSteps'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { copyWithFeedback } from '../utils/clipboard'
 import { downloadAPI } from '../api/modules/download'
 
 // --- State ---
@@ -914,15 +915,13 @@ async function showErrorDetail(task: any) {
 function copyCommand() {
   if (!errorTask.value) return
   const cmd = buildDownloadCommand(errorTask.value)
-  navigator.clipboard.writeText(cmd)
-  ElMessage.success('已复制多行命令到剪贴板')
+  copyWithFeedback(cmd, '已复制多行命令到剪贴板')
 }
 
 function copyCommandOneLine() {
   if (!errorTask.value) return
   const cmd = buildDownloadCommand(errorTask.value).replace(/ \\\n  /g, ' ')
-  navigator.clipboard.writeText(cmd)
-  ElMessage.success('已复制单行命令到剪贴板')
+  copyWithFeedback(cmd, '已复制单行命令到剪贴板')
 }
 
 // ── SSE ──

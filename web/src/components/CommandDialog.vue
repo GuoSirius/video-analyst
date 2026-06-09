@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { copyWithFeedback } from '@/utils/clipboard'
 
 const props = defineProps<{
   modelValue: boolean
@@ -21,9 +21,7 @@ watch(visible, v => { emit('update:modelValue', v) })
 const activeTab = ref(0)
 
 function copy(text: string) {
-  navigator.clipboard.writeText(text)
-    .then(() => ElMessage.success('已复制到剪贴板'))
-    .catch(() => ElMessage.error('复制失败'))
+  copyWithFeedback(text)
 }
 </script>
 

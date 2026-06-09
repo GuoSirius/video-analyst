@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, watch, nextTick, reactive } from 'vue'
 import { whisperAPI } from '../api'
 import api from '../api/client'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { copyWithFeedback } from '../utils/clipboard'
 import { usePagination } from '../composables/usePagination'
 import StatusBadge from '../components/StatusBadge.vue'
 import CommandDialog from '../components/CommandDialog.vue'
@@ -222,9 +223,7 @@ function viewResult(transcription: any) {
 }
 
 function copyResultText() {
-  navigator.clipboard.writeText(resultContent.value)
-    .then(() => ElMessage.success('已复制到剪贴板'))
-    .catch(() => ElMessage.error('复制失败'))
+  copyWithFeedback(resultContent.value)
 }
 
 // --- Batch ---
