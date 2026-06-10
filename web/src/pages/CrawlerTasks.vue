@@ -95,6 +95,8 @@ interface TransformRow {
   ytDlpExtractorRetries: number | null
   ytDlpGeoBypass: boolean
   ytDlpNoCheckCert: boolean
+  ytDlpAddHeaders: string
+  ytDlpExtractorArgs: string
   ytDlpRawArgs: string
   _showOptions: boolean
 }
@@ -107,7 +109,7 @@ function emptyTransform(): TransformRow {
     ytDlpFormat: '', ytDlpUserAgent: '', ytDlpReferer: '', ytDlpLimitRate: '',
     ytDlpUsername: '', ytDlpPassword: '', ytDlpRetries: null, ytDlpSleepInterval: null,
     ytDlpNoPlaylist: null, ytDlpSocketTimeout: null, ytDlpExtractorRetries: null,
-    ytDlpGeoBypass: false, ytDlpNoCheckCert: false, ytDlpRawArgs: '',
+    ytDlpGeoBypass: false, ytDlpNoCheckCert: false, ytDlpAddHeaders: '', ytDlpExtractorArgs: '', ytDlpRawArgs: '',
     _showOptions: false,
   }
 }
@@ -486,6 +488,26 @@ function buildYtDlpOptionsFromRow(t: TransformRow): any | undefined {
   if (t.ytDlpExtractorRetries != null) opts.extractorRetries = t.ytDlpExtractorRetries
   if (t.ytDlpGeoBypass) opts.geoBypass = true
   if (t.ytDlpNoCheckCert) opts.noCheckCertificates = true
+  if (t.ytDlpAddHeaders.trim()) {
+    const headers: Record<string, string> = {}
+    for (const line of t.ytDlpAddHeaders.split('\n').map(s => s.trim()).filter(Boolean)) {
+      const idx = line.indexOf(':')
+      if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+    }
+    if (Object.keys(headers).length > 0) opts.addHeaders = headers
+  }
+  if (t.ytDlpExtractorArgs.trim()) {
+    const args: Record<string, string[]> = {}
+    for (const line of t.ytDlpExtractorArgs.split('\n').map(s => s.trim()).filter(Boolean)) {
+      const idx = line.indexOf(':')
+      if (idx > 0) {
+        const site = line.slice(0, idx).trim()
+        const val = line.slice(idx + 1).trim()
+        args[site] = val.split(',').map(s => s.trim())
+      }
+    }
+    if (Object.keys(args).length > 0) opts.extractorArgs = args
+  }
   if (t.ytDlpRawArgs.trim()) {
     opts.rawArgs = t.ytDlpRawArgs.split('\n').map(s => s.trim()).filter(Boolean)
   }
@@ -520,6 +542,14 @@ function parseYtDlpOptionsToRow(t: TransformRow, opts: any) {
   t.ytDlpExtractorRetries = opts.extractorRetries ?? null
   t.ytDlpGeoBypass = opts.geoBypass ?? false
   t.ytDlpNoCheckCert = opts.noCheckCertificates ?? false
+  if (opts.addHeaders) {
+    t.ytDlpAddHeaders = Object.entries(opts.addHeaders as Record<string, string>)
+      .map(([k, v]) => `${k}: ${v}`).join('\n')
+  }
+  if (opts.extractorArgs) {
+    t.ytDlpExtractorArgs = Object.entries(opts.extractorArgs as Record<string, string[]>)
+      .map(([k, v]) => `${k}: ${v.join(', ')}`).join('\n')
+  }
   t.ytDlpRawArgs = opts.rawArgs?.join('\n') || ''
 }
 
@@ -1450,10 +1480,30 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
                       </div>
                       <el-input-number v-model="t.ytDlpExtractorRetries" :min="0" :max="99" size="small" />
                     </div>
+                    <div>
+                      <div class="text-[11px] text-gray-500 mb-1">禁止播放列表</div>
+                      <el-select v-model="t.ytDlpNoPlaylist" size="small" class="w-full" clearable placeholder="默认（禁止）">
+                        <el-option label="禁止" :value="true" />
+                        <el-option label="允许" :value="false" />
+                      </el-select>
+                    </div>
                   </div>
                   <div>
-                    <div class="text-[11px] text-gray-500 mb-1">额外命令行参数</div>
-                    <el-input v-model="t.ytDlpRawArgs" type="textarea" :rows="2" placeholder="--extractor-args youtube:player_client=web&#10;--add-header Referer:https://www.youtube.com/&#10;--no-playlist / --socket-timeout 60 等可覆盖默认参数" size="small" />
+                    <div class="text-[11px] text-gray-500 mb-1">自定义请求头</div>
+                    <el-input v-model="t.ytDlpAddHeaders" type="textarea" :rows="2" placeholder="Name: Value&#10;Referer: https://example.com/" size="small" />
+                  </div>
+                  <div>
+                    <div class="text-[11px] text-gray-500 mb-1">提取器参数</div>
+                    <el-input v-model="t.ytDlpExtractorArgs" type="textarea" :rows="2" placeholder="youtube: player_client=web&#10;youtube: player_skip=webpage" size="small" />
+                  </div>
+                  <div>
+                    <div class="text-[11px] text-gray-500 mb-1">
+                      额外命令行参数
+                      <el-tooltip content="优先级最高，会覆盖上述所有配置。参数需以 -- 开头，每行一个。" placement="top">
+                        <i class="fas fa-circle-exclamation text-amber-500 text-[10px] ml-0.5"></i>
+                      </el-tooltip>
+                    </div>
+                    <el-input v-model="t.ytDlpRawArgs" type="textarea" :rows="2" placeholder="--add-header Referer:https://www.youtube.com/&#10;--socket-timeout 60" size="small" />
                   </div>
                 </div>
               </div>

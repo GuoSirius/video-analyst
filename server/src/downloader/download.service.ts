@@ -694,7 +694,7 @@ export class DownloadService {
   /** 站点特有的默认 HTTP 请求头（避免 Referer 校验/反爬拦截） */
   private getSiteDefaultHeaders(url: string): string[] {
     const u = url.toLowerCase()
-    const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
     const headers: string[] = [`User-Agent:${DEFAULT_UA}`]
 
     if (u.includes('bilibili.com') || u.includes('b23.tv') || u.includes('bilivideo.com')) {
@@ -710,6 +710,56 @@ export class DownloadService {
     }
 
     return headers
+  }
+
+  /**
+   * 深度合并 addHeaders（三层：系统内置 → 全局 → 任务）
+   * - 传入格式为 `HeaderName:Value`
+   * - 空值（null/''）= 移除该 Header；undefined/缺失 = 沿用下层默认
+   * - 返回最终的 string[] 数组
+   */
+  private mergeAddHeaders(
+    siteDefault: string[],
+    globalHeaders: Record<string, string> | undefined | null,
+    taskHeaders: Record<string, string> | undefined | null,
+  ): string[] {
+    // 1. 从系统默认出发（string[] → Record）
+    const merged: Record<string, string> = {}
+    for (const h of siteDefault) {
+      const idx = h.indexOf(':')
+      if (idx > 0) merged[h.slice(0, idx)] = h.slice(idx + 1)
+    }
+
+    // 2. 合并一层（空值 = 删除该键）
+    const applyLayer = (src: Record<string, string> | undefined | null) => {
+      if (!src) return
+      for (const [name, val] of Object.entries(src)) {
+        if (val === undefined) continue
+        if (val === null || val === '') {
+          delete merged[name]
+        } else {
+          merged[name] = val
+        }
+      }
+    }
+    applyLayer(globalHeaders)
+    applyLayer(taskHeaders)
+
+    // 3. 输出为 string[]
+    return Object.entries(merged).map(([name, val]) => `${name}:${val}`)
+  }
+
+  /**
+   * 从 addHeaders 列表中移除指定 Header 名，返回 [start, deleteCount]
+   * 用于与 mergedAddHeaders.splice() 配合
+   */
+  private removeHeaderFromList(headers: string[], headerName: string): [number, number] {
+    const idx = headers.findIndex((h) => {
+      const colon = h.indexOf(':')
+      return colon > 0 && h.slice(0, colon).toLowerCase() === headerName.toLowerCase()
+    })
+    if (idx >= 0) return [idx, 1]
+    return [headers.length, 0]  // 未找到，不删除
   }
 
   /**
@@ -803,6 +853,202 @@ export class DownloadService {
   }
 
   // ════════════════════════════════════════════════════════════════
+  // yt-dlp 参数合并（系统内置 → 全局设置 → 任务配置 → 站点头）
+  // 与 downloadWithYtDlpLib 共用同一逻辑，保证 API 返回的命令和实际执行 100% 一致
+  // ════════════════════════════════════════════════════════════════
+
+  private static readonly SYSTEM_DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
+
+  /**
+   * 合并 yt-dlp 全部参数，返回 mergedOpts（标量参数 + addHeaders 等），
+   * 用于 downloadWithYtDlpLib 和 getEquivalentCommand 两个场景。
+   */
+  private mergeYtDlpOptions(task: any, url: string): {
+    mergedOpts: Record<string, any>
+    outputDir: string; outBase: string; realPath: string
+  } {
+    const filePath = task.file_path || ''
+    const isTmp = filePath.endsWith('.tmp')
+    const realPath = isTmp ? filePath.slice(0, -4) : filePath
+    const outputDir = path.dirname(realPath)
+    const baseName = path.basename(realPath, path.extname(realPath))
+    const outBase = isTmp ? baseName + '.tmp' : baseName
+
+    const opts: YtDlpOptions = task?.yt_dlp_options ? JSON.parse(task.yt_dlp_options) : {}
+
+    // 1. 系统内置默认
+    const mergedOpts: any = {
+      qualityPreset: 'compatible' as const,
+      mergeOutputFormat: 'mp4',
+      noPlaylist: true,
+      socketTimeout: 30,
+      extractorRetries: 3,
+      userAgent: DownloadService.SYSTEM_DEFAULT_UA,
+    }
+
+    // 1a. 站点特有的默认请求头
+    const siteDefaultHeaders = this.getSiteDefaultHeaders(url)
+
+    // 2. 全局设置（settings 表 download_ytdlp_defaults）
+    let globalOpts: any = {}
+    try {
+      const globalRow = this.db.db.prepare("SELECT value FROM settings WHERE key = 'download_ytdlp_defaults'").get() as any
+      if (globalRow?.value) globalOpts = JSON.parse(globalRow.value)
+    } catch { /* ignore invalid JSON */ }
+
+    // 3. 深度合并 addHeaders（sites → global → task，空值可移除默认头）
+    const mergedAddHeaders = this.mergeAddHeaders(
+      siteDefaultHeaders,
+      globalOpts.addHeaders,
+      (opts as any)?.addHeaders,
+    )
+
+    // 4. 标量参数合并：系统 → 全局 → 任务
+    //    null / '' = 显式置空系统默认；undefined = 不覆盖
+    const mergeScalar = (target: any, source: any) => {
+      for (const [key, val] of Object.entries(source)) {
+        if (key === 'addHeaders') continue
+        if (val === undefined) continue
+        if (val === null || val === '') {
+          delete target[key]
+        } else {
+          target[key] = val
+        }
+      }
+    }
+    mergeScalar(mergedOpts, globalOpts)
+    mergeScalar(mergedOpts, opts || {})
+
+    // 5. 清除标量 userAgent/referer 对应的 addHeaders 条目（避免重复与冲突）
+    if (mergedOpts.userAgent !== undefined) {
+      mergedAddHeaders.splice(
+        ...this.removeHeaderFromList(mergedAddHeaders, 'User-Agent'),
+      )
+    }
+    if (mergedOpts.referer !== undefined) {
+      mergedAddHeaders.splice(
+        ...this.removeHeaderFromList(mergedAddHeaders, 'Referer'),
+      )
+    }
+
+    // 6. 设置合并后的 addHeaders
+    if (mergedAddHeaders.length > 0) {
+      mergedOpts.addHeaders = mergedAddHeaders
+    } else {
+      delete mergedOpts.addHeaders
+    }
+
+    // 画质预设 → format 解析（用户自定义 format 优先于预设）
+    const preset = mergedOpts.qualityPreset as keyof typeof QUALITY_PRESET_FORMATS | undefined
+    if (!mergedOpts.format && preset && QUALITY_PRESET_FORMATS[preset]) {
+      mergedOpts.format = QUALITY_PRESET_FORMATS[preset]
+    }
+
+    // 文本模式 cookies：解析写入 Netscape 格式文件，作为 --cookies 传入
+    if (mergedOpts.cookies_mode === 'text' && mergedOpts.cookies_text) {
+      const cookiesPath = cookiesTextToFilePath(this.dataDir, task.id)
+      const ok = writeCookiesTextToFile(mergedOpts.cookies_text, cookiesPath)
+      if (ok) {
+        mergedOpts.cookies = cookiesPath
+        mergedOpts.cookiesFromBrowser = ''
+        console.log(`[DownloadService] Cookies text → ${cookiesPath}`)
+        // 回写 DB
+        try {
+          const row = this.db.db.prepare('SELECT yt_dlp_options FROM download_queue WHERE id = ?').get(task.id) as any
+          if (row?.yt_dlp_options) {
+            const saved = JSON.parse(row.yt_dlp_options)
+            saved.cookies = cookiesPath
+            delete saved.cookies_text
+            this.db.db.prepare('UPDATE download_queue SET yt_dlp_options = ? WHERE id = ?').run(JSON.stringify(saved), task.id)
+          }
+        } catch { /* ignore */ }
+      } else {
+        console.warn(`[DownloadService] Cookies text 为空或格式无效，跳过`)
+      }
+    }
+
+    return { mergedOpts, outputDir, outBase, realPath }
+  }
+
+  /**
+   * 生成等效 yt-dlp 命令行（用于前端展示/调试），与 downloadWithYtDlpLib 合并逻辑完全相同
+   */
+  buildEquivalentCommand(task: any): string {
+    const url = task.url
+    const filename = task.filename || 'download'
+
+    // 非 yt-dlp 任务
+    if (task.field_name === 'upload') return `# 上传文件，无命令行\n# 文件名: ${filename}`
+    if (task.download_method === 'file') return `curl -L -o "${filename}" "${url}"`
+
+    const { mergedOpts } = this.mergeYtDlpOptions(task, url)
+
+    const parts: string[] = ['yt-dlp']
+
+    // --format
+    const formatStr = mergedOpts.format || QUALITY_PRESET_FORMATS['compatible']
+    parts.push(`--format "${formatStr}"`)
+
+    // --merge-output-format
+    parts.push(`--merge-output-format ${mergedOpts.mergeOutputFormat || 'mp4'}`)
+
+    // --no-playlist
+    if (mergedOpts.noPlaylist) parts.push('--no-playlist')
+
+    // --socket-timeout
+    if (mergedOpts.socketTimeout != null) parts.push(`--socket-timeout ${mergedOpts.socketTimeout}`)
+
+    // --extractor-retries
+    if (mergedOpts.extractorRetries != null) parts.push(`--extractor-retries ${mergedOpts.extractorRetries}`)
+
+    // --user-agent
+    if (mergedOpts.userAgent) parts.push(`--user-agent "${mergedOpts.userAgent}"`)
+
+    // --referer
+    if (mergedOpts.referer) parts.push(`--referer "${mergedOpts.referer}"`)
+
+    // --add-header
+    if (mergedOpts.addHeaders) {
+      for (const h of mergedOpts.addHeaders as string[]) {
+        parts.push(`--add-header "${h}"`)
+      }
+    }
+
+    // --cookies / --cookies-from-browser
+    if (mergedOpts.cookiesFromBrowser) parts.push(`--cookies-from-browser ${mergedOpts.cookiesFromBrowser}`)
+    if (mergedOpts.cookies) parts.push(`--cookies "${mergedOpts.cookies}"`)
+
+    // 可选参数
+    if (mergedOpts.proxy) parts.push(`--proxy "${mergedOpts.proxy}"`)
+    if (mergedOpts.limitRate) parts.push(`--limit-rate ${mergedOpts.limitRate}`)
+    if (mergedOpts.username) parts.push(`--username "${mergedOpts.username}"`)
+    if (mergedOpts.password) parts.push(`--password "${mergedOpts.password}"`)
+    if (mergedOpts.retries !== undefined) parts.push(`--retries ${mergedOpts.retries}`)
+    if (mergedOpts.sleepInterval !== undefined) parts.push(`--sleep-interval ${mergedOpts.sleepInterval}`)
+    if (mergedOpts.geoBypass) parts.push('--geo-bypass')
+    if (mergedOpts.noCheckCertificates) parts.push('--no-check-certificates')
+    if (mergedOpts.extractorArgs) {
+      for (const [site, args] of Object.entries(mergedOpts.extractorArgs as Record<string, string[]>)) {
+        for (const a of args) parts.push(`--extractor-args ${site}:${a}`)
+      }
+    }
+    if (mergedOpts.rawArgs && mergedOpts.rawArgs.length > 0) {
+      for (const a of mergedOpts.rawArgs) parts.push(a)
+    }
+
+    // 输出文件名
+    const dotIdx = filename.lastIndexOf('.')
+    const ext = dotIdx > 0 ? filename.slice(dotIdx + 1) : 'mp4'
+    const base = dotIdx > 0 ? filename.slice(0, dotIdx) : filename
+    parts.push(`-o "${base}.${ext}"`)
+
+    // URL
+    parts.push(`"${url}"`)
+
+    return parts.join(' \\\n  ')
+  }
+
+  // ════════════════════════════════════════════════════════════════
   // 内部下载方法
   // ════════════════════════════════════════════════════════════════
 
@@ -813,16 +1059,9 @@ export class DownloadService {
     taskId: string,
     itemId: string,
   ): Promise<string> {
-    // 方案A：支持临时文件模式（filePath 以 .tmp 结尾时，输出到临时名，由调用方 rename 到正式文件）
-    const isTmp = filePath.endsWith('.tmp')
-    const realPath = isTmp ? filePath.slice(0, -4) : filePath
-    const outputDir = path.dirname(realPath)
-    const baseName = path.basename(realPath, path.extname(realPath))
-    const outBase = isTmp ? baseName + '.tmp' : baseName
-
-    // 读取 yt-dlp 配置选项
-    const task = this.db.db.prepare('SELECT yt_dlp_options FROM download_queue WHERE id = ?').get(taskId) as any
-    const opts: YtDlpOptions = task?.yt_dlp_options ? JSON.parse(task.yt_dlp_options) : {}
+    // 读取任务记录（用于 mergeYtDlpOptions 和输出目录解析）
+    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
+    const { mergedOpts, outputDir, outBase } = this.mergeYtDlpOptions({ ...task, file_path: filePath }, url)
 
     let dl = this.ytDlp
       .download(url)
@@ -839,71 +1078,6 @@ export class DownloadService {
           })
         }
       })
-
-    // ════════════════════════════════════════════════════════
-    // yt-dlp 参数（三层合并：硬编码安全默认 < 全局设置 < 任务配置）
-    // null 值 = 显式不设置该参数；undefined = 使用默认值
-    // ════════════════════════════════════════════════════════
-
-    // 1. 硬编码安全默认（可被覆盖）
-    const mergedOpts: any = {
-      qualityPreset: 'compatible' as const,  // 默认画质预设（可被覆盖或留空）
-      mergeOutputFormat: 'mp4',
-      noPlaylist: true,         // 防止意外下载整个播放列表
-      socketTimeout: 30,        // 避免连接挂起
-      extractorRetries: 3,      // 提取器错误重试
-    }
-
-    // 1a. 站点特有的默认请求头（避免 Referer 校验失败）
-    const siteDefaultHeaders = this.getSiteDefaultHeaders(url)
-    if (siteDefaultHeaders.length > 0) {
-      mergedOpts.addHeaders = siteDefaultHeaders
-    }
-
-    // 2. 全局覆盖（settings 表 download_ytdlp_defaults，JSON 格式）
-    try {
-      const globalRow = this.db.db.prepare("SELECT value FROM settings WHERE key = 'download_ytdlp_defaults'").get() as any
-      if (globalRow?.value) {
-        const globalOpts = JSON.parse(globalRow.value)
-        Object.assign(mergedOpts, globalOpts)
-      }
-    } catch { /* ignore invalid JSON */ }
-
-    // 3. 任务级覆盖（download_queue.yt_dlp_options）
-    if (opts && Object.keys(opts).length > 0) {
-      Object.assign(mergedOpts, opts)
-    }
-
-    // 应用合并后的参数
-
-    // 画质预设 → format 解析（用户自定义 format 优先于预设）
-    const preset = mergedOpts.qualityPreset as keyof typeof QUALITY_PRESET_FORMATS | undefined
-    if (!mergedOpts.format && preset && QUALITY_PRESET_FORMATS[preset]) {
-      mergedOpts.format = QUALITY_PRESET_FORMATS[preset]
-    }
-    // qualityPreset 为 null/空 或无匹配 → format 不设置，使用 yt-dlp 默认行为
-    // 文本模式 cookies：解析写入 Netscape 格式文件，作为 --cookies 传入，并将解析后的路径回写数据库
-    if (mergedOpts.cookies_mode === 'text' && mergedOpts.cookies_text) {
-      const cookiesPath = cookiesTextToFilePath(this.dataDir, taskId)
-      const ok = writeCookiesTextToFile(mergedOpts.cookies_text, cookiesPath)
-      if (ok) {
-        mergedOpts.cookies = cookiesPath
-        mergedOpts.cookiesFromBrowser = ''  // 清除浏览器模式，避免冲突
-        console.log(`[DownloadService] Cookies text → ${cookiesPath}`)
-        // 回写：cookies_text → cookies（文件路径），前端等效命令可直接复制测试
-        try {
-          const row = this.db.db.prepare('SELECT yt_dlp_options FROM download_queue WHERE id = ?').get(taskId) as any
-          if (row?.yt_dlp_options) {
-            const saved = JSON.parse(row.yt_dlp_options)
-            saved.cookies = cookiesPath
-            delete saved.cookies_text
-            this.db.db.prepare('UPDATE download_queue SET yt_dlp_options = ? WHERE id = ?').run(JSON.stringify(saved), taskId)
-          }
-        } catch { /* ignore */ }
-      } else {
-        console.warn(`[DownloadService] Cookies text 为空或格式无效，跳过`)
-      }
-    }
 
     dl = dl.output(path.join(outputDir, outBase + '.' + (mergedOpts.mergeOutputFormat || 'mp4')))
     if (mergedOpts.format) dl = dl.format(mergedOpts.format)
@@ -940,7 +1114,7 @@ export class DownloadService {
 
     // 清理 yt-dlp 格式合并残留的中间片段（如 video.tmp.f137.mp4、video.tmp.f140.m4a）
     // 这些片段由 yt-dlp 下载分离的视频/音频流时产生，合并后本应自动删除，但有时会残留
-    if (isTmp) {
+    if (filePath.endsWith('.tmp')) {
       try {
         const outPrefix = path.basename(outBase)
         const files = fs.readdirSync(outputDir)

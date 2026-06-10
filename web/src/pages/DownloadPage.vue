@@ -78,7 +78,8 @@ const linkYtOpts = reactive({
   noPlaylist: null as boolean | null,
   socketTimeout: null as number | null,
   extractorRetries: null as number | null,
-  geoBypass: false, noCheckCert: false, rawArgs: '',
+  geoBypass: false, noCheckCert: false,
+  addHeaders: '', extractorArgs: '', rawArgs: '',
 })
 
 // Filter options
@@ -653,6 +654,26 @@ function buildYtDlpOptionsFromLink(): any | null {
   if (o.extractorRetries != null) opts.extractorRetries = o.extractorRetries
   if (o.geoBypass) opts.geoBypass = true
   if (o.noCheckCert) opts.noCheckCertificates = true
+  if (o.addHeaders.trim()) {
+    const headers: Record<string, string> = {}
+    for (const line of o.addHeaders.split('\n').map(s => s.trim()).filter(Boolean)) {
+      const idx = line.indexOf(':')
+      if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+    }
+    if (Object.keys(headers).length > 0) opts.addHeaders = headers
+  }
+  if (o.extractorArgs.trim()) {
+    const args: Record<string, string[]> = {}
+    for (const line of o.extractorArgs.split('\n').map(s => s.trim()).filter(Boolean)) {
+      const idx = line.indexOf(':')
+      if (idx > 0) {
+        const site = line.slice(0, idx).trim()
+        const val = line.slice(idx + 1).trim()
+        args[site] = val.split(',').map(s => s.trim())
+      }
+    }
+    if (Object.keys(args).length > 0) opts.extractorArgs = args
+  }
   if (o.rawArgs.trim()) {
     opts.rawArgs = o.rawArgs.split('\n').map(s => s.trim()).filter(Boolean)
   }
@@ -679,6 +700,8 @@ function resetLinkYtOpts() {
   linkYtOpts.extractorRetries = null
   linkYtOpts.geoBypass = false
   linkYtOpts.noCheckCert = false
+  linkYtOpts.addHeaders = ''
+  linkYtOpts.extractorArgs = ''
   linkYtOpts.rawArgs = ''
 }
 
@@ -803,124 +826,32 @@ function isRowSelectable(_row: any) { return true }
 // ── Download error detail dialog ──
 const errorDialog = ref(false)
 const errorTask = ref<any>(null)
-
-function buildDownloadCommand(task: any): string {
-  if (task.field_name === 'upload') {
-    return `# 上传文件，无命令行\n# 文件名: ${task.filename}`
-  }
-
-  const method = task.download_method
-  const url = task.url
-  const filename = task.filename || 'download'
-
-  if (method === 'file' || (!method && isDirectUrl(url))) {
-    // HTTP 直链
-    return `curl -L -o "${filename}" "${url}"`
-  }
-
-  // yt-dlp
-  const parts = ['yt-dlp']
-  let opts: any = null
-  try { opts = task.yt_dlp_options ? JSON.parse(task.yt_dlp_options) : null } catch { /* ignore */ }
-
-  // 画质预设映射
-  const PRESET_FORMATS: Record<string, string> = {
-    'compatible': 'bestvideo*+bestaudio*/best',
-    'high-mp4': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-    'single': 'best[ext=mp4]/best',
-  }
-  const formatStr = opts?.format || (opts?.qualityPreset && PRESET_FORMATS[opts.qualityPreset]) || 'bestvideo*+bestaudio*/best'
-
-  // Format（任务自定义 > 预设 > 默认最佳兼容）
-  parts.push(`--format "${formatStr}"`)
-  parts.push('--merge-output-format mp4')
-
-  // 安全参数（任务可覆盖，null = 不设置）
-  if (opts?.noPlaylist !== false && opts?.noPlaylist !== null && opts?.noPlaylist !== undefined) parts.push('--no-playlist')
-  if (opts?.socketTimeout != null) parts.push(`--socket-timeout ${opts.socketTimeout}`)
-  else if (opts?.socketTimeout === undefined) parts.push('--socket-timeout 30')
-  if (opts?.extractorRetries != null) parts.push(`--extractor-retries ${opts.extractorRetries}`)
-  else if (opts?.extractorRetries === undefined) parts.push('--extractor-retries 3')
-
-  if (opts) {
-    if (opts.cookiesFromBrowser) parts.push(`--cookies-from-browser ${opts.cookiesFromBrowser}`)
-    if (opts.cookies) {
-      parts.push(`--cookies "${opts.cookies}"`)
-    } else if (opts.cookies_text) {
-      parts.push(`--cookies "(首次下载后自动解析为文件路径)"`)
-    }
-    if (opts.proxy) parts.push(`--proxy "${opts.proxy}"`)
-    if (opts.limitRate) parts.push(`--limit-rate ${opts.limitRate}`)
-    if (opts.userAgent) parts.push(`--user-agent "${opts.userAgent}"`)
-    if (opts.referer) parts.push(`--referer "${opts.referer}"`)
-    if (opts.username) parts.push(`--username "${opts.username}"`)
-    if (opts.password) parts.push(`--password "${opts.password}"`)
-    if (opts.retries !== undefined && opts.retries !== null) parts.push(`--retries ${opts.retries}`)
-    if (opts.sleepInterval !== undefined && opts.sleepInterval !== null) parts.push(`--sleep-interval ${opts.sleepInterval}`)
-    if (opts.geoBypass) parts.push('--geo-bypass')
-    if (opts.noCheckCertificates) parts.push('--no-check-certificates')
-    if (opts.rawArgs && opts.rawArgs.length > 0) {
-      for (const a of opts.rawArgs) parts.push(a)
-    }
-  }
-
-  // Clean filename: strip pseudo-static extensions for video platform URLs
-  const isPseudoExt = (e: string) => ['html', 'htm', 'php', 'asp', 'aspx', 'jsp', 'cgi'].includes(e)
-  const VIDEO_SITES = ['v.qq.com', 'bilibili.com', 'bilivideo.com', 'b23.tv',
-    'youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com',
-    'youku.com', 'iqiyi.com', 'vimeo.com', 'twitch.tv',
-    'twitter.com', 'x.com', 'instagram.com', 'tiktok.com']
-  const isVideoSite = VIDEO_SITES.some(s => url.includes(s))
-
-  let displayExt = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : ''
-  let displayBase = filename.includes('.') ? filename.slice(0, filename.lastIndexOf('.')) : filename
-
-  // If the extension is a pseudo-static web extension, replace with mp4 for video sites
-  if (isPseudoExt(displayExt) && isVideoSite) {
-    displayExt = 'mp4'
-  } else if (!displayExt && isVideoSite) {
-    displayExt = 'mp4'
-  } else if (!displayExt) {
-    displayExt = 'mp4'
-  }
-
-  parts.push(`-o "${displayBase}.${displayExt}"`)
-  parts.push(`"${url}"`)
-
-  return parts.join(' \\\n  ')
-}
-
-function isDirectUrl(url: string): boolean {
-  // Extract extension from last path segment only (not from domain)
-  const lastSeg = url.split('?')[0].split('/').pop() || ''
-  const ext = lastSeg.includes('.') ? lastSeg.split('.').pop()?.toLowerCase() || '' : ''
-  // Pseudo-static web extensions are not real file types
-  if (['html', 'htm', 'php', 'asp', 'aspx', 'jsp'].includes(ext)) return false
-  return ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v', 'mp3', 'wav', 'ogg', 'aac', 'pdf', 'jpg', 'png', 'gif'].includes(ext)
-}
+const errorCommand = ref<string>('')
 
 async function showErrorDetail(task: any) {
-  // 下载完成后 cookies_text 会被回写为 cookies 文件路径，但本地 items 不会同步
-  // 如果本地还有 cookies_text，先刷新获取最新的 yt_dlp_options
-  const opts = task.yt_dlp_options ? (typeof task.yt_dlp_options === 'string' ? JSON.parse(task.yt_dlp_options) : task.yt_dlp_options) : {}
-  if (opts.cookies_text && !opts.cookies && (task.status === 'completed' || task.status === 'failed')) {
-    await fetchItems()
-    const fresh = items.value.find((i: any) => i.id === task.id)
-    if (fresh) task = fresh
-  }
   errorTask.value = task
+  errorCommand.value = ''  // 先清空
   errorDialog.value = true
+  try {
+    const { data } = await downloadAPI.getEquivalentCommand(task.id)
+    if (data.command) {
+      errorCommand.value = data.command
+    } else {
+      errorCommand.value = '# 无法生成等效命令'
+    }
+  } catch {
+    errorCommand.value = '# 获取等效命令失败'
+  }
 }
 
 function copyCommand() {
-  if (!errorTask.value) return
-  const cmd = buildDownloadCommand(errorTask.value)
-  copyWithFeedback(cmd, '已复制多行命令到剪贴板')
+  if (!errorCommand.value) return
+  copyWithFeedback(errorCommand.value, '已复制多行命令到剪贴板')
 }
 
 function copyCommandOneLine() {
-  if (!errorTask.value) return
-  const cmd = buildDownloadCommand(errorTask.value).replace(/ \\\n  /g, ' ')
+  if (!errorCommand.value) return
+  const cmd = errorCommand.value.replace(/ \\\n  /g, ' ')
   copyWithFeedback(cmd, '已复制单行命令到剪贴板')
 }
 
@@ -1585,9 +1516,31 @@ onUnmounted(teardownSSE)
                 <el-input-number v-model="linkYtOpts.extractorRetries" :min="0" :max="99" size="small" />
               </div>
             </div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+              <div>
+                <div class="text-[11px] text-gray-500 mb-1">禁止播放列表</div>
+                <el-select v-model="linkYtOpts.noPlaylist" size="small" class="w-full" clearable placeholder="默认（禁止）">
+                  <el-option label="禁止" :value="true" />
+                  <el-option label="允许" :value="false" />
+                </el-select>
+              </div>
+            </div>
             <div>
-              <div class="text-[11px] text-gray-500 mb-1">额外命令行参数</div>
-              <el-input v-model="linkYtOpts.rawArgs" type="textarea" :rows="2" placeholder="--extractor-args youtube:player_client=web&#10;--add-header Referer:https://www.youtube.com/&#10;--no-playlist / --socket-timeout 60 等可覆盖默认参数" size="small" />
+              <div class="text-[11px] text-gray-500 mb-1">自定义请求头</div>
+              <el-input v-model="linkYtOpts.addHeaders" type="textarea" :rows="2" placeholder="Name: Value&#10;Referer: https://example.com/" size="small" />
+            </div>
+            <div>
+              <div class="text-[11px] text-gray-500 mb-1">提取器参数</div>
+              <el-input v-model="linkYtOpts.extractorArgs" type="textarea" :rows="2" placeholder="youtube: player_client=web&#10;youtube: player_skip=webpage" size="small" />
+            </div>
+            <div>
+              <div class="text-[11px] text-gray-500 mb-1">
+                额外命令行参数
+                <el-tooltip content="优先级最高，会覆盖上述所有配置。参数需以 -- 开头，每行一个。" placement="top">
+                  <i class="fas fa-circle-exclamation text-amber-500 text-[10px] ml-0.5"></i>
+                </el-tooltip>
+              </div>
+              <el-input v-model="linkYtOpts.rawArgs" type="textarea" :rows="2" placeholder="--add-header Referer:https://www.youtube.com/&#10;--socket-timeout 60" size="small" />
             </div>
           </div>
         </div>
@@ -1702,7 +1655,7 @@ onUnmounted(teardownSSE)
             </div>
           </div>
           <div class="rounded-lg bg-gray-900/60 border border-gray-700/40 p-3">
-            <pre class="text-[11px] text-emerald-300 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ buildDownloadCommand(errorTask) }}</pre>
+            <pre class="text-[11px] text-emerald-300 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ errorCommand }}</pre>
           </div>
           <div v-if="errorTask.download_method === 'yt-dlp' || (!errorTask.download_method && errorTask.field_name !== 'upload')" class="text-[11px] text-gray-600 mt-1.5">
             💡 复制后在终端执行可复现问题。多行版易阅读，单行版方便直接粘贴。

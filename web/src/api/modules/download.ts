@@ -18,7 +18,7 @@ export const downloadAPI = {
   uploadFiles: (fd: FormData) => api.post('/download/upload', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
-  // Single operations
+  getEquivalentCommand: (id: string) => api.get(`/download/queue/${id}/command`),
   startDownload: (id: string) => api.post(`/download/queue/${id}/start`),
   stopDownload: (id: string) => api.post(`/download/queue/${id}/stop`),
   retryDownload: (id: string) => api.post(`/download/queue/${id}/retry`),

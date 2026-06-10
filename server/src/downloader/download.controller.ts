@@ -212,6 +212,15 @@ export class DownloadController {
   // 单个任务操作
   // ════════════════════════════════════════════════════════════════
 
+  /** 获取等效命令行（与后台实际执行 100% 一致） */
+  @Get('queue/:id/command')
+  getEquivalentCommand(@Param('id') id: string) {
+    const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
+    if (!task) return { error: '任务不存在' }
+    const command = this.download.buildEquivalentCommand(task)
+    return { command }
+  }
+
   @Post('queue/:id/start')
   async startDownload(@Param('id') id: string) {
     const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(id) as any
