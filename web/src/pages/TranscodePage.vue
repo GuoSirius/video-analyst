@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick, reactive } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, reactive, computed } from 'vue'
 import { transcoderAPI } from '../api'
 import api from '../api/client'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -53,7 +53,9 @@ const statusLabels: Record<string, string> = {
   paused: '已暂停',
 }
 
-// === Actions ===
+// ════════════════════════════════════════════════════════════════
+// Actions
+// ════════════════════════════════════════════════════════════════
 
 async function checkFfmpeg() {
   try {
@@ -81,7 +83,6 @@ async function fetchTasks() {
   loading.value = false
 }
 
-// --- Filters watch ---
 watch([sourceFilter, statusFilter, keyword], () => {
   page.value = 1
   fetchTasks()
@@ -95,7 +96,10 @@ function resetFilters() {
   fetchTasks()
 }
 
-// --- Selection ---
+// ════════════════════════════════════════════════════════════════
+// Selection
+// ════════════════════════════════════════════════════════════════
+
 function handleSelectionChange(rows: any[]) {
   if (syncingSelection) return
   const visibleIds = new Set(tasks.value.map((t: any) => t.id))
@@ -130,10 +134,14 @@ async function clearAllSelections() {
     for (const id of selectedIds.value) delete selectedItemsMeta[id]
     selectedIds.value = []
     tableRef.value?.clearSelection()
+    fetchTasks()
   } catch { /* cancelled */ }
 }
 
-// --- Upload ---
+// ════════════════════════════════════════════════════════════════
+// Upload
+// ════════════════════════════════════════════════════════════════
+
 function handleFileSelect(e: Event) {
   const input = e.target as HTMLInputElement
   if (!input.files?.length) return
@@ -167,7 +175,10 @@ async function confirmUpload() {
   uploading.value = false
 }
 
-// --- Task Operations ---
+// ════════════════════════════════════════════════════════════════
+// Single Task Operations
+// ════════════════════════════════════════════════════════════════
+
 async function startTask(id: string) {
   try { await transcoderAPI.startTask(id); ElMessage.success('转码任务已开始'); fetchTasks() }
   catch { ElMessage.error('操作失败') }
@@ -175,7 +186,7 @@ async function startTask(id: string) {
 
 async function stopTask(id: string) {
   try {
-    await ElMessageBox.confirm('确定要停止此转码任务吗？', '确认停止', { type: 'warning' })
+    await ElMessageBox.confirm('确定要停止此转码任务吗？已处理的部分将丢失。', '确认停止', { type: 'warning' })
     await transcoderAPI.stopTask(id); ElMessage.success('任务已停止'); fetchTasks()
   } catch { /* cancelled */ }
 }
@@ -187,19 +198,22 @@ async function retryTask(id: string) {
 
 async function reRunTask(id: string) {
   try {
-    await ElMessageBox.confirm('确定要重新转码吗？将覆盖原有输出。', '确认', { type: 'warning' })
+    await ElMessageBox.confirm('确定要重新转码吗？将覆盖原有输出文件。', '确认重新转码', { type: 'warning' })
     await transcoderAPI.reRunTask(id); ElMessage.success('任务已重新运行'); fetchTasks()
   } catch { /* cancelled */ }
 }
 
 async function deleteTask(id: string) {
   try {
-    await ElMessageBox.confirm('确定要删除此转码任务吗？', '确认删除', { type: 'warning' })
+    await ElMessageBox.confirm('确定要删除此转码任务吗？输出文件不会被删除。', '确认删除', { type: 'warning' })
     await transcoderAPI.deleteTask(id); ElMessage.success('任务已删除'); fetchTasks()
   } catch { /* cancelled */ }
 }
 
-// --- View Command ---
+// ════════════════════════════════════════════════════════════════
+// View Command
+// ════════════════════════════════════════════════════════════════
+
 function getFfmpegCommand(task: any): string {
   const p = task.payload || {}
   const input = p.file || p.fileName || 'input'
@@ -217,36 +231,95 @@ function getFfmpegCommand(task: any): string {
 
 function viewCommand(task: any) {
   cmdLoading.value = true
-  cmdTitle.value = '转码命令详情'
+  cmdTitle.value = task.status === 'failed' ? '转码失败·等效命令' : '转码成功·等效命令'
   cmdDetails.value = [
     { label: '输入文件', value: task.payload?.fileName || task.payload?.file?.split(/[\\/]/).pop() || '-' },
     { label: '目标参数', value: '16kHz · mono · 16-bit PCM WAV' },
     { label: '输出文件', value: task.result?.outputPath?.split(/[\\/]/).pop() || '-' },
     { label: '状态', value: statusLabels[task.status] || task.status },
+    { label: '转码日志', value: task.error || task.result?.outputPath ? '成功' : '-' },
   ]
   cmdCommands.value = [{ label: '等效命令', content: getFfmpegCommand(task) }]
   cmdLoading.value = false
   cmdDialog.value = true
 }
 
-// --- Batch ---
-async function batchDelete() {
-  if (!selectedIds.value.length) { ElMessage.warning('请先选择任务'); return }
+// ════════════════════════════════════════════════════════════════
+// Batch Operations
+// ════════════════════════════════════════════════════════════════
+
+const pendingIds = computed(() => selectedIds.value.filter(id => selectedItemsMeta[id]?.status === 'pending' || selectedItemsMeta[id]?.status === 'paused'))
+const failedIds = computed(() => selectedIds.value.filter(id => selectedItemsMeta[id]?.status === 'failed' || selectedItemsMeta[id]?.status === 'cancelled'))
+const completedIds = computed(() => selectedIds.value.filter(id => selectedItemsMeta[id]?.status === 'completed'))
+const runningIds = computed(() => selectedIds.value.filter(id => selectedItemsMeta[id]?.status === 'running'))
+
+async function batchStart() {
+  const ids = pendingIds.value
+  if (!ids.length) { ElMessage.warning('所选项目中没有待转码的任务'); return }
   try {
-    await ElMessageBox.confirm(`确定要删除选中的 ${selectedIds.value.length} 个任务吗？`, '批量删除', { type: 'warning' })
-    for (const id of selectedIds.value) await transcoderAPI.deleteTask(id).catch(() => {})
-    ElMessage.success(`已删除 ${selectedIds.value.length} 个任务`)
-    selectedIds.value = []
+    await ElMessageBox.confirm(
+      `确定要启动选中的 ${ids.length} 个转码任务吗？`, '批量转码',
+      { type: 'info', confirmButtonText: '确定', cancelButtonText: '取消' },
+    )
+    for (const id of ids) await transcoderAPI.startTask(id).catch(() => {})
+    ElMessage.success(`已启动 ${ids.length} 个转码任务`)
     fetchTasks()
   } catch { /* cancelled */ }
 }
 
-async function batchStart() {
-  if (!selectedIds.value.length) { ElMessage.warning('请先选择任务'); return }
+async function batchRetry() {
+  const ids = failedIds.value
+  if (!ids.length) { ElMessage.warning('所选项目中没有失败的任务'); return }
   try {
-    await ElMessageBox.confirm(`将为选中的 ${selectedIds.value.length} 个任务启动转码`, '批量转码', { type: 'info' })
-    for (const id of selectedIds.value) await transcoderAPI.startTask(id).catch(() => {})
-    ElMessage.success('批量转码已提交')
+    await ElMessageBox.confirm(
+      `确定要重试选中的 ${ids.length} 个转码任务吗？`, '批量重试',
+      { type: 'info', confirmButtonText: '确定重试', cancelButtonText: '取消' },
+    )
+    for (const id of ids) await transcoderAPI.retryTask(id).catch(() => {})
+    ElMessage.success(`已重试 ${ids.length} 个转码任务`)
+    fetchTasks()
+  } catch { /* cancelled */ }
+}
+
+async function batchReRun() {
+  const ids = completedIds.value
+  if (!ids.length) { ElMessage.warning('所选项目中没有已转码的任务'); return }
+  try {
+    await ElMessageBox.confirm(
+      `确定要重新转码选中的 ${ids.length} 个任务吗？将覆盖原有输出。`, '批量重新转码',
+      { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' },
+    )
+    for (const id of ids) await transcoderAPI.reRunTask(id).catch(() => {})
+    ElMessage.success(`已重新转码 ${ids.length} 个任务`)
+    fetchTasks()
+  } catch { /* cancelled */ }
+}
+
+async function batchStop() {
+  const ids = runningIds.value
+  if (!ids.length) { ElMessage.warning('所选项目中没有转码中的任务'); return }
+  try {
+    await ElMessageBox.confirm(
+      `确定要终止选中的 ${ids.length} 个转码任务吗？`, '批量终止',
+      { type: 'warning', confirmButtonText: '确定终止', cancelButtonText: '取消' },
+    )
+    for (const id of ids) await transcoderAPI.stopTask(id).catch(() => {})
+    ElMessage.success(`已终止 ${ids.length} 个转码任务`)
+    fetchTasks()
+  } catch { /* cancelled */ }
+}
+
+async function batchDelete() {
+  if (!selectedIds.value.length) { ElMessage.warning('请先选择任务'); return }
+  const running = runningIds.value
+  if (running.length) { ElMessage.warning(`所选项目中有 ${running.length} 个转码中的任务，请先终止`); return }
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedIds.value.length} 个转码任务吗？`, '批量删除',
+      { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' },
+    )
+    for (const id of selectedIds.value) await transcoderAPI.deleteTask(id).catch(() => {})
+    ElMessage.success(`已删除 ${selectedIds.value.length} 个任务`)
     selectedIds.value = []
     fetchTasks()
   } catch { /* cancelled */ }
@@ -266,11 +339,13 @@ async function autoProcessAll() {
   } catch { /* cancelled */ }
 }
 
-// --- Helpers ---
+// ════════════════════════════════════════════════════════════════
+// Helpers
+// ════════════════════════════════════════════════════════════════
+
 function canStart(s: string) { return s === 'pending' || s === 'paused' }
 function canStop(s: string) { return s === 'running' }
 function canRetry(s: string) { return s === 'failed' || s === 'cancelled' }
-function canDelete(s: string) { return s !== 'running' }
 
 function fileName(t: any) {
   return t.payload?.fileName || t.payload?.file?.split(/[\\/]/).pop() || t.id.slice(0, 12) + '...'
@@ -280,20 +355,44 @@ function outputName(t: any) {
   return t.result?.outputPath?.split(/[\\/]/).pop() || '-'
 }
 
-// --- SSE ---
+function sourceLabel(t: any) {
+  return t.payload?.source === 'download' ? '下载队列' : '本地上传'
+}
+
+function sourceClass(t: any) {
+  return t.payload?.source === 'download' ? 'text-blue-400' : 'text-emerald-400'
+}
+
+// ════════════════════════════════════════════════════════════════
+// SSE
+// ════════════════════════════════════════════════════════════════
+
 function connectSSE() {
+  if (sseConnection) sseConnection.close()
   sseConnection = new EventSource('/api/transcoder/events')
-  sseConnection.addEventListener('message', (e) => {
+  sseConnection.onmessage = (e) => {
     try {
       const evt = JSON.parse(e.data)
-      if (evt.type === 'transcode' || !evt.type) {
+      if (evt.taskId) {
         const idx = tasks.value.findIndex((t: any) => t.id === evt.taskId)
-        if (idx >= 0) tasks.value[idx] = { ...tasks.value[idx], ...evt }
-        else fetchTasks()
+        if (idx >= 0) {
+          tasks.value[idx] = {
+            ...tasks.value[idx],
+            status: evt.status ?? tasks.value[idx].status,
+            progress: evt.progress ?? tasks.value[idx].progress,
+            error: evt.error ?? tasks.value[idx].error,
+            result: evt.result ?? tasks.value[idx].result,
+          }
+        } else {
+          fetchTasks()
+        }
       }
     } catch { /* ignore */ }
-  })
-  sseConnection.onerror = () => { /* reconnect handled by caller */ }
+  }
+  sseConnection.onerror = () => {
+    sseConnection?.close()
+    setTimeout(connectSSE, 5000)
+  }
 }
 
 onMounted(() => {
@@ -385,12 +484,23 @@ onUnmounted(() => {
     </div>
 
     <!-- Batch bar -->
-    <div v-if="selectedIds.length" class="flex items-center gap-2 mb-3">
+    <div v-if="selectedIds.length" class="flex items-center gap-2 mb-3 card-static">
       <span class="text-xs text-gray-400">已选 {{ selectedIds.length }} 项</span>
-      <el-button type="primary" size="small" plain @click="batchStart">
+      <span class="text-xs text-gray-600 mx-1">|</span>
+      <el-button size="small" type="primary" plain @click="batchStart" :disabled="!pendingIds.length">
         <i class="fas fa-play mr-1"></i>批量转码
       </el-button>
-      <el-button type="danger" size="small" plain @click="batchDelete">
+      <el-button size="small" type="danger" plain @click="batchStop" :disabled="!runningIds.length">
+        <i class="fas fa-stop mr-1"></i>批量终止
+      </el-button>
+      <el-button size="small" type="warning" plain @click="batchRetry" :disabled="!failedIds.length">
+        <i class="fas fa-redo mr-1"></i>批量重试
+      </el-button>
+      <el-button size="small" plain @click="batchReRun" :disabled="!completedIds.length">
+        <i class="fas fa-rotate-right mr-1"></i>批量重新转码
+      </el-button>
+      <span class="text-xs text-gray-600 mx-1">|</span>
+      <el-button size="small" type="danger" plain @click="batchDelete" :disabled="!selectedIds.length">
         <i class="fas fa-trash-can mr-1"></i>批量删除
       </el-button>
     </div>
@@ -414,12 +524,7 @@ onUnmounted(() => {
         </el-table-column>
         <el-table-column label="来源" width="90">
           <template #default="{ row }">
-            <span
-              class="text-xs"
-              :class="(row.payload?.source || 'upload') === 'download' ? 'text-blue-400' : 'text-emerald-400'"
-            >
-              {{ row.payload?.source === 'download' ? '下载' : '上传' }}
-            </span>
+            <span class="text-xs" :class="sourceClass(row)">{{ sourceLabel(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="100">
@@ -436,9 +541,15 @@ onUnmounted(() => {
             />
           </template>
         </el-table-column>
-        <el-table-column label="输出" min-width="160" show-overflow-tooltip>
+        <el-table-column label="输出文件" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">
-            <span v-if="outputName(row) !== '-'" class="text-xs text-gray-500 font-mono">{{ outputName(row) }}</span>
+            <span v-if="outputName(row) !== '-'" class="text-xs text-gray-300 font-mono">{{ outputName(row) }}</span>
+            <span v-else class="text-xs text-gray-600">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="错误信息" min-width="120" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.error" class="text-xs text-red-400">{{ row.error }}</span>
             <span v-else class="text-xs text-gray-600">-</span>
           </template>
         </el-table-column>
@@ -447,27 +558,49 @@ onUnmounted(() => {
             <span class="text-xs text-gray-500">{{ row.created_at }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" min-width="280" align="center">
+        <!-- 操作列：固定右侧，按状态分段 -->
+        <el-table-column label="操作" width="320" align="center" fixed="right">
           <template #default="{ row }">
             <div class="flex items-center justify-center gap-1 flex-wrap">
-              <el-button v-if="canStart(row.status)" size="small" type="primary" plain @click="startTask(row.id)">
-                <i class="fas fa-play mr-1"></i>转码
-              </el-button>
-              <el-button v-if="canStop(row.status)" size="small" type="danger" plain @click="stopTask(row.id)">
-                <i class="fas fa-stop mr-1"></i>停止
-              </el-button>
-              <el-button v-if="row.status === 'completed' || row.status === 'failed'" size="small" plain @click="viewCommand(row)">
-                <i class="fas fa-terminal mr-1"></i>查看命令
-              </el-button>
-              <el-button v-if="row.status === 'completed'" size="small" plain @click="reRunTask(row.id)">
-                <i class="fas fa-rotate-right mr-1"></i>重新转码
-              </el-button>
-              <el-button v-if="canRetry(row.status)" size="small" type="warning" plain @click="retryTask(row.id)">
-                <i class="fas fa-redo mr-1"></i>重试
-              </el-button>
-              <el-button v-if="canDelete(row.status)" size="small" type="danger" plain @click="deleteTask(row.id)">
-                <i class="fas fa-trash-can mr-1"></i>删除
-              </el-button>
+              <!-- 待转码/已暂停：转码、删除 -->
+              <template v-if="canStart(row.status)">
+                <el-button size="small" type="primary" plain @click="startTask(row.id)">
+                  <i class="fas fa-play mr-1"></i>转码
+                </el-button>
+                <el-button size="small" type="danger" plain @click="deleteTask(row.id)">
+                  <i class="fas fa-trash-can mr-1"></i>删除
+                </el-button>
+              </template>
+              <!-- 转码中：停止 -->
+              <template v-else-if="canStop(row.status)">
+                <el-button size="small" type="danger" plain @click="stopTask(row.id)">
+                  <i class="fas fa-stop mr-1"></i>停止
+                </el-button>
+              </template>
+              <!-- 转码失败：查看命令、重试、删除 -->
+              <template v-else-if="canRetry(row.status)">
+                <el-button size="small" plain @click="viewCommand(row)">
+                  <i class="fas fa-terminal mr-1"></i>查看命令
+                </el-button>
+                <el-button size="small" type="warning" plain @click="retryTask(row.id)">
+                  <i class="fas fa-redo mr-1"></i>重试
+                </el-button>
+                <el-button size="small" type="danger" plain @click="deleteTask(row.id)">
+                  <i class="fas fa-trash-can mr-1"></i>删除
+                </el-button>
+              </template>
+              <!-- 已转码：查看命令、重新转码、删除 -->
+              <template v-else-if="row.status === 'completed'">
+                <el-button size="small" plain @click="viewCommand(row)">
+                  <i class="fas fa-terminal mr-1"></i>查看命令
+                </el-button>
+                <el-button size="small" plain @click="reRunTask(row.id)">
+                  <i class="fas fa-rotate-right mr-1"></i>重新转码
+                </el-button>
+                <el-button size="small" type="danger" plain @click="deleteTask(row.id)">
+                  <i class="fas fa-trash-can mr-1"></i>删除
+                </el-button>
+              </template>
             </div>
           </template>
         </el-table-column>

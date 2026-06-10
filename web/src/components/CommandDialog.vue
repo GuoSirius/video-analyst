@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { copyWithFeedback } from '@/utils/clipboard'
 
 const props = defineProps<{
@@ -20,8 +20,17 @@ watch(visible, v => { emit('update:modelValue', v) })
 
 const activeTab = ref(0)
 
-function copy(text: string) {
-  copyWithFeedback(text)
+const currentContent = computed(() => props.commands?.[activeTab.value]?.content || '')
+
+function copyMultiLine() {
+  if (!currentContent.value) return
+  copyWithFeedback(currentContent.value, '已复制多行命令到剪贴板')
+}
+
+function copyOneLine() {
+  if (!currentContent.value) return
+  const cmd = currentContent.value.replace(/ \\\n  /g, ' ')
+  copyWithFeedback(cmd, '已复制单行命令到剪贴板')
 }
 </script>
 
@@ -29,7 +38,7 @@ function copy(text: string) {
   <el-dialog
     v-model="visible"
     :title="title || '查看命令'"
-    width="680px"
+    width="720px"
     destroy-on-close
     :close-on-click-modal="false"
   >
@@ -55,20 +64,26 @@ function copy(text: string) {
       >{{ cmd.label }}</el-button>
     </div>
 
-    <!-- Command content -->
-    <div
-      v-if="commands?.length"
-      class="relative rounded-lg bg-[#0d1117] border border-gray-700/40 p-4 font-mono text-xs text-gray-300 leading-relaxed whitespace-pre-wrap overflow-x-auto max-h-[400px] overflow-y-auto"
-    >
-      {{ commands[activeTab]?.content || '-' }}
-      <el-button
-        v-if="commands[activeTab]?.content"
-        size="small" type="primary" plain
-        class="!absolute top-2 right-2"
-        @click="copy(commands[activeTab].content)"
-      >
-        <i class="fas fa-copy mr-1"></i>复制
-      </el-button>
+    <!-- Command preview -->
+    <div v-if="commands?.length">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs text-gray-400">等效命令行</span>
+        <div class="flex items-center gap-2">
+          <el-button size="small" plain @click="copyMultiLine">
+            <i class="fas fa-copy mr-1.5"></i>复制多行
+          </el-button>
+          <el-button size="small" plain @click="copyOneLine">
+            <i class="fas fa-copy mr-1.5"></i>复制单行
+          </el-button>
+        </div>
+      </div>
+      <div class="rounded-lg bg-[#0d1117] border border-gray-700/40 p-4 font-mono text-xs text-emerald-300 leading-relaxed whitespace-pre-wrap break-all overflow-x-auto max-h-[400px] overflow-y-auto">
+        {{ currentContent || '-' }}
+      </div>
+      <div class="mt-2 flex items-center gap-1.5 text-[11px] text-gray-600">
+        <i class="fas fa-lightbulb text-[10px]"></i>
+        复制后在终端执行可复现操作。多行版易阅读，单行版方便直接粘贴。
+      </div>
     </div>
 
     <div v-else-if="loading" class="text-center py-8 text-gray-500 text-sm">加载中...</div>

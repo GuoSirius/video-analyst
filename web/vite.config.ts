@@ -17,6 +17,11 @@ export default defineConfig(({ mode }) => {
         vueTsc: true,
       }),
     ],
+    resolve: {
+      alias: {
+        '@': resolve(__dirname, 'src'),
+      },
+    },
     server: {
       host: '0.0.0.0',
       port: webPort,

@@ -19,7 +19,6 @@ const selectedItemsMeta = reactive<Record<string, any>>({})
 const tableRef = ref<any>(null)
 let syncingSelection = false
 const loading = ref(false)
-let sseConnection: EventSource | null = null
 
 // Pagination
 const { page, pageSize, total, pageSizes, onPageChange, onPageSizeChange } = usePagination({
@@ -242,14 +241,6 @@ async function retryDownload(id: string) {
   }
 }
 
-async function startTranscode(id: string) {
-  try {
-    const res = await api.post(`/download/queue/${id}/transcode`)
-    if (res.data?.error) { ElMessage.error(res.data.error); return }
-    ElMessage.success('已送入转码处理')
-  } catch { ElMessage.error('操作失败') }
-}
-
 async function deleteSingle(id: string) {
   try {
     await ElMessageBox.confirm('确定要删除该下载任务吗？已下载的文件也会被删除。', '确认删除', { type: 'warning' })
@@ -334,7 +325,6 @@ async function batchDelete() {
 // ── Pipeline step selection dialog for batch auto pipeline ──
 const DOWNLOAD_PIPELINE_STEPS = [
   { key: 'start_download', label: '启动下载' },
-  { key: 'transcode', label: '转码处理' },
   { key: 'whisper', label: '语音识别' },
   { key: 'ai', label: 'AI 分析总结' },
 ]
@@ -856,12 +846,14 @@ function copyCommandOneLine() {
 }
 
 // ── SSE ──
-const SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'}/crawler/events`
+const CRAWLER_SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'}/crawler/events`
+
+let crawlerSSE: EventSource | null = null
 
 function setupSSE() {
-  if (sseConnection) sseConnection.close()
-  sseConnection = new EventSource(SSE_URL)
-  sseConnection.onmessage = (e) => {
+  if (crawlerSSE) crawlerSSE.close()
+  crawlerSSE = new EventSource(CRAWLER_SSE_URL)
+  crawlerSSE.onmessage = (e) => {
     try {
       const evt = JSON.parse(e.data)
       if (evt.type === 'download') {
@@ -876,22 +868,21 @@ function setupSSE() {
             selectedItemsMeta[evt.taskId].status = evt.status
           }
         }
-        // If reimported, refresh stats
         if (evt.status === 'reimported' || evt.status === 'completed' || evt.status === 'failed') {
-          fetchFilters() // refresh task filter options
+          fetchFilters()
         }
       }
     } catch { /* ignore */ }
   }
-  sseConnection.onerror = () => {
-    sseConnection?.close()
+  crawlerSSE.onerror = () => {
+    crawlerSSE?.close()
     setTimeout(setupSSE, 3000)
   }
 }
 
 function teardownSSE() {
-  sseConnection?.close()
-  sseConnection = null
+  crawlerSSE?.close()
+  crawlerSSE = null
 }
 
 onMounted(() => {
@@ -1127,9 +1118,8 @@ onUnmounted(teardownSSE)
                 <el-button size="small" type="warning" plain @click="retryDownload(row.id)">重试</el-button>
                 <el-button size="small" type="danger" plain @click="deleteSingle(row.id)">删除</el-button>
               </template>
-              <!-- 已完成: 转码、重新下载、删除 -->
+              <!-- 已完成: 查看命令、重新下载、删除 -->
               <template v-else-if="row.status === 'completed'">
-                <el-button size="small" type="success" plain @click="startTranscode(row.id)">转码</el-button>
                 <el-button size="small" plain @click="showErrorDetail(row)">查看命令</el-button>
                 <el-button v-if="row.field_name !== 'upload'" size="small" type="warning" plain @click="retryDownload(row.id)">重新下载</el-button>
                 <el-button size="small" type="danger" plain @click="deleteSingle(row.id)">删除</el-button>

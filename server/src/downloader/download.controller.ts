@@ -71,17 +71,17 @@ export class DownloadController {
     }
 
     if (field_name && field_name !== 'all') {
-      whereClause += ' AND field_name = ?'
+      whereClause += whereClause ? ' AND field_name = ?' : 'WHERE field_name = ?'
       params.push(field_name)
     }
 
     if (item_id && item_id !== 'all') {
-      whereClause += ' AND item_id = ?'
+      whereClause += whereClause ? ' AND item_id = ?' : 'WHERE item_id = ?'
       params.push(item_id)
     }
 
     if (keyword) {
-      whereClause += ' AND (filename LIKE ? OR url LIKE ? OR error LIKE ?)'
+      whereClause += whereClause ? ' AND (filename LIKE ? OR url LIKE ? OR error LIKE ?)' : 'WHERE (filename LIKE ? OR url LIKE ? OR error LIKE ?)'
       params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`)
     }
 
@@ -267,6 +267,29 @@ export class DownloadController {
     const filePath = resolvePath(task.file_path)
     if (!filePath || !fs.existsSync(filePath)) return { error: '文件不存在' }
 
+    const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
+    const fileName = task.filename || path.basename(filePath)
+    const basename = path.basename(fileName, path.extname(fileName))
+    const expectedOutput = path.join(outputDir, `${basename}.wav`)
+
+    // 如果转码结果文件已存在，检查是否有对应的完成转码任务 → 去重
+    if (fs.existsSync(expectedOutput)) {
+      const existing = this.db.db.prepare(
+        "SELECT * FROM tasks WHERE type = 'transcode' AND json_extract(payload, '$.file') = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1"
+      ).get(toRelative(filePath)) as any
+      if (existing) {
+        return { ok: true, taskId: existing.id, alreadyTranscoded: true, outputPath: toRelative(expectedOutput) }
+      }
+    }
+
+    // 检查是否有运行中/等待中的转码任务 → 去重
+    const runningTask = this.db.db.prepare(
+      "SELECT * FROM tasks WHERE type = 'transcode' AND json_extract(payload, '$.file') = ? AND status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
+    ).get(toRelative(filePath)) as any
+    if (runningTask) {
+      return { error: `该文件已有转码任务正在执行或等待中（任务ID: ${runningTask.id.slice(0, 8)}...）`, taskId: runningTask.id }
+    }
+
     // 追溯到爬虫任务 ID，用于流水线自动触发判断
     let crawlerTaskId: string | undefined
     if (task.item_id) {
@@ -274,8 +297,6 @@ export class DownloadController {
       crawlerTaskId = item?.task_id || undefined
     }
 
-    const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
-    const fileName = task.filename || path.basename(filePath)
     const queueTask = this.queue.createTask('transcode', {
       file: toRelative(filePath),
       outputDir: toRelative(outputDir),

@@ -398,7 +398,24 @@ export class DownloadService {
       const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
       const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
       const fileName = task?.filename || path.basename(filePath)
+      const basename = path.basename(fileName, path.extname(fileName))
+      const expectedOutput = path.join(outputDir, `${basename}.wav`)
 
+      // 去重：转码结果文件已存在且有对应的完成转码任务 → 视为已转码
+      if (fs.existsSync(expectedOutput)) {
+        const existing = this.db.db.prepare(
+          "SELECT * FROM tasks WHERE type = 'transcode' AND json_extract(payload, '$.file') = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1"
+        ).get(toRelative(filePath)) as any
+        if (existing) return
+      }
+
+      // 去重：已有运行中/等待中的转码任务 → 跳过
+      const runningTask = this.db.db.prepare(
+        "SELECT * FROM tasks WHERE type = 'transcode' AND json_extract(payload, '$.file') = ? AND status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
+      ).get(toRelative(filePath)) as any
+      if (runningTask) return
+
+      // 创建转码任务（仅创建，不自动启动，统一在转码页面手动操作）
       this.queue.createTask('transcode', {
         file: toRelative(filePath),
         outputDir: toRelative(outputDir),
@@ -529,11 +546,11 @@ export class DownloadService {
   }
 
   /** Batch auto pipeline: smart handling for all download statuses */
-  async batchAutoPipeline(ids: string[], steps?: { start_download?: boolean; transcode?: boolean; whisper?: boolean; ai?: boolean }) {
-    const results: Array<{ id: string; ok: boolean; error?: string }> = []
-    // Default: all steps enabled (backward compatible)
-    const s = { start_download: true, transcode: true, whisper: true, ai: true, ...steps }
-    const allOn = s.start_download && s.transcode && s.whisper && s.ai
+  async batchAutoPipeline(ids: string[], steps?: { start_download?: boolean; whisper?: boolean; ai?: boolean }) {
+    const results: Array<{ id: string; ok: boolean; error?: string; alreadyTranscoded?: boolean; alreadyTranscoding?: boolean }> = []
+    // Default: all steps enabled (backward compatible) — transcode is always auto
+    const s = { start_download: true, whisper: true, ai: true, ...steps }
+    const sTranscode = true // 转码始终自动创建任务
 
     for (const id of ids) {
       try {
@@ -550,12 +567,11 @@ export class DownloadService {
             if (crawlerTask) {
               const payload = {
                 ...crawlerTask.payload,
-                autoPipeline: allOn,
+                autoPipeline: s.start_download && sTranscode && s.whisper && s.ai,
                 autoStartDownload: s.start_download,
-                autoTranscode: s.transcode,
+                autoDownload: s.start_download,
                 autoWhisper: s.whisper,
                 autoAI: s.ai,
-                autoDownload: s.start_download,
               }
               this.queue.updateTaskPayload(crawlerTaskId, payload)
             }
@@ -563,27 +579,46 @@ export class DownloadService {
         }
 
         if (task.status === 'completed') {
-          if (s.transcode) {
-            // 已完成 + 需要转码：直接创建转码任务进入后续流水线
-            const filePath = resolvePath(task.file_path)
-            if (!filePath || !fs.existsSync(filePath)) {
-              results.push({ id, ok: false, error: '下载文件不存在' })
+          // 转码始终自动：创建转码任务进入转码页面
+          const filePath = resolvePath(task.file_path)
+          if (!filePath || !fs.existsSync(filePath)) {
+            results.push({ id, ok: false, error: '下载文件不存在' })
+            continue
+          }
+          const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
+          const fileName = task.filename || path.basename(filePath)
+          const basename = path.basename(fileName, path.extname(fileName))
+          const expectedOutput = path.join(outputDir, `${basename}.wav`)
+          const relFilePath = toRelative(filePath)
+
+          // 去重：转码结果文件已存在且有对应的完成转码任务 → 跳过
+          if (fs.existsSync(expectedOutput)) {
+            const existingTranscode = this.db.db.prepare(
+              "SELECT * FROM tasks WHERE type = 'transcode' AND json_extract(payload, '$.file') = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1"
+            ).get(relFilePath) as any
+            if (existingTranscode) {
+              results.push({ id, ok: true, alreadyTranscoded: true })
               continue
             }
-            const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
-            const fileName = task.filename || path.basename(filePath)
-            this.queue.createTask('transcode', {
-              file: toRelative(filePath),
-              outputDir: toRelative(outputDir),
-              source: 'download',
-              fileName,
-              crawlerTaskId,
-            })
-            results.push({ id, ok: true })
-          } else {
-            // 已完成但不需要后续步骤
-            results.push({ id, ok: true })
           }
+
+          // 去重：已有运行中/等待中的转码任务 → 跳过
+          const runningTranscode = this.db.db.prepare(
+            "SELECT * FROM tasks WHERE type = 'transcode' AND json_extract(payload, '$.file') = ? AND status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
+          ).get(relFilePath) as any
+          if (runningTranscode) {
+            results.push({ id, ok: true, alreadyTranscoding: true })
+            continue
+          }
+
+          this.queue.createTask('transcode', {
+            file: relFilePath,
+            outputDir: toRelative(outputDir),
+            source: 'download',
+            fileName,
+            crawlerTaskId,
+          })
+          results.push({ id, ok: true })
         } else if (task.status === 'pending' || task.status === 'paused') {
           // 未开始/暂停：启动下载（如果 start_download 被选中）
           if (s.start_download) {
@@ -1097,7 +1132,16 @@ export class DownloadService {
     if (mergedOpts.userAgent) dl = dl.addOption('userAgent', mergedOpts.userAgent)
     if (mergedOpts.referer) dl = dl.addOption('referer', mergedOpts.referer)
     if (mergedOpts.sleepInterval !== undefined) dl = dl.addOption('sleepInterval', mergedOpts.sleepInterval)
-    if (mergedOpts.addHeaders) dl = dl.options({ addHeaders: mergedOpts.addHeaders })
+    if (mergedOpts.addHeaders) {
+      const headersObj: Record<string, string> = {}
+      for (const h of mergedOpts.addHeaders as string[]) {
+        const colon = h.indexOf(':')
+        if (colon > 0) {
+          headersObj[h.slice(0, colon)] = h.slice(colon + 1)
+        }
+      }
+      dl = dl.options({ addHeaders: headersObj })
+    }
     if (mergedOpts.extractorArgs) dl = dl.options({ extractorArgs: mergedOpts.extractorArgs })
     if (mergedOpts.rawArgs && mergedOpts.rawArgs.length > 0) dl = dl.addArgs(...mergedOpts.rawArgs)
 

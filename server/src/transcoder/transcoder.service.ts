@@ -96,6 +96,17 @@ export class TranscoderService {
             onProgress(pct)
           }
         })
+      } else if (onProgress) {
+        // Fallback: emit progress updates based on duration estimate
+        let elapsed = 0
+        const interval = setInterval(() => {
+          elapsed += 500
+          const pct = totalDuration > 0
+            ? Math.min(Math.round((elapsed / 1000 / totalDuration) * 100), 99)
+            : Math.min(elapsed / 100, 99)
+          if (pct < 100) onProgress(pct)
+        }, 500)
+        ffmpeg.on('close', () => clearInterval(interval))
       }
     })
   }
