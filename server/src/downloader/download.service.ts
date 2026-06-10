@@ -7,7 +7,6 @@ import { YtDlp } from 'ytdlp-nodejs'
 import { DatabaseService } from '../common/database/database.service'
 import { SseService } from '../common/sse/sse.service'
 import { QueueService } from '../common/queue/queue.service'
-import { PipelineService } from '../common/pipeline/pipeline.service'
 import { v4 as uuid } from 'uuid'
 import { formatDate } from '../common/utils/date.util'
 import { isVideoPlatform, classifyExt, extractExtFromUrl, extractVideoId, PSEUDO_STATIC_EXTS } from '../common/utils/url.util'
@@ -69,7 +68,6 @@ export class DownloadService {
     private readonly db: DatabaseService,
     private readonly sse: SseService,
     private readonly queue: QueueService,
-    private readonly pipeline: PipelineService,
   ) {
     this.dataDir = path.resolve(projectRoot, 'data')
     this.downloadDir = path.resolve(projectRoot, 'data', 'downloads')
@@ -386,38 +384,42 @@ export class DownloadService {
   /** 下载完成后检查是否需要自动进入转码→识别→AI 流水线 */
   private async autoContinuePipeline(taskId: string, itemId: string, filePath: string) {
     try {
-      if (!itemId || !filePath || !fs.existsSync(filePath)) return
-
-      // 追溯到爬虫任务
-      const item = this.db.db.prepare('SELECT task_id FROM crawl_items WHERE id = ?').get(itemId) as any
-      if (!item?.task_id) return
-
-      const crawlerTaskId = item.task_id
-      if (!this.pipeline.shouldAutoTranscode(crawlerTaskId)) return
+      if (!filePath || !fs.existsSync(filePath)) return
 
       const task = this.db.db.prepare('SELECT * FROM download_queue WHERE id = ?').get(taskId) as any
+      if (!task) return
+
+      const fileType = task.file_type || 'unknown'
+      if (fileType !== 'video' && fileType !== 'audio') return
+
       const outputDir = path.resolve(projectRoot, 'data', 'transcoded')
-      const fileName = task?.filename || path.basename(filePath)
+      const fileName = task.filename || path.basename(filePath)
       const basename = path.basename(fileName, path.extname(fileName))
       const expectedOutput = path.join(outputDir, `${basename}.wav`)
+      const relFilePath = toRelative(filePath)
 
-      // 去重：转码结果文件已存在且有对应的完成转码任务 → 视为已转码
+      let crawlerTaskId: string | undefined
+      if (itemId) {
+        const item = this.db.db.prepare('SELECT task_id FROM crawl_items WHERE id = ?').get(itemId) as any
+        if (item?.task_id) {
+          crawlerTaskId = item.task_id
+        }
+      }
+
       if (fs.existsSync(expectedOutput)) {
         const existing = this.db.db.prepare(
           "SELECT * FROM tasks WHERE type = 'transcode' AND json_extract(payload, '$.file') = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1"
-        ).get(toRelative(filePath)) as any
+        ).get(relFilePath) as any
         if (existing) return
       }
 
-      // 去重：已有运行中/等待中的转码任务 → 跳过
       const runningTask = this.db.db.prepare(
         "SELECT * FROM tasks WHERE type = 'transcode' AND json_extract(payload, '$.file') = ? AND status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
-      ).get(toRelative(filePath)) as any
+      ).get(relFilePath) as any
       if (runningTask) return
 
-      // 创建转码任务（仅创建，不自动启动，统一在转码页面手动操作）
       this.queue.createTask('transcode', {
-        file: toRelative(filePath),
+        file: relFilePath,
         outputDir: toRelative(outputDir),
         source: 'download',
         fileName,

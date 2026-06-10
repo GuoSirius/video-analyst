@@ -279,8 +279,10 @@ function resultText(t: any) {
 }
 
 // --- SSE ---
+const SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'}/whisper/events`
+
 function connectSSE() {
-  sseConnection = new EventSource('/api/whisper/events')
+  sseConnection = new EventSource(SSE_URL)
   sseConnection.addEventListener('message', (e) => {
     try {
       const evt = JSON.parse(e.data)

@@ -367,9 +367,11 @@ function sourceClass(t: any) {
 // SSE
 // ════════════════════════════════════════════════════════════════
 
+const SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'}/transcoder/events`
+
 function connectSSE() {
   if (sseConnection) sseConnection.close()
-  sseConnection = new EventSource('/api/transcoder/events')
+  sseConnection = new EventSource(SSE_URL)
   sseConnection.onmessage = (e) => {
     try {
       const evt = JSON.parse(e.data)
