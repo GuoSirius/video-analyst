@@ -84,15 +84,31 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       INSERT OR IGNORE INTO tasks (id, type, status, payload, result, error, progress, retries, max_retries, started_at, created_at, updated_at)
       VALUES (?, ?, 'completed', ?, ?, NULL, 100, 0, 3, ?, ?, ?)
     `)
-    // 1) 普诺赛官网宣传册采集（英文站，列表抓取 PDF）
+    // 1) 普诺赛中文站实验操作指南
+    taskStmt.run(
+      '54b8b05a-c1ee-4a5f-b880-a0438eb210fd',
+      'crawl',
+      JSON.stringify({"name":"普诺赛中文站实验操作指南","url":"https://www.procell.com.cn/resource/guide","mode":"list","rules":[{"name":"title","selector":"span","attr":"","regex":""},{"name":"link","selector":"a","attr":"href","regex":""},{"name":"id","selector":"a","attr":"href","regex":"\\/(\\d+)(?:$|\\?|#)"}],"itemSelector":".guide-list > li","paginationMode":"page","maxPages":0,"urlPattern":"https://www.procell.com.cn/resource/guide?page={page}","pageStart":1,"detailRules":[{"name":"content","selector":".page.landing-page .container.mt-5:nth-child(3)","attr":"","regex":""}],"errorMode":"standard","titleField":{"fields":["title"],"mode":"first"},"detailLinkField":{"fields":["link"],"mode":"first"},"idField":{"fields":["id"],"mode":"first"}}),
+      JSON.stringify({ itemsFound: 0 }),
+      '2026-07-16 09:08:13', '2026-07-16 09:06:15', '2026-07-16 09:08:14',
+    )
+    // 2) 普诺赛中文站新品速递
+    taskStmt.run(
+      '99a06506-ff9f-4731-9f23-4ca410f9dfce',
+      'crawl',
+      JSON.stringify({"name":"普诺赛中文站新品速递","url":"https://www.procell.com.cn/resource/products-alerts","mode":"list","rules":[{"name":"title","selector":".article-title","attr":"","regex":""},{"name":"link","selector":"a.d-block.position-relative","attr":"href","regex":""},{"name":"id","selector":"a.d-block.position-relative","attr":"href","regex":"\\/(\\d+)(?:$|\\?|#)"}],"itemSelector":".huodong-list","paginationMode":"page","maxPages":0,"urlPattern":"https://www.procell.com.cn/resource/products-alerts?page={page}","pageStart":1,"detailRules":[{"name":"content","selector":".page.landing-page .container.mt-5:nth-child(3)","attr":"","regex":""}],"errorMode":"standard","titleField":{"fields":["title"],"mode":"first"},"detailLinkField":{"fields":["link"],"mode":"first"},"idField":{"fields":["id"],"mode":"first"}}),
+      JSON.stringify({ itemsFound: 0 }),
+      '2026-07-16 09:08:17', '2026-07-16 08:47:53', '2026-07-16 09:08:18',
+    )
+    // 3) 普诺赛官网宣传册采集（英文站，列表抓取 PDF）
     taskStmt.run(
       '69a2e781-16af-4b7a-9ca3-f3e5d41b48b6',
       'crawl',
       JSON.stringify({ name: '普诺赛英文站宣传册采集', url: 'https://www.procellsystem.com/resources/brochure', mode: 'list', rules: [{ name: 'title', selector: '.text-left.px-4.d-block', attr: '', regex: '' }, { name: 'pdfUrl', selector: 'a.download-list', attr: 'href', regex: '' }], itemSelector: '.bg-white .row.mt-3 .col-12.col-lg-4.mb-3', paginationMode: 'none', autoStart: false, errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, mediaUrlField: { fields: ['pdfUrl'], mode: 'all' } }),
-      JSON.stringify({ itemsFound: 13 }),
+      JSON.stringify({ itemsFound: 0 }),
       '2026-06-05 11:41:47', '2026-06-05 11:41:47', '2026-06-08 09:24:22',
     )
-    // 2) 普诺赛英文站视频采集（列表 + 详情页解析腾讯/哔哩/优酷/YouTube 视频 ID，纯抓取）
+    // 4) 普诺赛英文站视频采集（列表 + 详情页解析腾讯/哔哩/优酷/YouTube 视频 ID，纯抓取）
     taskStmt.run(
       '6ff7f96b-fe08-435c-8705-69e102e58759',
       'crawl',
@@ -100,7 +116,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       JSON.stringify({ itemsFound: 0 }),
       '2026-06-05 11:42:10', '2026-06-05 11:42:10', '2026-06-08 09:24:22',
     )
-    // 3) 普诺赛中文站视频采集（列表 + 详情页解析上述视频平台 ID，纯抓取）
+    // 5) 普诺赛中文站视频采集（列表 + 详情页解析上述视频平台 ID，纯抓取）
     taskStmt.run(
       '2b2b277a-1b66-4914-8ded-cc6468fd5bae',
       'crawl',
