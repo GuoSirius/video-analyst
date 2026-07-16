@@ -267,15 +267,6 @@ async function deleteItem(id: string) {
   } catch { /* cancelled */ }
 }
 
-async function cancelCrawlItem(id: string) {
-  try {
-    await ElMessageBox.confirm('确定要取消采集该项吗？', '确认', { type: 'warning' })
-    await crawlerAPI.cancelItem(id)
-    ElMessage.success('已取消采集')
-    refresh()
-  } catch { /* cancelled */ }
-}
-
 async function retrySingleItem(id: string) {
   try {
     await ElMessageBox.confirm('将重新抓取该项数据（仅该项，不影响其他）。确定继续？', '确认', { type: 'info' })
@@ -353,7 +344,7 @@ function canDelete(s: string) { return s === 'pending' || s === 'completed' || s
 
 function itemStatusLabel(s: string) {
   const map: Record<string, string> = {
-    pending: '待采集', processing: '采集中', crawled: '已采集', error: '采集失败',
+    crawled: '已采集', error: '采集失败',
   }
   return map[s] || s || '未知'
 }
@@ -405,12 +396,6 @@ function syncTableSelection() {
   })
   syncingSelection = false
 }
-
-// 根据采集状态判断操作按钮
-function canCrawl(s: string) { return s === 'pending' }
-function canCancelCrawl(s: string) { return s === 'processing' }
-function canRecrawl(s: string) { return s === 'error' || s === 'crawled' }
-
 
 /** 计算采集项包含的媒体资源数量（从 _media_urls 数组或 media_url 字段） */
 function mediaCount(item: any): number {
@@ -604,12 +589,8 @@ onUnmounted(teardownSSE)
           <span class="text-xs text-gray-400 flex-shrink-0">状态：</span>
           <el-select v-model="statusFilter" size="small" class="!w-24">
             <el-option label="全部" value="all" />
-            <el-option label="待采集" value="pending" />
-            <el-option label="采集中" value="processing" />
             <el-option label="已采集" value="crawled" />
             <el-option label="采集失败" value="error" />
-            <el-option label="未带入" value="not_imported" />
-            <el-option label="已带入" value="imported" />
           </el-select>
         </span>
         <span class="inline-flex items-center gap-1">
@@ -684,16 +665,10 @@ onUnmounted(teardownSSE)
           <template #default="{ row }">
             <div class="flex items-center justify-center gap-1 flex-wrap">
               <el-button size="small" type="primary" plain @click="showDetail(row)">查看</el-button>
-              <!-- 待采集 -->
-              <el-button v-if="canCrawl(row.status)" size="small" plain @click="retrySingleItem(row.id)">采集</el-button>
-              <!-- 采集中 -->
-              <el-button v-if="canCancelCrawl(row.status)" size="small" type="warning" plain @click="cancelCrawlItem(row.id)">取消采集</el-button>
-              <!-- 已采集：重采、删除 -->
-              <template v-if="row.status === 'crawled'">
-                <el-button size="small" plain @click="recrawlSingleItem(row.id)">重采</el-button>
-              </template>
-              <!-- 采集失败：重采、删除 -->
-              <el-button v-if="canRecrawl(row.status) && row.status === 'error'" size="small" type="warning" plain @click="retrySingleItem(row.id)">重采</el-button>
+              <!-- 已采集：重采 -->
+              <el-button v-if="row.status === 'crawled'" size="small" plain @click="recrawlSingleItem(row.id)">重采</el-button>
+              <!-- 采集失败：重采 -->
+              <el-button v-if="row.status === 'error'" size="small" type="warning" plain @click="retrySingleItem(row.id)">重采</el-button>
               <el-button size="small" type="danger" plain @click="deleteItem(row.id)">删除</el-button>
             </div>
           </template>

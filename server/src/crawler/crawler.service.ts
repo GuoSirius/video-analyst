@@ -23,64 +23,6 @@ export interface UrlTransform {
   fieldName: string
   /** 链接模板，{fieldName} 占位符会被实际值替换 */
   urlTemplate: string
-  /** 下载方式：yt-dlp 或 file（文件直链） */
-  downloadMethod: 'yt-dlp' | 'file'
-  /** yt-dlp 下载参数（仅 downloadMethod='yt-dlp' 时有效，不同站点可配置不同参数） */
-  ytDlpOptions?: YtDlpOptions
-}
-
-/** yt-dlp 画质预设 */
-export type QualityPreset = 'compatible' | 'high-mp4' | 'single'
-
-/** 画质预设 → format 映射 */
-export const QUALITY_PRESET_FORMATS: Record<QualityPreset, string> = {
-  'compatible': 'bestvideo*+bestaudio*/best',
-  'high-mp4': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-  'single': 'best[ext=mp4]/best',
-}
-
-/** yt-dlp 下载参数配置 */
-export interface YtDlpOptions {
-  /** 画质预设（优先级低于 format 自定义输入） */
-  qualityPreset?: QualityPreset
-  /** 从浏览器读取 cookies（如 chrome、firefox、edge） */
-  cookiesFromBrowser?: string
-  /** cookies 文件路径 */
-  cookies?: string
-  /** 代理地址 */
-  proxy?: string
-  /** 下载速率限制（如 5M、500K） */
-  limitRate?: string
-  /** 自定义 User-Agent */
-  userAgent?: string
-  /** Referer 请求头 */
-  referer?: string
-  /** 站点登录用户名 */
-  username?: string
-  /** 站点登录密码 */
-  password?: string
-  /** 自定义请求头 */
-  addHeaders?: Record<string, string>
-  /** 绕过地域限制 */
-  geoBypass?: boolean
-  /** 跳过 HTTPS 证书校验 */
-  noCheckCertificates?: boolean
-  /** 请求间隔（秒） */
-  sleepInterval?: number
-  /** 重试次数 */
-  retries?: number
-  /** 自定义格式选择器（覆盖预设，留空则使用预设值） */
-  format?: string
-  /** 提取器专属参数，如 { youtube: ['player_client=web'] } */
-  extractorArgs?: Record<string, string[]>
-  /** 额外的原始命令行参数（直接传递给 yt-dlp） */
-  rawArgs?: string[]
-  /** 禁止下载播放列表（null = 不设置，允许下载播放列表） */
-  noPlaylist?: boolean | null
-  /** 连接超时秒数（null = 不设置，使用 yt-dlp 默认） */
-  socketTimeout?: number | null
-  /** 提取器重试次数（null = 不设置，使用 yt-dlp 默认） */
-  extractorRetries?: number | null
 }
 
 export interface CrawlPayload {
@@ -107,14 +49,6 @@ export interface CrawlPayload {
   // ── 执行开关 ──
   /** 创建后自动执行爬取任务 */
   autoStart?: boolean
-  /** 爬取完成后自动将媒体资源带入下载队列 */
-  autoDownload?: boolean
-  /** 下载完成后自动转码 */
-  autoTranscode?: boolean
-  /** 识别完成后自动 AI 分析 */
-  autoAI?: boolean
-  /** 一键全开：等效于 autoStart + autoDownload + autoTranscode + autoAI */
-  autoPipeline?: boolean
 
   // ── 容错 ──
   errorMode?: 'lenient' | 'standard' | 'strict'
@@ -136,16 +70,54 @@ export interface CrawlPayload {
 
 @Injectable()
 export class CrawlerService {
-  async fetchHtml(url: string): Promise<string> {
-    const resp = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-      },
-    })
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
+  async fetchHtml(url: string, timeoutMs = 15000): Promise<string> {
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      throw new Error(`Invalid URL: ${url}`)
     }
-    return resp.text()
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`Unsupported protocol (SSRF guard): ${parsed.protocol}`)
+    }
+    if (this.isBlockedHost(parsed.hostname)) {
+      throw new Error(`Blocked target host (SSRF guard): ${parsed.hostname}`)
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        },
+        signal: controller.signal,
+      })
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
+      }
+      return resp.text()
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /** SSRF 防护：拦截私有网段、回环、链路本地与云元数据地址（169.254.169.254） */
+  private isBlockedHost(hostname: string): boolean {
+    const host = hostname.toLowerCase()
+    if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) return true
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+    if (m) {
+      const a = Number(m[1])
+      const b = Number(m[2])
+      if (a === 10) return true
+      if (a === 127) return true
+      if (a === 0) return true
+      if (a >= 224) return true // 组播 / 保留
+      if (a === 169 && b === 254) return true // 链路本地 / 云元数据
+      if (a === 172 && b >= 16 && b <= 31) return true // RFC1918
+      if (a === 192 && b === 168) return true
+    }
+    return false
   }
 
   parseHtml(html: string, rules: CrawlRule[], itemSelector?: string, sourceUrl?: string): Record<string, any>[] {

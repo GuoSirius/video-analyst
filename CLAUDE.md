@@ -63,20 +63,6 @@ web/src/
 - **下拉 + 自由输入**: cookies 等场景用 `el-select` + `filterable` + `allow-create` + `clearable`，预设常用值但允许自定义
 - **弹窗合并**: 相近功能的弹窗共用一个 dialog，通过 `v-if` 条件区块 + 动态 title 区分模式
 
-### 3. URL 检测与文件名规范
-
-#### 共享工具 `server/src/common/utils/url.util.ts`
-所有 URL 类型判断、扩展名提取、视频 ID 提取的**唯一入口**，禁止在业务代码中内联重复列表。
-
-| 导出 | 用途 |
-|---|---|
-| `VIDEO_PLATFORM_DOMAINS` | 已知视频站点域名（唯一数据源） |
-| `isVideoPlatform(url)` | URL 是否属于已知视频平台 |
-| `extractExtFromUrl(url)` | 从末段取扩展名，自动过滤伪静态后缀 |
-| `extractVideoId(url)` | 平台原生视频 ID |
-| `classifyExt(ext)` | 扩展名 → `video/audio/image/document/unknown` |
-| `resolveFileType(url, ext)` | 综合判断：扩展名 + 平台 + URL 特征 |
-
 ## 环境变量
 
 | 变量 | 说明 |

@@ -64,21 +64,6 @@ export class QueueService {
     return rows.map(r => this.rowToTask(r))
   }
 
-  getPendingTasks(type?: string): Task[] {
-    const sql = type
-      ? "SELECT * FROM tasks WHERE status IN ('pending', 'failed') AND retries < max_retries AND type = ? ORDER BY created_at ASC"
-      : "SELECT * FROM tasks WHERE status IN ('pending', 'failed') AND retries < max_retries ORDER BY created_at ASC"
-    const rows = (type
-      ? this.db.db.prepare(sql).all(type)
-      : this.db.db.prepare(sql).all()) as any[]
-    return rows.map(r => this.rowToTask(r))
-  }
-
-  getRunningTasks(): Task[] {
-    const rows = this.db.db.prepare("SELECT * FROM tasks WHERE status = 'running'").all() as any[]
-    return rows.map(r => this.rowToTask(r))
-  }
-
   updateTaskStatus(id: string, status: Task['status']) {
     if (status === 'running') {
       this.db.db.prepare(

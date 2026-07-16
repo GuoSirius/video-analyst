@@ -62,7 +62,7 @@ onUnmounted(() => {
     <h2 class="text-lg font-bold mb-1">工作台</h2>
     <p class="text-[13px] text-gray-500 mb-6">网页采集一站式处理：新建爬取任务 · 执行采集 · 查看结果 · 导出数据</p>
 
-    <div class="grid grid-cols-5 gap-4 mb-6">
+    <div class="grid grid-cols-4 gap-4 mb-6">
       <div v-for="m in modules" :key="m.key" @click="router.push(m.path)"
         class="stat-card cursor-pointer border border-transparent hover:border-gray-600/40">
         <div class="flex items-start justify-between mb-3">
@@ -82,7 +82,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="grid grid-cols-5 gap-5">
+    <div class="grid grid-cols-4 gap-5">
       <div class="col-span-3 card-static">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-sm font-semibold flex items-center gap-2"><i class="fas fa-clock text-gray-500 text-xs"></i>最新任务</h3>

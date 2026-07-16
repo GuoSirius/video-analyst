@@ -122,11 +122,8 @@ const SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/a
 
 async function refreshItemCounts() {
   try {
-    const { data: itemsResp } = await crawlerAPI.getItems({ pageSize: 10000 })
-    const items = itemsResp.data || itemsResp
-    const counts: Record<string, number> = {}
-    items.forEach((i: any) => { counts[i.task_id] = (counts[i.task_id] || 0) + 1 })
-    itemCounts.value = counts
+    const { data } = await crawlerAPI.getItemCounts()
+    itemCounts.value = data || {}
   } catch { /* ignore */ }
 }
 

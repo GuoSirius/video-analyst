@@ -1,5 +1,5 @@
 import { Injectable, Controller, Post, Get, Delete, Put, Param, Body, Query, Sse, Res } from '@nestjs/common'
-import { Observable, merge } from 'rxjs'
+import { Observable } from 'rxjs'
 import { Response } from 'express'
 import * as cheerio from 'cheerio'
 import * as yaml from 'js-yaml'
@@ -170,6 +170,28 @@ export class CrawlerController {
     }
   }
 
+  /** 按任务统计采集项数量（轻量，避免前端全量拉取计数） */
+  @Get('items/counts')
+  getItemCounts(@Query('taskIds') taskIdsStr?: string) {
+    let rows: { task_id: string; cnt: number }[]
+    if (taskIdsStr) {
+      const taskIds = taskIdsStr.split(',').filter(Boolean)
+      const placeholders = taskIds.map(() => '?').join(',')
+      rows = this.db.db.prepare(
+        `SELECT task_id, COUNT(*) as cnt FROM crawl_items WHERE task_id IN (${placeholders}) GROUP BY task_id`
+      ).all(...taskIds) as any[]
+    } else {
+      rows = this.db.db.prepare(
+        'SELECT task_id, COUNT(*) as cnt FROM crawl_items GROUP BY task_id'
+      ).all() as any[]
+    }
+    const counts: Record<string, number> = {}
+    for (const r of rows) {
+      if (r.task_id) counts[r.task_id] = (counts[r.task_id] || 0) + r.cnt
+    }
+    return counts
+  }
+
   @Delete('items/:id')
   deleteItem(@Param('id') id: string) {
     this.db.db.prepare('DELETE FROM crawl_items WHERE id = ?').run(id)
@@ -184,15 +206,6 @@ export class CrawlerController {
   @Post('items/:id/recrawl')
   async recrawlItem(@Param('id') id: string) {
     return this.recrawlSingleItem(id)
-  }
-
-  @Post('items/:id/cancel')
-  cancelItem(@Param('id') id: string) {
-    const item = this.db.db.prepare('SELECT * FROM crawl_items WHERE id = ?').get(id) as any
-    if (!item) return { error: '采集项不存在' }
-    if (item.status !== 'processing') return { error: '只能取消采集中状态的项' }
-    this.db.db.prepare(`UPDATE crawl_items SET status = 'pending' WHERE id = ?`).run(id)
-    return { ok: true }
   }
 
   @Post('tasks/:id/start')
@@ -424,7 +437,7 @@ export class CrawlerController {
 
   @Sse('events')
   events(): Observable<MessageEvent> {
-    return merge(this.sse.getTaskStream(), this.sse.getGenericStream())
+    return this.sse.getTaskStream()
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -590,7 +603,10 @@ export class CrawlerController {
       if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true })
       const filePath = path.join(exportDir, `export_${timestamp}.xlsx`)
       await workbook.xlsx.writeFile(filePath)
-      return res.download(filePath)
+      return res.download(filePath, (err) => {
+        if (err) console.warn('[export] download failed:', err.message)
+        fs.unlink(filePath, () => {})
+      })
     }
 
     if (format === 'csv' && taskIds.length > 1) {
@@ -721,7 +737,10 @@ export class CrawlerController {
       if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true })
       const filePath = path.join(exportDir, `export_${timestamp}.xlsx`)
       await workbook.xlsx.writeFile(filePath)
-      return res.download(filePath)
+      return res.download(filePath, (err) => {
+        if (err) console.warn('[export] download failed:', err.message)
+        fs.unlink(filePath, () => {})
+      })
     }
 
     const content = generateContent()!
@@ -808,7 +827,7 @@ export class CrawlerController {
           html, rules, mode === 'list' ? (itemSelector || undefined) : undefined, currentUrl,
         )
 
-        if (urlPattern && isUnlimited && items.length === 0 && pageIndex > pageStart) {
+        if (urlPattern && isUnlimited && items.length === 0) {
           console.log(`[crawler] Page ${pageIndex} returned 0 items, stopping`)
           break
         }
@@ -874,10 +893,10 @@ export class CrawlerController {
 
                 if (isUrl(valStr)) {
                   effectiveUrl = normalizeUrl(valStr, normalizeSource)
-                  method = transform?.downloadMethod || this.inferDownloadMethod(effectiveUrl)
+                  method = 'file'
                 } else if (transform) {
                   effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, item)
-                  method = transform.downloadMethod || this.inferDownloadMethod(effectiveUrl)
+                  method = 'file'
                 } else {
                   continue
                 }
@@ -898,7 +917,7 @@ export class CrawlerController {
 
                 if (isUrl(valStr)) {
                   mediaUrl = normalizeUrl(valStr, normalizeSource)
-                  const method = transform?.downloadMethod || this.inferDownloadMethod(mediaUrl)
+                  const method = 'file'
                   item._media_urls = [mediaUrl]
                   item._media_url_fields = [fieldName]
                   item._media_methods = [method]
@@ -906,7 +925,7 @@ export class CrawlerController {
                   break
                 } else if (transform) {
                   mediaUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, item)
-                  const method = transform.downloadMethod || this.inferDownloadMethod(mediaUrl)
+                  const method = 'file'
                   item._media_urls = [mediaUrl]
                   item._media_url_fields = [fieldName]
                   item._media_methods = [method]
@@ -1029,16 +1048,6 @@ export class CrawlerController {
     }
     return [...sources].join(',')
   }
-
-  /** 根据 URL 内容推断推荐的下载方式（无转写规则时使用） */
-  private inferDownloadMethod(url: string): string {
-    const { source } = this.crawler.detectMediaType(url)
-    if (source === 'bilibili' || source === 'tencent' || source === 'youku' || source === 'youtube') {
-      return 'yt-dlp'
-    }
-    return 'file'
-  }
-
 
   /** 如果该字段配置了 URL 转换规则，则用模板拼接；否则返回原 URL */
   private applyUrlTransform(originalUrl: string, fieldName: string, transforms: UrlTransform[], extraData?: Record<string, any>): string {
@@ -1183,10 +1192,10 @@ export class CrawlerController {
 
             if (isUrl(valStr)) {
               effectiveUrl = normalizeUrl(valStr, normalizeSource)
-              method = transform?.downloadMethod || this.inferDownloadMethod(effectiveUrl)
+              method = 'file'
             } else if (transform) {
               effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, data)
-              method = transform.downloadMethod || this.inferDownloadMethod(effectiveUrl)
+              method = 'file'
             } else {
               continue
             }
@@ -1208,14 +1217,14 @@ export class CrawlerController {
               mediaUrl = normalizeUrl(valStr, normalizeSource)
               ;(data as any)._media_urls = [mediaUrl]
               ;(data as any)._media_url_fields = [fieldName]
-              ;(data as any)._media_methods = [transform?.downloadMethod || this.inferDownloadMethod(mediaUrl)]
+              ;(data as any)._media_methods = ['file']
               found = true
               break
             } else if (transform) {
               mediaUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, data)
               ;(data as any)._media_urls = [mediaUrl]
               ;(data as any)._media_url_fields = [fieldName]
-              ;(data as any)._media_methods = [transform.downloadMethod || this.inferDownloadMethod(mediaUrl)]
+              ;(data as any)._media_methods = ['file']
               found = true
               break
             }
