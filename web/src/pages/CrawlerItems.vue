@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, computed, nextTick, reactive, h } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed, nextTick, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { crawlerAPI } from '../api'
 import { usePagination } from '../composables/usePagination'
-import { usePipelineSteps } from '../composables/usePipelineSteps'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { copyWithFeedback } from '../utils/clipboard'
 import dayjs from 'dayjs'
@@ -117,9 +116,6 @@ function findSelected(id: string) { return items.value.find((x: any) => x.id ===
 const deletableItemIds = computed(() => selectedIds.value)
 const crawlableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'pending' }))
 const recrawlableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && (item.status === 'crawled' || item.status === 'error') }))
-const importableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'crawled' && (!item.download_status || item.download_status === 'pending') }))
-const reimportableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'crawled' && item.download_status && item.download_status === 'imported' }))
-const pipelineableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'crawled' }))
 
 async function batchDeleteItems() {
   const ids = deletableItemIds.value
@@ -158,109 +154,14 @@ async function batchRecrawlItems() {
   } catch { /* cancelled */ }
 }
 
-async function batchImportDownload() {
-  const ids = importableItemIds.value
-  if (!ids.length) { ElMessage.warning('所选项目中没有可带入下载的项（需要已采集且未带入）'); return }
-  try {
-    const autoDownloadRef = ref(false)
-    const msg = h('div', { class: 'space-y-3' }, [
-      h('div', { class: 'text-sm' }, `确定要将选中的 ${ids.length} 个采集项带入下载队列吗？`),
-      h('div', { class: 'flex items-center gap-2' }, [
-        h('input', {
-          type: 'checkbox', id: 'batch-auto-dl',
-          checked: autoDownloadRef.value,
-          onChange: (e: Event) => { autoDownloadRef.value = (e.target as HTMLInputElement).checked },
-          style: 'accent-color: #409eff;',
-        }),
-        h('label', { for: 'batch-auto-dl', class: 'text-xs text-gray-400 cursor-pointer', style: 'margin-left: 4px;' }, '带入后立即开始下载'),
-      ]),
-    ])
-    await ElMessageBox.confirm(msg, '批量带入下载确认', { type: 'info', confirmButtonText: '确定带入', cancelButtonText: '取消' })
-    const res = await crawlerAPI.batchImportDownload(ids, false, autoDownloadRef.value)
-    const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
-    const pendingCount = res.data?.filter?.((r: any) => r.pendingReimport)?.length ?? 0
-    if (pendingCount) {
-      ElMessage.success(`已带入 ${okCount} 个项，${pendingCount} 个将在下载完成后自动重新带入`)
-    } else {
-      ElMessage.success(`已带入 ${okCount} 个项到下载队列`)
-    }
-    refresh()
-  } catch { /* cancelled */ }
-}
 
-async function batchReimportDownload() {
-  const ids = reimportableItemIds.value
-  if (!ids.length) { ElMessage.warning('所选项目中没有可重新带入的项（需要已带入状态）'); return }
-  try {
-    const autoDownloadRef = ref(false)
-    const msg = h('div', { class: 'space-y-3' }, [
-      h('div', { class: 'text-sm' }, `确定要将选中的 ${ids.length} 个采集项重新带入下载队列吗？旧的下载记录将被清除。`),
-      h('div', { class: 'flex items-center gap-2' }, [
-        h('input', {
-          type: 'checkbox', id: 'batch-re-auto-dl',
-          checked: autoDownloadRef.value,
-          onChange: (e: Event) => { autoDownloadRef.value = (e.target as HTMLInputElement).checked },
-          style: 'accent-color: #409eff;',
-        }),
-        h('label', { for: 'batch-re-auto-dl', class: 'text-xs text-gray-400 cursor-pointer', style: 'margin-left: 4px;' }, '带入后立即开始下载'),
-      ]),
-    ])
-    await ElMessageBox.confirm(msg, '批量重新带入确认', { type: 'warning', confirmButtonText: '确定重新带入', cancelButtonText: '取消' })
-    const res = await crawlerAPI.batchImportDownload(ids, true, autoDownloadRef.value)
-    const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
-    const pendingCount = res.data?.filter?.((r: any) => r.pendingReimport)?.length ?? 0
-    if (pendingCount) {
-      ElMessage.success(`已重新带入 ${okCount} 个项，${pendingCount} 个将在下载完成后自动重新带入`)
-    } else {
-      ElMessage.success(`已重新带入 ${okCount} 个项到下载队列`)
-    }
-    refresh()
-  } catch { /* cancelled */ }
-}
 
-// ── Pipeline step selection dialog for batch auto pipeline ──
-const ITEM_PIPELINE_STEPS = [
-  { key: 'import', label: '带入下载' },
-  { key: 'start_download', label: '启动下载' },
-  { key: 'transcode', label: '转码处理' },
-  { key: 'whisper', label: '语音识别' },
-  { key: 'ai', label: 'AI 分析总结' },
-]
-const itemPipeline = usePipelineSteps(ITEM_PIPELINE_STEPS)
-const pipelineDialogVisible = ref(false)
-const pipelineTargetIds = ref<string[]>([])
-const pipelineTargetCount = ref(0)
-const pipelineLoading = ref(false)
-
-function openPipelineDialog() {
-  pipelineTargetIds.value = pipelineableItemIds.value
-  pipelineTargetCount.value = pipelineTargetIds.value.length
-  itemPipeline.reset()
-  pipelineDialogVisible.value = true
-}
-
-async function confirmPipeline() {
-  const steps = itemPipeline.getStepFlags()
-  pipelineLoading.value = true
-  try {
-    const res = await crawlerAPI.batchItemsAutoPipeline(pipelineTargetIds.value, steps)
-    const okCount = res.data?.filter?.((r: any) => r.ok)?.length ?? 0
-    const failCount = res.data?.filter?.((r: any) => !r.ok)?.length ?? 0
-    if (failCount) { ElMessage.warning(`成功 ${okCount} 个，${failCount} 个失败`) }
-    else { ElMessage.success(`已启动 ${okCount} 个项的流水线`) }
-    pipelineDialogVisible.value = false
-    refresh()
-  } catch { /* cancelled */ }
-  pipelineLoading.value = false
-}
 
 // ── Export (item-level) ──
 const exportDialogVisible = ref(false)
 const exportFormat = ref<'json' | 'yaml' | 'csv' | 'excel'>('excel')
-const exportIncludeTranscriptions = ref(false)
-const exportIncludeAIResults = ref(false)
 const exportFields = ref<{ key: string; alias: string; selected: boolean }[]>([])
-const exportFieldGroups = ref<{ dbFields: any[]; transcriptionFields: any[]; aiFields: any[]; extraFields: any[] }>({ dbFields: [], transcriptionFields: [], aiFields: [], extraFields: [] })
+const exportFieldGroups = ref<{ dbFields: any[]; extraFields: any[] }>({ dbFields: [], extraFields: [] })
 const exportLoading = ref(false)
 
 function openExportDialog() {
@@ -268,8 +169,6 @@ function openExportDialog() {
   if (!ids.length) { ElMessage.warning('请先勾选要导出的采集项'); return }
   exportDialogVisible.value = true
   exportFormat.value = 'excel'
-  exportIncludeTranscriptions.value = false
-  exportIncludeAIResults.value = false
   loadExportFields()
 }
 
@@ -283,7 +182,7 @@ async function loadExportFields() {
     exportFieldGroups.value = data
     // Build field list from API response, select all by default
     const all: { key: string; alias: string; selected: boolean }[] = []
-    for (const g of [data.dbFields, data.extraFields, data.transcriptionFields, data.aiFields]) {
+    for (const g of [data.dbFields, data.extraFields]) {
       for (const f of (g || [])) {
         all.push({ key: f.key, alias: '', selected: true })
       }
@@ -306,8 +205,6 @@ async function doExport() {
       itemIds,
       format: exportFormat.value,
       fields: selectedFields.map(f => ({ key: f.key, alias: f.alias || f.key })),
-      includeTranscriptions: exportIncludeTranscriptions.value,
-      includeAIResults: exportIncludeAIResults.value,
     })
     const blob = res.data
     const url = window.URL.createObjectURL(blob)
@@ -477,7 +374,7 @@ function handleSelectionChange(rows: any[]) {
     if (!selectedIds.value.includes(id)) {
       selectedIds.value.push(id)
     }
-    selectedItemsMeta[id] = { id, status: row.status, download_status: row.download_status }
+    selectedItemsMeta[id] = { id, status: row.status }
   }
 }
 async function clearAllSelections() {
@@ -514,42 +411,6 @@ function canCrawl(s: string) { return s === 'pending' }
 function canCancelCrawl(s: string) { return s === 'processing' }
 function canRecrawl(s: string) { return s === 'error' || s === 'crawled' }
 
-// 导入下载：将采集项的媒体资源拆分为下载任务
-async function importToDownload(id: string, retry = false) {
-  try {
-    const autoDownloadRef = ref(false)
-    const msg = h('div', { class: 'space-y-3' }, [
-      h('div', { class: 'text-sm' }, retry ? '将采集项重新加入到下载队列中' : '将采集项的媒体资源加入到下载队列中'),
-      h('div', { class: 'flex items-center gap-2' }, [
-        h('input', {
-          type: 'checkbox',
-          id: `auto-dl-${id.slice(0, 8)}`,
-          checked: autoDownloadRef.value,
-          onChange: (e: Event) => { autoDownloadRef.value = (e.target as HTMLInputElement).checked },
-          style: 'accent-color: #409eff;',
-        }),
-        h('label', { for: `auto-dl-${id.slice(0, 8)}`, class: 'text-xs text-gray-400 cursor-pointer', style: 'margin-left: 4px;' }, '带入后立即开始下载'),
-      ]),
-    ])
-    await ElMessageBox.confirm(msg, retry ? '重新带入确认' : '带入下载确认', {
-      type: 'info',
-      confirmButtonText: retry ? '确定重新带入' : '确定带入',
-      cancelButtonText: '取消',
-    })
-    const res = await crawlerAPI.importToDownloadQueue(id, retry, autoDownloadRef.value)
-    if (res.data?.error) { ElMessage.error(res.data.error) }
-    else if (res.data?.pendingReimport) {
-      ElMessage.success(res.data.message || '将在当前下载完成后自动重新带入')
-    }
-    else {
-      const msg2 = retry
-        ? '已重新加入下载队列'
-        : (autoDownloadRef.value ? '已加入下载队列并开始下载' : '已加入下载队列')
-      ElMessage.success(msg2)
-      await fetchItems()
-    }
-  } catch { /* cancelled */ }
-}
 
 /** 计算采集项包含的媒体资源数量（从 _media_urls 数组或 media_url 字段） */
 function mediaCount(item: any): number {
@@ -563,38 +424,6 @@ function mediaCount(item: any): number {
   return item.media_url ? 1 : 0
 }
 
-/** 解析资源的下载方式列表（从 _media_methods 数组） */
-function mediaMethods(item: any): string[] {
-  if (!item.extra_data) return []
-  try {
-    const data = typeof item.extra_data === 'string' ? JSON.parse(item.extra_data) : item.extra_data
-    if (data._media_methods && Array.isArray(data._media_methods)) {
-      return data._media_methods
-    }
-  } catch { /* ignore */ }
-  return []
-}
-
-/** 下载方式汇总标签 */
-function downloadMethodLabel(item: any): { text: string; color: string } {
-  const methods = mediaMethods(item)
-  if (!methods.length) return { text: '-', color: 'text-gray-500' }
-  const hasYtDlp = methods.some(m => m === 'yt-dlp')
-  const hasFile = methods.some(m => m === 'file')
-  if (hasYtDlp && hasFile) return { text: '混合', color: 'text-amber-400' }
-  if (hasYtDlp) return { text: 'yt-dlp', color: 'text-orange-400' }
-  return { text: '直链', color: 'text-emerald-400' }
-}
-
-// 下载状态标签
-function downloadStatusLabel(s: string) {
-  const map: Record<string, string> = {
-    imported: '已带入',
-  }
-  // 'pending' is a legacy default artifact — treat same as not imported
-  if (s === 'pending') return '未带入'
-  return map[s] || s || '未带入'
-}
 
 /** When title is empty, pick the best display field from extra_data */
 function pickDisplayField(item: any): string {
@@ -661,9 +490,6 @@ function setupSSE() {
         } else if (evt.status !== 'deleted') {
           refresh()
         }
-      } else if (evt.type === 'download') {
-        // 下载完成后刷新列表（仅当需要查看带入结果时）
-        // download_status 只表示是否已带入，不跟踪下载状态
       }
     } catch { /* ignore */ }
   }
@@ -694,9 +520,6 @@ onUnmounted(teardownSSE)
         <p class="text-[13px] text-gray-500">查看和管理所有采集到的结构化数据</p>
       </div>
       <div class="flex items-center gap-2">
-        <el-button v-if="pipelineableItemIds.length" type="success" size="small" plain @click="openPipelineDialog">
-          <i class="fas fa-forward-step mr-1.5"></i>一键自动执行后续流程 ({{ pipelineableItemIds.length }})
-        </el-button>
         <el-dropdown v-if="selectedIds.length" trigger="click">
           <el-button size="small" plain>
             批量操作 <i class="fas fa-chevron-down ml-1 text-[10px]"></i>
@@ -708,12 +531,6 @@ onUnmounted(teardownSSE)
               </el-dropdown-item>
               <el-dropdown-item v-if="recrawlableItemIds.length" @click="batchRecrawlItems">
                 <i class="fas fa-rotate-right mr-1.5"></i>批量重采 ({{ recrawlableItemIds.length }})
-              </el-dropdown-item>
-              <el-dropdown-item v-if="importableItemIds.length" @click="batchImportDownload">
-                <i class="fas fa-download mr-1.5 text-green-400"></i>批量带入下载 ({{ importableItemIds.length }})
-              </el-dropdown-item>
-              <el-dropdown-item v-if="reimportableItemIds.length" @click="batchReimportDownload">
-                <i class="fas fa-repeat mr-1.5 text-amber-400"></i>批量重新带入 ({{ reimportableItemIds.length }})
               </el-dropdown-item>
               <el-dropdown-item v-if="selectedIds.length" @click="openExportDialog">
                 <i class="fas fa-file-export mr-1.5 text-blue-400"></i>导出 ({{ selectedIds.length }})
@@ -831,9 +648,6 @@ onUnmounted(teardownSSE)
           <template #default="{ row }">
             <div v-if="mediaCount(row) > 0" class="flex flex-col items-center gap-0.5">
               <span class="text-xs font-mono text-blue-400">{{ mediaCount(row) }}</span>
-              <span class="text-[10px]" :class="downloadMethodLabel(row).color">
-                {{ downloadMethodLabel(row).text }}
-              </span>
             </div>
             <span v-else class="text-xs text-gray-500">-</span>
           </template>
@@ -853,10 +667,6 @@ onUnmounted(teardownSSE)
                 'text-red-400': row.status === 'error',
                 'text-gray-500': !row.status,
               }">{{ itemStatusLabel(row.status) }}</span>
-              <span class="text-[10px]" :class="{
-                'text-gray-500': !row.download_status || row.download_status === 'pending' || row.status !== 'crawled',
-                'text-emerald-400': row.download_status === 'imported' && row.status === 'crawled',
-              }">{{ row.status === 'crawled' ? downloadStatusLabel(row.download_status) : '' }}</span>
             </div>
           </template>
         </el-table-column>
@@ -878,11 +688,9 @@ onUnmounted(teardownSSE)
               <el-button v-if="canCrawl(row.status)" size="small" plain @click="retrySingleItem(row.id)">采集</el-button>
               <!-- 采集中 -->
               <el-button v-if="canCancelCrawl(row.status)" size="small" type="warning" plain @click="cancelCrawlItem(row.id)">取消采集</el-button>
-              <!-- 已采集：重采、带入下载/重新带入、删除 -->
+              <!-- 已采集：重采、删除 -->
               <template v-if="row.status === 'crawled'">
                 <el-button size="small" plain @click="recrawlSingleItem(row.id)">重采</el-button>
-                <el-button v-if="!row.download_status || row.download_status === 'pending'" size="small" type="success" plain @click="importToDownload(row.id)">带入下载</el-button>
-                <el-button v-if="row.download_status === 'imported'" size="small" type="warning" plain @click="importToDownload(row.id, true)">重新带入</el-button>
               </template>
               <!-- 采集失败：重采、删除 -->
               <el-button v-if="canRecrawl(row.status) && row.status === 'error'" size="small" type="warning" plain @click="retrySingleItem(row.id)">重采</el-button>
@@ -910,53 +718,6 @@ onUnmounted(teardownSSE)
       </div>
     </div>
 
-    <!-- Pipeline Step Selection Dialog -->
-    <el-dialog v-model="pipelineDialogVisible" title="一键自动执行后续流程" width="540px" destroy-on-close :close-on-click-modal="false">
-      <div class="space-y-3">
-        <div class="text-xs text-gray-400">
-          将对选中的 <span class="text-gray-200 font-semibold">{{ pipelineTargetCount }}</span> 个采集项执行流水线。勾选的步骤按顺序自动执行，所选步骤必须连续不能跳跃。
-        </div>
-
-        <div class="flex items-center gap-2">
-          <el-checkbox :model-value="itemPipeline.allSelected" size="small" @change="itemPipeline.toggleAll()" />
-          <span class="text-xs text-gray-300">全选 / 取消全选</span>
-        </div>
-
-        <div class="flex flex-col gap-2.5 ml-5">
-          <el-checkbox v-model="itemPipeline.stepValues.import" size="small" @change="itemPipeline.onStepChange('import')">
-            <span class="text-xs">带入下载</span>
-            <span class="text-[11px] text-gray-500 ml-1.5">将媒体资源加入下载队列（不立即下载）</span>
-          </el-checkbox>
-          <el-checkbox v-model="itemPipeline.stepValues.start_download" size="small" @change="itemPipeline.onStepChange('start_download')">
-            <span class="text-xs">启动下载</span>
-            <span class="text-[11px] text-gray-500 ml-1.5">执行下载任务获取媒体文件</span>
-          </el-checkbox>
-          <el-checkbox v-model="itemPipeline.stepValues.transcode" size="small" @change="itemPipeline.onStepChange('transcode')">
-            <span class="text-xs">转码处理</span>
-            <span class="text-[11px] text-gray-500 ml-1.5">FFmpeg 转码为 16kHz 单声道 WAV</span>
-          </el-checkbox>
-          <el-checkbox v-model="itemPipeline.stepValues.whisper" size="small" @change="itemPipeline.onStepChange('whisper')">
-            <span class="text-xs">语音识别</span>
-            <span class="text-[11px] text-gray-500 ml-1.5">Whisper 自动语音识别</span>
-          </el-checkbox>
-          <el-checkbox v-model="itemPipeline.stepValues.ai" size="small" @change="itemPipeline.onStepChange('ai')">
-            <span class="text-xs">AI 分析总结</span>
-            <span class="text-[11px] text-gray-500 ml-1.5">调用 AI 模型进行内容分析总结</span>
-          </el-checkbox>
-        </div>
-
-        <div class="text-[11px] text-gray-500 mt-2">
-          不同状态的处理：<span class="text-purple-400">未开始</span>→启动 · <span class="text-blue-400">进行中</span>→等待完成 · <span class="text-amber-400">失败</span>→重试，成功后自动进入后续环节 · <span class="text-emerald-400">已完成</span>→直接进入后续环节
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="pipelineDialogVisible = false">取消</el-button>
-        <el-button type="success" :loading="pipelineLoading" @click="confirmPipeline">
-          <i class="fas fa-forward-step mr-1.5"></i>开始执行 ({{ pipelineTargetCount }})
-        </el-button>
-      </template>
-    </el-dialog>
 
     <!-- Detail Dialog -->
     <el-dialog v-model="detailVisible" title="采集结果详情" width="700px" destroy-on-close :close-on-click-modal="false">
@@ -999,9 +760,6 @@ onUnmounted(teardownSSE)
                   <td class="px-4 py-2.5 text-gray-400 w-28 font-mono align-top">资源数</td>
                   <td class="px-4 py-2.5 text-gray-200">
                     {{ mediaCount(detailItem) }}
-                    <span class="text-[11px] ml-2" :class="downloadMethodLabel(detailItem).color">
-                      ({{ downloadMethodLabel(detailItem).text }})
-                    </span>
                   </td>
                 </tr>
                 <tr>
@@ -1069,11 +827,6 @@ onUnmounted(teardownSSE)
           </el-radio-group>
         </div>
 
-        <div class="flex items-center gap-6">
-          <el-checkbox v-model="exportIncludeTranscriptions" size="small" @change="loadExportFields">包含识别文本</el-checkbox>
-          <el-checkbox v-model="exportIncludeAIResults" size="small" @change="loadExportFields">包含AI分析结果</el-checkbox>
-        </div>
-
         <div>
           <div class="flex items-center justify-between mb-2">
             <span class="text-xs text-gray-400">导出字段 <span class="text-gray-600">（勾选要导出的字段，可自定义别名）</span></span>
@@ -1093,18 +846,6 @@ onUnmounted(teardownSSE)
             <div v-for="f in exportFields.filter(x => exportFieldGroups.extraFields?.some(d => d.key === x.key))" :key="f.key" class="flex items-center gap-2 py-0.5">
               <el-checkbox v-model="f.selected" size="small" />
               <span class="text-xs text-gray-400 w-32 flex-shrink-0 font-mono">{{ exportFieldGroups.extraFields?.find(d => d.key === f.key)?.label || f.key }}</span>
-              <el-input v-model="f.alias" size="small" :placeholder="f.key" class="flex-1" />
-            </div>
-            <div v-if="exportIncludeTranscriptions && exportFields.filter(x => exportFieldGroups.transcriptionFields?.some(d => d.key === x.key)).length" class="text-[11px] text-gray-500 font-semibold mb-1.5 mt-2">识别结果字段</div>
-            <div v-for="f in exportFields.filter(x => exportIncludeTranscriptions && exportFieldGroups.transcriptionFields?.some(d => d.key === x.key))" :key="f.key" class="flex items-center gap-2 py-0.5">
-              <el-checkbox v-model="f.selected" size="small" />
-              <span class="text-xs text-gray-400 w-32 flex-shrink-0 font-mono">{{ exportFieldGroups.transcriptionFields?.find(d => d.key === f.key)?.label || f.key }}</span>
-              <el-input v-model="f.alias" size="small" :placeholder="f.key" class="flex-1" />
-            </div>
-            <div v-if="exportIncludeAIResults && exportFields.filter(x => exportFieldGroups.aiFields?.some(d => d.key === x.key)).length" class="text-[11px] text-gray-500 font-semibold mb-1.5 mt-2">AI分析字段</div>
-            <div v-for="f in exportFields.filter(x => exportIncludeAIResults && exportFieldGroups.aiFields?.some(d => d.key === x.key))" :key="f.key" class="flex items-center gap-2 py-0.5">
-              <el-checkbox v-model="f.selected" size="small" />
-              <span class="text-xs text-gray-400 w-32 flex-shrink-0 font-mono">{{ exportFieldGroups.aiFields?.find(d => d.key === f.key)?.label || f.key }}</span>
               <el-input v-model="f.alias" size="small" :placeholder="f.key" class="flex-1" />
             </div>
           </div>

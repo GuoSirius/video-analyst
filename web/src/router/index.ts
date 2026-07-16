@@ -19,36 +19,6 @@ const router = createRouter({
       component: () => import('../pages/CrawlerItems.vue'),
     },
     {
-      path: '/downloads',
-      name: 'downloads',
-      component: () => import('../pages/DownloadPage.vue'),
-    },
-    {
-      path: '/transcode',
-      name: 'transcode',
-      component: () => import('../pages/TranscodePage.vue'),
-    },
-    {
-      path: '/whisper',
-      name: 'whisper',
-      component: () => import('../pages/WhisperPage.vue'),
-    },
-    {
-      path: '/ai-analysis',
-      name: 'ai-analysis',
-      component: () => import('../pages/AiAnalysisPage.vue'),
-    },
-    {
-      path: '/providers',
-      name: 'providers',
-      component: () => import('../pages/Providers.vue'),
-    },
-    {
-      path: '/prompts',
-      name: 'prompts',
-      component: () => import('../pages/Prompts.vue'),
-    },
-    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },

@@ -25,12 +25,6 @@ const navItems: NavItem[] = [
       { path: '/crawler/items', label: '采集列表' },
     ],
   },
-  { path: '/downloads', label: '下载管理', icon: 'Folder' },
-  { path: '/transcode', label: '转码处理', icon: 'Film' },
-  { path: '/whisper', label: '语音识别', icon: 'Microphone' },
-  { path: '/ai-analysis', label: 'AI 分析', icon: 'Cpu' },
-  { path: '/providers', label: '供应商管理', icon: 'Monitor' },
-  { path: '/prompts', label: '提示词管理', icon: 'EditPen' },
 ]
 
 const currentTitle = computed(() => {

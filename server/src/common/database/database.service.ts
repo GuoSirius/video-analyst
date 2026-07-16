@@ -2,7 +2,6 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common'
 import Database from 'better-sqlite3'
 import * as path from 'path'
 import * as fs from 'fs'
-import { encrypt } from '../crypto/crypto.util'
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
@@ -21,40 +20,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.db = new Database(this.dbPath)
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('foreign_keys = ON')
-    this.initTables()
     this.migrate()
+    this.initTables()
     this.seedDefaults()
   }
 
-  /** 向后兼容：为旧版本数据库补充缺失的列（新库已在 initTables 中直接包含） */
+  /** 向后兼容：清理已移除模块遗留的表（转码 / 识别 / AI / 下载 / 供应商 / 提示词） */
   private migrate() {
-    // --- tasks 表补列（旧库可能缺少） ---
-    try { this.db.exec(`ALTER TABLE tasks ADD COLUMN started_at TEXT`) } catch { /* column exists */ }
-    // --- crawl_items 表补列（旧库可能缺少） ---
-    try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN detail_url TEXT`) } catch { /* column exists */ }
-    try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN download_status TEXT DEFAULT 'pending'`) } catch { /* column exists */ }
-    try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN download_tasks TEXT`) } catch { /* column exists */ }
-    try { this.db.exec(`ALTER TABLE crawl_items ADD COLUMN media_fields TEXT`) } catch { /* column exists */ }
-    // --- download_queue 表补列（旧库可能缺少） ---
-    try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN download_method TEXT`) } catch { /* column exists */ }
-    try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN yt_dlp_options TEXT`) } catch { /* column exists */ }
-    try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN reimport_pending INTEGER DEFAULT 0`) } catch { /* column exists */ }
-    try { this.db.exec(`ALTER TABLE download_queue ADD COLUMN reimport_opts TEXT`) } catch { /* column exists */ }
-    // --- ai_providers 表补列（多模型支持） ---
-    try { this.db.exec(`ALTER TABLE ai_providers ADD COLUMN models TEXT NOT NULL DEFAULT '[]'`) } catch { /* column exists */ }
-    try { this.db.exec(`ALTER TABLE ai_results ADD COLUMN item_id TEXT REFERENCES crawl_items(id) ON DELETE SET NULL`) } catch { /* column exists */ }
-    // 一次性迁移：将旧 default_model 同步到 models JSON（仅当 models 为空时）
-    try {
-      const rows = this.db.prepare(
-        `SELECT id, default_model FROM ai_providers WHERE models = '[]' AND default_model != ''`
-      ).all() as any[]
-      const stmt = this.db.prepare(`UPDATE ai_providers SET models = ? WHERE id = ?`)
-      for (const row of rows) {
-        stmt.run(JSON.stringify([{ name: row.default_model, role: 'default' }]), row.id)
-      }
-    } catch { /* ignore */ }
-    // 修正旧数据的默认值：download_status 应为 NULL（未导入），而非 'pending'
-    try { this.db.exec(`UPDATE crawl_items SET download_status = NULL WHERE download_status = 'pending'`) } catch { /* ignore */ }
+    for (const table of ['transcriptions', 'ai_results', 'ai_providers', 'ai_prompts', 'download_queue']) {
+      try { this.db.exec(`DROP TABLE IF EXISTS ${table}`) } catch { /* ignore */ }
+    }
   }
 
   onModuleDestroy() {
@@ -88,31 +63,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         media_type TEXT,
         media_source TEXT,
         status TEXT DEFAULT 'pending',
-        download_status TEXT DEFAULT NULL,
-        download_tasks TEXT,
-        media_fields TEXT,
         extra_data TEXT,
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS transcriptions (
-        id TEXT PRIMARY KEY,
-        item_id TEXT REFERENCES crawl_items(id) ON DELETE CASCADE,
-        file_path TEXT,
-        content TEXT,
-        language TEXT,
-        duration REAL,
-        status TEXT DEFAULT 'pending',
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS ai_results (
-        id TEXT PRIMARY KEY,
-        transcription_id TEXT REFERENCES transcriptions(id) ON DELETE CASCADE,
-        model TEXT NOT NULL,
-        prompt TEXT,
-        result TEXT,
-        status TEXT DEFAULT 'pending',
         created_at TEXT DEFAULT (datetime('now'))
       );
 
@@ -121,91 +72,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         value TEXT NOT NULL
       );
 
-      INSERT OR IGNORE INTO settings (key, value) VALUES ('pipeline_auto', 'true');
-      INSERT OR IGNORE INTO settings (key, value) VALUES ('download_max_concurrent', '3');
-
-      CREATE TABLE IF NOT EXISTS ai_providers (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE,
-        api_key TEXT NOT NULL DEFAULT '',
-        base_url TEXT NOT NULL DEFAULT '',
-        default_model TEXT NOT NULL DEFAULT '',
-        models TEXT NOT NULL DEFAULT '[]',
-        priority INTEGER NOT NULL DEFAULT 0,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS ai_prompts (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        content TEXT NOT NULL DEFAULT '',
-        is_default INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-
       CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_crawl_items_task ON crawl_items(task_id);
-      CREATE INDEX IF NOT EXISTS idx_transcriptions_item ON transcriptions(item_id);
-      CREATE INDEX IF NOT EXISTS idx_ai_results_transcription ON ai_results(transcription_id);
-
-      CREATE TABLE IF NOT EXISTS download_queue (
-        id TEXT PRIMARY KEY,
-        item_id TEXT REFERENCES crawl_items(id) ON DELETE CASCADE,
-        url TEXT NOT NULL,
-        filename TEXT,
-        file_type TEXT,
-        field_name TEXT,
-        status TEXT DEFAULT 'pending',
-        file_path TEXT,
-        error TEXT,
-        progress INTEGER DEFAULT 0,
-        download_method TEXT,
-        yt_dlp_options TEXT,
-        reimport_pending INTEGER DEFAULT 0,
-        reimport_opts TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_download_queue_item ON download_queue(item_id);
-      CREATE INDEX IF NOT EXISTS idx_download_queue_status ON download_queue(status);
     `)
   }
 
-  /** 从 .env 导入默认供应商（INSERT OR IGNORE，仅首次初始化时写入） */
+  /** 种子示例：一个通用的网页采集任务（纯爬虫，无下载 / 转码 / 识别 / AI 配置） */
   private seedDefaults() {
-    const stmt = this.db.prepare(`
-      INSERT OR IGNORE INTO ai_providers (id, name, api_key, base_url, models, priority, enabled)
-      VALUES (?, ?, ?, ?, ?, ?, 1)
-    `)
-    stmt.run('agnes', 'Agnes',
-      encrypt(process.env.AGNES_API_KEY || ''),
-      process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1',
-      JSON.stringify([{ name: 'agnes-2.0-flash', role: 'default' }]), 0)
-    stmt.run('minimax', 'minimax',
-      encrypt(process.env.MINIMAX_API_KEY || ''),
-      process.env.MINIMAX_BASE_URL || 'https://api.minimaxi.com/v1',
-      JSON.stringify([{ name: 'MiniMax-M2.7', role: 'default' }]), 1)
-    stmt.run('deepseek', 'deepseek',
-      encrypt(process.env.DEEPSEEK_API_KEY || ''),
-      process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
-      JSON.stringify([{ name: 'deepseek-v4-flash', role: 'default' }]), 2)
-
-    const promptStmt = this.db.prepare(`
-      INSERT OR IGNORE INTO ai_prompts (id, name, content, is_default)
-      VALUES (?, ?, ?, ?)
-    `)
-    promptStmt.run('default', '通用总结', '请对以下文本进行总结，提取关键信息和关键词，用中文回复。\n\n{{content}}', 1)
-    promptStmt.run('keywords', '提取关键词', '请从以下文本中提取最重要的关键词和短语，用中文列出。\n\n{{content}}', 0)
-    promptStmt.run('summary', '详细摘要', '请对以下文本进行详细摘要，保留主要观点和结论，用中文回复。\n\n{{content}}', 0)
-
-    // Fix legacy data: keep only 'default' as the default prompt
-    this.db.prepare("UPDATE ai_prompts SET is_default = 0 WHERE id != 'default' AND is_default = 1").run()
-
-    // 种子示例任务：普诺赛官网爬虫采集（英文站 ×2 + 中文站 ×1）
+    // 种子示例任务：普诺赛官网宣传册采集（英文站）
     const taskStmt = this.db.prepare(`
       INSERT OR IGNORE INTO tasks (id, type, status, payload, result, error, progress, retries, max_retries, started_at, created_at, updated_at)
       VALUES (?, ?, 'completed', ?, ?, NULL, 100, 0, 3, ?, ?, ?)
@@ -216,20 +91,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       JSON.stringify({ name: '普诺赛英文站宣传册采集', url: 'https://www.procellsystem.com/resources/brochure', mode: 'list', rules: [{ name: 'title', selector: '.text-left.px-4.d-block', attr: '', regex: '' }, { name: 'pdfUrl', selector: 'a.download-list', attr: 'href', regex: '' }], itemSelector: '.bg-white .row.mt-3 .col-12.col-lg-4.mb-3', paginationMode: 'none', autoStart: false, errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, mediaUrlField: { fields: ['pdfUrl'], mode: 'all' } }),
       JSON.stringify({ itemsFound: 13 }),
       '2026-06-05 11:41:47', '2026-06-05 11:41:47', '2026-06-08 09:24:22',
-    )
-    taskStmt.run(
-      '6ff7f96b-fe08-435c-8705-69e102e58759',
-      'crawl',
-      JSON.stringify({ name: '普诺赛英文站视频采集', url: 'https://www.procellsystem.com/resources/videos', mode: 'list', rules: [{ name: 'id', selector: '', attr: 'href', regex: '-(\\d+)(?:$|\\?|#)' }, { name: 'title', selector: '.my-2.two-lines', attr: '', regex: '' }, { name: 'link', selector: '', attr: 'href', regex: '' }], itemSelector: '.bg-white .row.mb-3 > a', paginationMode: 'page', maxPages: 0, urlPattern: 'https://www.procellsystem.com/resources/videos?page={page}', pageStart: 1, detailRules: [{ name: 'videoIframeUrl', selector: '.video-box iframe', attr: 'src', regex: '' }, { name: 'tencentVid', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/v\\.qq\\.com.*?)(?:\\?|&)vid=([^&#]+)(?:$|&|#)' }, { name: 'bilibiliBvid', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.bilibili\\.com.*?)(?:\\?|&)bvid=([^&#]+)(?:$|&|#)' }, { name: 'youtubeId', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/www\\.youtube\\.com.*?)\\/([^/\\?#]+)(?:$|\\?|#)' }, { name: 'youkuId', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.youku\\.com.*?)\\/([^/\\?#]+)(?:$|\\?|#)' }], errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, detailLinkField: { fields: ['link'], mode: 'first' }, mediaUrlField: { fields: ['tencentVid', 'bilibiliBvid', 'youtubeId', 'youkuId'], mode: 'all' }, idField: { fields: ['id'], mode: 'first' }, urlTransforms: [{ fieldName: 'tencentVid', urlTemplate: 'https://v.qq.com/x/page/{tencentVid}.html', downloadMethod: 'yt-dlp', ytDlpOptions: { cookies_mode: 'browser' } }, { fieldName: 'bilibiliBvid', urlTemplate: 'https://www.bilibili.com/video/{bilibiliBvid}/', downloadMethod: 'yt-dlp', ytDlpOptions: { cookies_mode: 'text', cookies_text: 'buvid3=9888F091-51C9-1097-D4C8-6B216BD43E4440020infoc; b_nut=1776392040; _uuid=97239F82-A11B-448C-F7BA-510C9615B5ABC36258infoc; CURRENT_FNVAL=4048; CURRENT_QUALITY=0; buvid_fp=1022aa0f02647fbcc9adf82cfbedf0fa; rpdid=|(JYYRk~YRll0J\'u~~YJmk|Rk; buvid4=71793495-43AD-4AEE-0AB0-9E2AE72C5D2F41621-026041710-/MaogLXlNOKFMrKPvRGEJQ%3D%3D; bmg_af_switch=1; bmg_src_def_domain=i1.hdslb.com; bmg_af_sc={"none":{"on":1,"def":"i1.hdslb.com"},"sgp":{"on":1,"def":"i1-sgp.hdslb.com"}}; bili_ticket=eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODExNDYxMjgsImlhdCI6MTc4MDg4Njg2OCwicGx0IjotMX0.L5NU2w2uO-SBOH0w18PcQejpcWkxBlUweslfEEw_oFE; bili_ticket_expires=1781146068; bili_jct=e70892601116aa15af651890658f9241; DedeUserID=3493146744851090; DedeUserID__ckMd5=9d871944f8cb7c8d; sid=81qei736; theme-tip-show=SHOWED; bp_t_offset_3493146744851090=1211389285249318912; b_lsid=14E147A5_19EA6881CDA' } }, { fieldName: 'youtubeId', urlTemplate: 'https://youtu.be/{youtubeId}', downloadMethod: 'yt-dlp', ytDlpOptions: { cookies_mode: 'text', cookies_text: 'APISID=o67GJNrEIl322-i-/Atja0Il3v_9R-eALa; SAPISID=zG5s9pCAejfl0Hcu/AVU2LrzANgCH4MKyK; __Secure-1PAPISID=zG5s9pCAejfl0Hcu/AVU2LrzANgCH4MKyK; __Secure-3PAPISID=zG5s9pCAejfl0Hcu/AVU2LrzANgCH4MKyK; SID=g.a000-wj7YXqkVsPZ72O4JAadVdC5IO1Q6lKX-BtnnTNJFIodp3kNP8cMbyXOC1ZA1XNC9QrYMQACgYKAZoSARESFQHGX2MivHik_9pm89bLVC1LSzGfkhoVAUF8yKp1mIQPhUcacwNo81GklIJw0076; PREF=tz=Asia.Shanghai&f7=100; SIDCC=AKEyXzVOB3PoIlTQqhqPCJdnN2EaNJKHqqCTQQAp3vHgdh34U8N2iJW7_Cym6hroWkLnHicftQ' } }, { fieldName: 'youkuId', urlTemplate: 'https://v.youku.com/v_show/id_{youkuId}.html', downloadMethod: 'yt-dlp', ytDlpOptions: { cookies_mode: 'browser' } }] }),
-      JSON.stringify({ itemsFound: 19 }),
-      '2026-06-05 11:39:35', '2026-06-05 11:39:35', '2026-06-08 09:24:24',
-    )
-    taskStmt.run(
-      '2b2b277a-1b66-4914-8ded-cc6468fd5bae',
-      'crawl',
-      JSON.stringify({ name: '普诺赛中文站视频采集', url: 'https://www.procell.com.cn/resource/video', mode: 'list', rules: [{ name: 'id', selector: 'a.px-2', attr: 'href', regex: '\\/(\\d+)(?:$|\\?|#)' }, { name: 'title', selector: 'a.px-2', attr: '', regex: '' }, { name: 'link', selector: 'a.px-2', attr: 'href', regex: '' }, { name: 'thumbnail', selector: '.video-img>img:nth-child(2)', attr: 'src', regex: '' }], itemSelector: '.col-6.col-md-4.mb-4>.huodong-list', paginationMode: 'page', maxPages: 0, urlPattern: 'https://www.procell.com.cn/resource/video?page={page}', pageStart: 1, detailRules: [{ name: 'videoIframeUrl', selector: '.vedio-content>iframe', attr: 'src', regex: '' }, { name: 'tencentVid', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/v\\.qq\\.com.*?)(?:\\?|&)vid=([^&#]+)(?:$|&|#)' }, { name: 'bilibiliBvid', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.bilibili\\.com.*?)(?:\\?|&)bvid=([^&#]+)(?:$|&|#)' }, { name: 'youtubeId', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/www\\.youtube\\.com.*?)\\/([^/\\?#]+)(?:$|\\?|#)' }, { name: 'youkuId', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.youku\\.com.*?)\\/([^/\\?#]+)(?:$|\\?|#)' }], errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, detailLinkField: { fields: ['link'], mode: 'first' }, mediaUrlField: { fields: ['tencentVid', 'bilibiliBvid', 'youtubeId', 'youkuId', 'thumbnail'], mode: 'all' }, idField: { fields: ['id'], mode: 'first' }, urlTransforms: [{ fieldName: 'tencentVid', urlTemplate: 'https://v.qq.com/x/page/{tencentVid}.html', downloadMethod: 'yt-dlp', ytDlpOptions: { cookies_mode: 'browser' } }, { fieldName: 'bilibiliBvid', urlTemplate: 'https://www.bilibili.com/video/{bilibiliBvid}/', downloadMethod: 'yt-dlp', ytDlpOptions: { cookies_mode: 'text', cookies_text: 'buvid3=9888F091-51C9-1097-D4C8-6B216BD43E4440020infoc; b_nut=1776392040; _uuid=97239F82-A11B-448C-F7BA-510C9615B5ABC36258infoc; CURRENT_FNVAL=4048; CURRENT_QUALITY=0; buvid_fp=1022aa0f02647fbcc9adf82cfbedf0fa; rpdid=|(JYYRk~YRll0J\'u~~YJmk|Rk; buvid4=71793495-43AD-4AEE-0AB0-9E2AE72C5D2F41621-026041710-/MaogLXlNOKFMrKPvRGEJQ%3D%3D; bmg_af_switch=1; bmg_src_def_domain=i1.hdslb.com; bmg_af_sc={"none":{"on":1,"def":"i1.hdslb.com"},"sgp":{"on":1,"def":"i1-sgp.hdslb.com"}}; bili_ticket=eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODExNDYxMjgsImlhdCI6MTc4MDg4Njg2OCwicGx0IjotMX0.L5NU2w2uO-SBOH0w18PcQejpcWkxBlUweslfEEw_oFE; bili_ticket_expires=1781146068; bili_jct=e70892601116aa15af651890658f9241; DedeUserID=3493146744851090; DedeUserID__ckMd5=9d871944f8cb7c8d; sid=81qei736; theme-tip-show=SHOWED; bp_t_offset_3493146744851090=1211389285249318912; b_lsid=14E147A5_19EA6881CDA' } }, { fieldName: 'youtubeId', urlTemplate: 'https://youtu.be/{youtubeId}', downloadMethod: 'yt-dlp', ytDlpOptions: { cookies_mode: 'text', cookies_text: 'APISID=o67GJNrEIl322-i-/Atja0Il3v_9R-eALa; SAPISID=zG5s9pCAejfl0Hcu/AVU2LrzANgCH4MKyK; __Secure-1PAPISID=zG5s9pCAejfl0Hcu/AVU2LrzANgCH4MKyK; __Secure-3PAPISID=zG5s9pCAejfl0Hcu/AVU2LrzANgCH4MKyK; SID=g.a000-wj7YXqkVsPZ72O4JAadVdC5IO1Q6lKX-BtnnTNJFIodp3kNP8cMbyXOC1ZA1XNC9QrYMQACgYKAZoSARESFQHGX2MivHik_9pm89bLVC1LSzGfkhoVAUF8yKp1mIQPhUcacwNo81GklIJw0076; PREF=tz=Asia.Shanghai&f7=100; SIDCC=AKEyXzVOB3PoIlTQqhqPCJdnN2EaNJKHqqCTQQAp3vHgdh34U8N2iJW7_Cym6hroWkLnHicftQ' } }, { fieldName: 'youkuId', urlTemplate: 'https://v.youku.com/v_show/id_{youkuId}.html', downloadMethod: 'yt-dlp', ytDlpOptions: { cookies_mode: 'browser' } }] }),
-      JSON.stringify({ itemsFound: 72 }),
-      '2026-05-27 13:59:18', '2026-05-27 13:59:18', '2026-06-08 09:24:26',
     )
   }
 }

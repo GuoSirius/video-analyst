@@ -1,7 +1,2 @@
 export { default as api } from './client'
 export { crawlerAPI } from './modules/crawler'
-export { transcoderAPI } from './modules/transcoder'
-export { whisperAPI } from './modules/whisper'
-export { aiAPI } from './modules/ai'
-export { promptsAPI } from './modules/prompts'
-export { settingsAPI } from './modules/settings'

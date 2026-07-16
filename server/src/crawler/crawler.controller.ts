@@ -11,9 +11,6 @@ import { CrawlerService, CrawlPayload, FieldSpec, UrlTransform } from './crawler
 import { QueueService } from '../common/queue/queue.service'
 import { SseService } from '../common/sse/sse.service'
 import { DatabaseService } from '../common/database/database.service'
-import { DownloadService } from '../downloader/download.service'
-import { PipelineService } from '../common/pipeline/pipeline.service'
-import { resolveFileType, extractExtFromUrl, extractVideoId, isVideoPlatform } from '../common/utils/url.util'
 import { v4 as uuid } from 'uuid'
 import { formatTimestamp } from '../common/utils/date.util'
 
@@ -36,8 +33,6 @@ export class CrawlerController {
     private readonly queue: QueueService,
     private readonly sse: SseService,
     private readonly db: DatabaseService,
-    private readonly download: DownloadService,
-    private readonly pipeline: PipelineService,
   ) {}
 
   @Post('crawl')
@@ -146,14 +141,8 @@ export class CrawlerController {
     }
 
     if (status && status !== 'all') {
-      if (status === 'not_imported') {
-        conditions.push("(status = 'crawled' AND (download_status IS NULL OR download_status != 'imported'))")
-      } else if (status === 'imported') {
-        conditions.push("(status = 'crawled' AND download_status = 'imported')")
-      } else {
-        conditions.push('status = ?')
-        params.push(status)
-      }
+      conditions.push('status = ?')
+      params.push(status)
     }
 
     if (keyword) {
@@ -195,106 +184,6 @@ export class CrawlerController {
   @Post('items/:id/recrawl')
   async recrawlItem(@Param('id') id: string) {
     return this.recrawlSingleItem(id)
-  }
-
-  @Post('items/:id/import-download')
-  async importToDownloadQueue(
-    @Param('id') id: string,
-    @Body() body?: { retry?: boolean; autoDownload?: boolean },
-  ) {
-    const item = this.db.db.prepare('SELECT * FROM crawl_items WHERE id = ?').get(id) as any
-    if (!item) return { error: '采集项不存在' }
-
-    const task = this.queue.getTask(item.task_id)
-    if (!task) return { error: '所属任务不存在' }
-
-    const payload: CrawlPayload = task.payload
-    const extraData = safeJsonParse(item.extra_data)
-    const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
-
-    // 收集所有待下载的 URL（含转换后的）
-    const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [], item.title, item.id)
-
-    if (urlsToDownload.length === 0) {
-      // 兜底：检查 media_url 字段
-      if (item.media_url && isUrl(item.media_url)) {
-        const url = normalizeUrl(item.media_url)
-        urlsToDownload.push({
-          url: this.applyUrlTransform(url, 'media_url', payload.urlTransforms || [], extraData),
-          fieldName: 'media_url',
-          filename: this.getFilename(url, 'media_url', item.title, item.id),
-          fileType: this.getFileType(url, extractExtFromUrl(url)),
-        })
-      }
-    }
-
-    if (urlsToDownload.length === 0) {
-      return { error: '未找到需要下载的媒体资源' }
-    }
-
-    // Build reimport opts (for scheme C)
-    const reimportOpts = {
-      autoDownload: body?.autoDownload ?? false,
-      itemId: id,
-      urls: urlsToDownload.map(u => {
-        const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(u.fieldName, payload.urlTransforms || [])
-        return {
-          url: u.url,
-          fieldName: u.fieldName,
-          filename: u.filename,
-          fileType: u.fileType,
-          downloadMethod: dlMethod,
-          ytDlpOptions: ytDlpOptsJson ? JSON.parse(ytDlpOptsJson) : null,
-        }
-      }),
-    }
-
-    // Scheme C: if downloading tasks exist, mark reimport_pending instead of replacing
-    if (body?.retry) {
-      const hasDownloading = this.db.db.prepare(
-        "SELECT COUNT(*) as count FROM download_queue WHERE item_id = ? AND status = 'downloading'"
-      ).get(id) as any
-
-      if (hasDownloading?.count > 0) {
-        // Set reimport_pending on all downloading tasks for this item
-        const updatedCount = this.db.db.prepare(
-          `UPDATE download_queue SET reimport_pending = 1, reimport_opts = ? WHERE item_id = ? AND status = 'downloading'`
-        ).run(JSON.stringify(reimportOpts), id).changes
-        return {
-          ok: true,
-          pendingReimport: true,
-          message: `有 ${updatedCount} 个下载任务正在进行中，将在完成后自动重新带入`,
-        }
-      }
-    }
-
-    // Safe to delete old and create new
-    this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
-
-    const autoDownload = body?.autoDownload ?? false
-    const status = autoDownload ? 'pending' : 'paused'
-
-    const insertStmt = this.db.db.prepare(`
-      INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-
-    const createdTasks: string[] = []
-    for (const u of reimportOpts.urls) {
-      const dTaskId = uuid()
-      const ytOptsJson = u.ytDlpOptions ? JSON.stringify(u.ytDlpOptions) : null
-      insertStmt.run(dTaskId, id, u.url, u.filename, u.fileType, u.fieldName, status, u.downloadMethod, ytOptsJson)
-      createdTasks.push(dTaskId)
-    }
-
-    this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
-
-    // When autoDownload is true, trigger immediate download processing
-    if (autoDownload) {
-      setImmediate(() => this.download.processDownloads())
-    }
-
-    return { ok: true, count: createdTasks.length, taskIds: createdTasks, autoDownload }
   }
 
   @Post('items/:id/cancel')
@@ -366,7 +255,6 @@ export class CrawlerController {
   @Post('tasks/:id/clear-items')
   async clearItems(@Param('id') id: string) {
     this.db.db.prepare('DELETE FROM crawl_items WHERE task_id = ?').run(id)
-    this.db.db.prepare('DELETE FROM download_queue WHERE item_id IN (SELECT id FROM crawl_items WHERE task_id = ?)').run(id)
     return { ok: true }
   }
 
@@ -460,64 +348,7 @@ export class CrawlerController {
       const task = this.queue.getTask(id)
       if (!task) { results.push({ id, ok: false, error: '任务不存在' }); continue }
       this.db.db.prepare('DELETE FROM crawl_items WHERE task_id = ?').run(id)
-      this.db.db.prepare('DELETE FROM download_queue WHERE item_id IN (SELECT id FROM crawl_items WHERE task_id = ?)').run(id)
       results.push({ id, ok: true })
-    }
-    return results
-  }
-
-  @Post('tasks/batch-auto-pipeline')
-  batchAutoPipeline(@Body() body: { ids: string[]; steps?: { crawl?: boolean; import?: boolean; start_download?: boolean; transcode?: boolean; whisper?: boolean; ai?: boolean } }) {
-    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
-      return { error: 'ids array is required' }
-    }
-    // Default: all steps enabled (backward compatible)
-    const s = { crawl: true, import: true, start_download: true, transcode: true, whisper: true, ai: true, ...body.steps }
-    const allOn = s.crawl && s.import && s.start_download && s.transcode && s.whisper && s.ai
-
-    const results: { id: string; ok: boolean; error?: string }[] = []
-    for (const id of body.ids) {
-      const task = this.queue.getTask(id)
-      if (!task) { results.push({ id, ok: false, error: '任务不存在' }); continue }
-      // Enable selected granular pipeline steps on the task payload
-      const payload = {
-        ...task.payload,
-        autoPipeline: allOn,
-        autoImportDownload: s.import,
-        autoStartDownload: s.start_download,
-        autoTranscode: s.transcode,
-        autoWhisper: s.whisper,
-        autoAI: s.ai,
-        // Legacy flags for backward compat
-        autoDownload: s.import || s.start_download,
-      }
-      this.queue.updateTaskPayload(id, payload)
-      if (task.status === 'pending') {
-        if (s.crawl) this.processCrawlTask(id, payload)
-        results.push({ id, ok: true })
-      } else if (task.status === 'paused') {
-        if (s.crawl) {
-          const resumeState = task.result || {}
-          this.processCrawlTask(id, payload, resumeState)
-        }
-        results.push({ id, ok: true })
-      } else if (task.status === 'failed') {
-        if (s.crawl) {
-          this.queue.retryTask(id)
-          this.processCrawlTask(id, payload)
-        }
-        results.push({ id, ok: true })
-      } else if (task.status === 'completed' || task.status === 'cancelled') {
-        // 已完成的任务：如果勾选了 import/start_download，触发下载 → 转码 → 识别 → AI
-        if (s.import) {
-          this.autoDownloadItems(id, payload, s.start_download).catch(err => {
-            console.error(`[batchAutoPipeline] autoDownload failed for task ${id}:`, err.message)
-          })
-        }
-        results.push({ id, ok: true })
-      } else {
-        results.push({ id, ok: false, error: `不支持 ${task.status} 状态的任务` })
-      }
     }
     return results
   }
@@ -582,167 +413,27 @@ export class CrawlerController {
     return results
   }
 
-  @Post('items/batch-import-download')
-  async batchImportDownload(@Body() body: { ids: string[]; retry?: boolean; autoDownload?: boolean }) {
-    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
-      return { error: 'ids array is required' }
-    }
-    const results: Array<{ id: string; ok: boolean; pendingReimport?: boolean; error?: string }> = []
-    for (const id of body.ids) {
-      const item = this.db.db.prepare('SELECT * FROM crawl_items WHERE id = ?').get(id) as any
-      if (!item) { results.push({ id, ok: false, error: '采集项不存在' }); continue }
-      if (item.status !== 'crawled') { results.push({ id, ok: false, error: '只能带入已采集状态的项' }); continue }
-      if (!body.retry && item.download_status === 'imported') {
-        results.push({ id, ok: false, error: '该项已带入下载，请使用重新带入' }); continue
-      }
-      try {
-        const task = this.queue.getTask(item.task_id)
-        if (!task) { results.push({ id, ok: false, error: '所属任务不存在' }); continue }
-        const payload: CrawlPayload = task.payload
-        const extraData = safeJsonParse(item.extra_data)
-        const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
-        const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [], item.title, item.id)
-        if (urlsToDownload.length === 0 && item.media_url && isUrl(item.media_url)) {
-          const url = normalizeUrl(item.media_url)
-          urlsToDownload.push({
-            url: this.applyUrlTransform(url, 'media_url', payload.urlTransforms || [], extraData),
-            fieldName: 'media_url',
-            filename: this.getFilename(url, 'media_url', item.title, item.id),
-            fileType: this.getFileType(url, extractExtFromUrl(url)),
-          })
-        }
-        if (urlsToDownload.length === 0) { results.push({ id, ok: false, error: '未找到需要下载的媒体资源' }); continue }
-
-        const reimportOpts = {
-          autoDownload: body.autoDownload ?? false,
-          itemId: id,
-          urls: urlsToDownload.map(u => {
-            const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(u.fieldName, payload.urlTransforms || [])
-            return {
-              url: u.url, fieldName: u.fieldName, filename: u.filename, fileType: u.fileType,
-              downloadMethod: dlMethod,
-              ytDlpOptions: ytDlpOptsJson ? JSON.parse(ytDlpOptsJson) : null,
-            }
-          }),
-        }
-
-        // Scheme C: if downloading tasks exist, mark reimport_pending
-        if (body.retry) {
-          const hasDownloading = this.db.db.prepare(
-            "SELECT COUNT(*) as count FROM download_queue WHERE item_id = ? AND status = 'downloading'"
-          ).get(id) as any
-          if (hasDownloading?.count > 0) {
-            this.db.db.prepare(
-              `UPDATE download_queue SET reimport_pending = 1, reimport_opts = ? WHERE item_id = ? AND status = 'downloading'`
-            ).run(JSON.stringify(reimportOpts), id)
-            results.push({ id, ok: true, pendingReimport: true })
-            continue
-          }
-        }
-
-        this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
-
-        const autoDownload = body.autoDownload ?? false
-        const status = autoDownload ? 'pending' : 'paused'
-
-        const insertStmt = this.db.db.prepare(`
-          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `)
-        for (const u of reimportOpts.urls) {
-          const dTaskId = uuid()
-          const ytOptsJson = u.ytDlpOptions ? JSON.stringify(u.ytDlpOptions) : null
-          insertStmt.run(dTaskId, id, u.url, u.filename, u.fileType, u.fieldName, status, u.downloadMethod, ytOptsJson)
-        }
-        this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
-        results.push({ id, ok: true })
-      } catch (err: any) {
-        results.push({ id, ok: false, error: err.message })
-      }
-    }
-
-    // When autoDownload is true, trigger immediate download processing
-    if (body.autoDownload) {
-      setImmediate(() => this.download.processDownloads())
-    }
-
-    return results
+  @Put('tasks/:id')
+  updateTask(@Param('id') id: string, @Body() payload: CrawlPayload) {
+    const task = this.queue.getTask(id)
+    if (!task) return { error: 'Task not found' }
+    if (task.status === 'running') return { error: 'Cannot edit a running task' }
+    this.queue.updateTaskPayload(id, payload)
+    return { ok: true }
   }
 
-  @Post('items/batch-auto-pipeline')
-  async batchItemsAutoPipeline(@Body() body: { ids: string[]; steps?: { import?: boolean; start_download?: boolean; transcode?: boolean; whisper?: boolean; ai?: boolean } }) {
-    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
-      return { error: 'ids array is required' }
-    }
-    // Default: all steps enabled (backward compatible)
-    const s = { import: true, start_download: true, transcode: true, whisper: true, ai: true, ...body.steps }
-    const allOn = s.import && s.start_download && s.transcode && s.whisper && s.ai
-
-    const results: { id: string; ok: boolean; error?: string }[] = []
-    for (const id of body.ids) {
-      const item = this.db.db.prepare('SELECT * FROM crawl_items WHERE id = ?').get(id) as any
-      if (!item) { results.push({ id, ok: false, error: '采集项不存在' }); continue }
-      if (item.status !== 'crawled') { results.push({ id, ok: false, error: '只能对已采集项执行流水线' }); continue }
-      try {
-        const task = this.queue.getTask(item.task_id)
-        if (!task) { results.push({ id, ok: false, error: '所属任务不存在' }); continue }
-        // Enable selected granular pipeline steps on parent task
-        const payload = {
-          ...task.payload,
-          autoPipeline: allOn,
-          autoImportDownload: s.import,
-          autoStartDownload: s.start_download,
-          autoTranscode: s.transcode,
-          autoWhisper: s.whisper,
-          autoAI: s.ai,
-          autoDownload: s.import || s.start_download,
-        }
-        this.queue.updateTaskPayload(item.task_id, payload)
-        // Trigger download import if import is selected
-        if (s.import) {
-          const extraData = safeJsonParse(item.extra_data)
-          const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
-          const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, payload.urlTransforms || [], item.title, item.id)
-          if (urlsToDownload.length === 0 && item.media_url && isUrl(item.media_url)) {
-            const url = normalizeUrl(item.media_url)
-            urlsToDownload.push({
-              url: this.applyUrlTransform(url, 'media_url', payload.urlTransforms || [], extraData),
-              fieldName: 'media_url',
-              filename: this.getFilename(url, 'media_url', item.title, item.id),
-              fileType: this.getFileType(url, extractExtFromUrl(url)),
-            })
-          }
-          if (urlsToDownload.length > 0) {
-            this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(id)
-            const status = s.start_download ? 'pending' : 'paused'
-            const insertStmt = this.db.db.prepare(`
-              INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `)
-            for (const { url, fieldName, filename, fileType } of urlsToDownload) {
-              const dTaskId = uuid()
-              const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(fieldName, payload.urlTransforms || [])
-              insertStmt.run(dTaskId, id, url, filename, fileType, fieldName, status, dlMethod, ytDlpOptsJson)
-            }
-            this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(id)
-          }
-        }
-        results.push({ id, ok: true })
-      } catch (err: any) {
-        results.push({ id, ok: false, error: err.message })
-      }
-    }
-    return results
+  @Sse('events')
+  events(): Observable<MessageEvent> {
+    return merge(this.sse.getTaskStream(), this.sse.getGenericStream())
   }
 
   // ════════════════════════════════════════════════════════════════
-  // 导出
+  // 导出（仅爬虫采集结果，不含识别 / AI 字段）
   // ════════════════════════════════════════════════════════════════
 
   @Get('export/fields')
   getExportFields(@Query('taskIds') taskIdsStr: string) {
     const taskIds = taskIdsStr ? taskIdsStr.split(',').filter(Boolean) : []
-    // DB columns from crawl_items
     const dbFields = [
       { key: 'id', label: 'ID' },
       { key: 'task_id', label: '所属任务ID' },
@@ -752,27 +443,9 @@ export class CrawlerController {
       { key: 'media_url', label: '媒体URL' },
       { key: 'media_source', label: '来源平台' },
       { key: 'status', label: '采集状态' },
-      { key: 'download_status', label: '带入状态' },
       { key: 'created_at', label: '采集时间' },
       { key: 'updated_at', label: '更新时间' },
     ]
-    // Transcription fields
-    const transcriptionFields = [
-      { key: 'transcription_content', label: '识别文本' },
-      { key: 'transcription_language', label: '识别语言' },
-      { key: 'transcription_duration', label: '音频时长' },
-      { key: 'transcription_status', label: '识别状态' },
-      { key: 'transcription_created_at', label: '识别时间' },
-    ]
-    // AI result fields
-    const aiFields = [
-      { key: 'ai_result', label: 'AI分析结果' },
-      { key: 'ai_model', label: 'AI模型' },
-      { key: 'ai_prompt', label: 'AI提示词' },
-      { key: 'ai_status', label: 'AI状态' },
-      { key: 'ai_created_at', label: 'AI分析时间' },
-    ]
-    // Extra data fields from extraction rules
     const extraFields: { key: string; label: string }[] = []
     if (taskIds.length > 0) {
       const placeholders = taskIds.map(() => '?').join(',')
@@ -790,7 +463,7 @@ export class CrawlerController {
         }
       }
     }
-    return { dbFields, transcriptionFields, aiFields, extraFields }
+    return { dbFields, extraFields }
   }
 
   @Post('export')
@@ -799,41 +472,18 @@ export class CrawlerController {
       taskIds: string[]
       format: 'json' | 'yaml' | 'csv' | 'excel'
       fields: { key: string; alias: string }[]
-      includeTranscriptions?: boolean
-      includeAIResults?: boolean
       multiFile?: boolean
     },
     @Res() res: Response,
   ) {
-    const { taskIds, format, fields, includeTranscriptions, includeAIResults, multiFile } = body
+    const { taskIds, format, fields, multiFile } = body
     if (!taskIds?.length) return res.status(400).json({ error: 'taskIds is required' })
     if (!fields?.length) return res.status(400).json({ error: 'fields is required' })
 
     const timestamp = formatTimestamp()
     const isMulti = multiFile && taskIds.length > 1
+    const sql = `SELECT * FROM crawl_items WHERE task_id IN (${taskIds.map(() => '?').join(',')}) ORDER BY created_at DESC`
 
-    // Build SQL template
-    const buildSql = (tidCount: number) => {
-      const placeholders = Array(tidCount).fill('?').join(',')
-      if (includeTranscriptions || includeAIResults) {
-        return `
-          SELECT ci.*,
-            t.content as transcription_content, t.language as transcription_language,
-            t.duration as transcription_duration, t.status as transcription_status,
-            t.created_at as transcription_created_at,
-            ar.result as ai_result, ar.model as ai_model, ar.prompt as ai_prompt,
-            ar.status as ai_status, ar.created_at as ai_created_at
-          FROM crawl_items ci
-          LEFT JOIN transcriptions t ON t.item_id = ci.id
-          LEFT JOIN ai_results ar ON ar.transcription_id = t.id
-          WHERE ci.task_id IN (${placeholders})
-          ORDER BY ci.created_at DESC
-        `
-      }
-      return `SELECT * FROM crawl_items WHERE task_id IN (${placeholders}) ORDER BY created_at DESC`
-    }
-
-    // Transform rows
     const transformRows = (rows: any[]) => rows.map(row => {
       const obj: Record<string, any> = {}
       for (const field of fields) {
@@ -850,7 +500,6 @@ export class CrawlerController {
       return obj
     })
 
-    // Generate single-format string/file for one set of rows + a label
     const headers = fields.map(f => f.alias || f.key)
 
     async function genExcel(rows: any[]): Promise<Buffer> {
@@ -889,7 +538,7 @@ export class CrawlerController {
     if (isMulti) {
       const zip = new AdmZip()
       for (const tid of taskIds) {
-        const rows = this.db.db.prepare(buildSql(1)).all(tid) as any[]
+        const rows = this.db.db.prepare(sql).all(tid) as any[]
         const data = transformRows(rows)
         const task = this.queue.getTask(tid)
         const taskLabel = (task?.payload?.name || task?.payload?.url || tid.slice(0, 8)).replace(/[<>:"/\\|?*]/g, '_')
@@ -911,13 +560,12 @@ export class CrawlerController {
     }
 
     // ── Single file ──
-    const allRows = this.db.db.prepare(buildSql(taskIds.length)).all(...taskIds) as any[]
+    const allRows = this.db.db.prepare(sql).all(...taskIds) as any[]
     const allData = transformRows(allRows)
 
     if (format === 'excel') {
       const workbook = new ExcelJS.Workbook()
       if (taskIds.length > 1) {
-        // One sheet per task
         for (const tid of taskIds) {
           const task = this.queue.getTask(tid)
           const taskLabel = (task?.payload?.name || task?.payload?.url || tid.slice(0, 8)).slice(0, 31)
@@ -946,7 +594,6 @@ export class CrawlerController {
     }
 
     if (format === 'csv' && taskIds.length > 1) {
-      // CSV can't have multiple sheets → ZIP even in single-file mode
       const zip = new AdmZip()
       for (const tid of taskIds) {
         const rows = allRows.filter((r: any) => r.task_id === tid)
@@ -997,7 +644,6 @@ export class CrawlerController {
       return res.send(yamlStr)
     }
 
-    // CSV single task
     const csvStr = genCsv(allData)
     res.setHeader('Content-Type', 'text/csv; charset=utf-8')
     res.setHeader('Content-Disposition', `attachment; filename="export_${timestamp}.csv"`)
@@ -1010,40 +656,18 @@ export class CrawlerController {
       itemIds: string[]
       format: 'json' | 'yaml' | 'csv' | 'excel'
       fields: { key: string; alias: string }[]
-      includeTranscriptions?: boolean
-      includeAIResults?: boolean
     },
     @Res() res: Response,
   ) {
-    const { itemIds, format, fields, includeTranscriptions, includeAIResults } = body
+    const { itemIds, format, fields } = body
     if (!itemIds?.length) return res.status(400).json({ error: 'itemIds is required' })
     if (!fields?.length) return res.status(400).json({ error: 'fields is required' })
 
     const timestamp = formatTimestamp()
     const placeholders = itemIds.map(() => '?').join(',')
-
-    let sql: string
-    if (includeTranscriptions || includeAIResults) {
-      sql = `
-        SELECT ci.*,
-          t.content as transcription_content, t.language as transcription_language,
-          t.duration as transcription_duration, t.status as transcription_status,
-          t.created_at as transcription_created_at,
-          ar.result as ai_result, ar.model as ai_model, ar.prompt as ai_prompt,
-          ar.status as ai_status, ar.created_at as ai_created_at
-        FROM crawl_items ci
-        LEFT JOIN transcriptions t ON t.item_id = ci.id
-        LEFT JOIN ai_results ar ON ar.transcription_id = t.id
-        WHERE ci.id IN (${placeholders})
-        ORDER BY ci.created_at DESC
-      `
-    } else {
-      sql = `SELECT * FROM crawl_items WHERE id IN (${placeholders}) ORDER BY created_at DESC`
-    }
-
+    const sql = `SELECT * FROM crawl_items WHERE id IN (${placeholders}) ORDER BY created_at DESC`
     const rows = this.db.db.prepare(sql).all(...itemIds) as any[]
 
-    // Transform rows
     const data = rows.map(row => {
       const obj: Record<string, any> = {}
       for (const field of fields) {
@@ -1081,7 +705,7 @@ export class CrawlerController {
         }
         case 'excel':
         default:
-          return null // handled separately
+          return null
       }
     }
 
@@ -1104,20 +728,6 @@ export class CrawlerController {
     res.setHeader('Content-Type', content.type)
     res.setHeader('Content-Disposition', `attachment; filename="export_${timestamp}.${content.ext}"`)
     return res.send(content.body)
-  }
-
-  @Put('tasks/:id')
-  updateTask(@Param('id') id: string, @Body() payload: CrawlPayload) {
-    const task = this.queue.getTask(id)
-    if (!task) return { error: 'Task not found' }
-    if (task.status === 'running') return { error: 'Cannot edit a running task' }
-    this.queue.updateTaskPayload(id, payload)
-    return { ok: true }
-  }
-
-  @Sse('events')
-  events(): Observable<MessageEvent> {
-    return merge(this.sse.getTaskStream(), this.sse.getGenericStream())
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -1209,7 +819,6 @@ export class CrawlerController {
         for (let i = 0; i < items.length; i++) {
           let detailUrl = ''
           if (hasDetail) {
-            // 从已提取的字段中获取详情页 URL
             if (detailLinkField?.fields?.length) {
               const raw = this.crawler.pickFirst(items[i], detailLinkField.fields)
               if (raw) {
@@ -1238,8 +847,8 @@ export class CrawlerController {
 
         // Insert items to DB
         const insertStmt = this.db.db.prepare(`
-          INSERT OR REPLACE INTO crawl_items (id, task_id, source_url, detail_url, title, media_url, media_type, media_source, status, download_status, extra_data)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'crawled', NULL, ?)
+          INSERT OR REPLACE INTO crawl_items (id, task_id, source_url, detail_url, title, media_url, media_type, media_source, status, extra_data)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'crawled', ?)
         `)
 
         for (const item of items) {
@@ -1254,7 +863,6 @@ export class CrawlerController {
 
           if (mediaUrlField?.fields?.length) {
             if (mediaUrlField.mode === 'all') {
-              // 逐个字段收集：空值跳过；非URL有转写规则也纳入（通过转写得到URL）
               for (const fieldName of mediaUrlField.fields) {
                 const val = item[fieldName]
                 if (val === null || val === undefined || val === '') continue
@@ -1265,15 +873,12 @@ export class CrawlerController {
                 let method: string
 
                 if (isUrl(valStr)) {
-                  // 值是完整URL：直接使用
                   effectiveUrl = normalizeUrl(valStr, normalizeSource)
                   method = transform?.downloadMethod || this.inferDownloadMethod(effectiveUrl)
                 } else if (transform) {
-                  // 值不是URL但有转写规则：应用转写得到完整URL
                   effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, item)
                   method = transform.downloadMethod || this.inferDownloadMethod(effectiveUrl)
                 } else {
-                  // 不是URL也没有转写规则：跳过
                   continue
                 }
 
@@ -1284,7 +889,6 @@ export class CrawlerController {
               item._media_url_fields = allUrlEntries.map(e => e.fieldName)
               item._media_methods = allUrlEntries.map(e => e.method)
             } else {
-              // first 模式：按顺序选第一个有效值
               let found = false
               for (const fieldName of mediaUrlField.fields) {
                 const val = item[fieldName]
@@ -1378,22 +982,13 @@ export class CrawlerController {
       if (errorCount > 0) result.skippedPages = errorCount
       if (skippedItems > 0) result.skippedItems = skippedItems
       this.queue.updateTaskResult(taskId, result)
-
-      // ── 自动导入下载队列 ──
-      const shouldImport = this.pipeline.shouldAutoImportDownload(taskId)
-      if (shouldImport) {
-        const shouldStart = this.pipeline.shouldAutoStartDownload(taskId)
-        this.autoDownloadItems(taskId, payload, shouldStart).catch((err) => {
-          console.error(`[autoDownload] Task ${taskId} failed:`, err.message)
-        })
-      }
     } catch (err: any) {
       this.queue.updateTaskError(taskId, err.message)
     }
   }
 
   // ════════════════════════════════════════════════════════════════
-  // URL 转换 & 下载解析
+  // URL 转换 & 来源聚合
   // ════════════════════════════════════════════════════════════════
 
   /** 对采集项的所有媒体 URL 计算来源，去重拼接（如 "bilibili,direct"）。
@@ -1406,14 +1001,12 @@ export class CrawlerController {
     sourceUrl?: string,
   ): string {
     const sources = new Set<string>()
-    // 从 _media_urls 数组收集
     if (extraData._media_urls && Array.isArray(extraData._media_urls)) {
       const fields = extraData._media_url_fields || []
       for (let i = 0; i < extraData._media_urls.length; i++) {
         const rawUrl = extraData._media_urls[i]
         if (typeof rawUrl !== 'string' || !rawUrl) continue
         const fieldName = fields[i] || ''
-        // 有转写规则：对转写后的 URL 判断来源；否则直接用原始 URL
         const finalUrl = fieldName
           ? this.applyUrlTransform(rawUrl, fieldName, urlTransforms, extraData)
           : rawUrl
@@ -1421,18 +1014,15 @@ export class CrawlerController {
         if (source) sources.add(source)
       }
     }
-    // 兜底：从主 media_url 收集
     if (primaryMediaUrl) {
       const { source } = this.crawler.detectMediaType(primaryMediaUrl)
       if (source) sources.add(source)
     }
-    // 二次兜底：所有URL都无法识别平台时（只有direct/域名），用源页面URL检测
     if (sources.size === 0 || (sources.size === 1 && sources.has('direct'))) {
       if (sourceUrl) {
         const { source } = this.crawler.detectMediaType(sourceUrl)
         if (source && source !== 'direct' && source !== '') {
           sources.add(source)
-          // 从源页面检测到平台时，也移除 'direct' 避免误导
           sources.delete('direct')
         }
       }
@@ -1443,222 +1033,32 @@ export class CrawlerController {
   /** 根据 URL 内容推断推荐的下载方式（无转写规则时使用） */
   private inferDownloadMethod(url: string): string {
     const { source } = this.crawler.detectMediaType(url)
-    // 已知视频平台 → 需要 yt-dlp 解析
     if (source === 'bilibili' || source === 'tencent' || source === 'youku' || source === 'youtube') {
       return 'yt-dlp'
     }
-    // 文件直链 / 文档 / 数据 / 图片 / 未知链接 → 直链下载
     return 'file'
   }
 
-  /** 根据 mediaUrlField 配置从 extraData 中解析出待下载的 URL 列表 */
-  private resolveDownloadUrls(
-    extraData: Record<string, any>,
-    mediaSpec: FieldSpec,
-    urlTransforms: UrlTransform[],
-    title?: string,
-    itemId?: string,
-  ): Array<{ url: string; fieldName: string; filename: string; fileType: string }> {
-    const results: Array<{ url: string; fieldName: string; filename: string; fileType: string }> = []
 
-    if (mediaSpec.fields.length > 0) {
-      if (mediaSpec.mode === 'all') {
-        // 收集所有指定字段的有效 URL（含 URL 转换）
-        for (const fieldName of mediaSpec.fields) {
-          const fieldValue = extraData[fieldName]
-          if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue
-          const valStr = String(fieldValue)
-          const transform = urlTransforms.find(t => t.fieldName === fieldName)
-
-          let effectiveUrl: string
-          if (isUrl(valStr)) {
-            effectiveUrl = normalizeUrl(valStr)
-            effectiveUrl = this.applyUrlTransform(effectiveUrl, fieldName, urlTransforms, extraData)
-          } else if (transform) {
-            // 字段值不是 URL 但有转换规则：应用转换得到完整 URL
-            effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, extraData)
-          } else {
-            continue
-          }
-
-          const ext = extractExtFromUrl(effectiveUrl)
-          results.push({
-            url: effectiveUrl,
-            fieldName,
-            filename: this.getFilename(effectiveUrl, fieldName, title, itemId),
-            fileType: this.getFileType(effectiveUrl, ext),
-          })
-        }
-      } else {
-        // first 模式：按顺序选第一个有效 URL（含 URL 转换）
-        for (const fieldName of mediaSpec.fields) {
-          const fieldValue = extraData[fieldName]
-          if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue
-          const valStr = String(fieldValue)
-          const transform = urlTransforms.find(t => t.fieldName === fieldName)
-
-          let effectiveUrl: string
-          if (isUrl(valStr)) {
-            effectiveUrl = normalizeUrl(valStr)
-            effectiveUrl = this.applyUrlTransform(effectiveUrl, fieldName, urlTransforms, extraData)
-          } else if (transform) {
-            effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, extraData)
-          } else {
-            continue
-          }
-
-          const ext = extractExtFromUrl(effectiveUrl)
-          results.push({
-            url: effectiveUrl,
-            fieldName,
-            filename: this.getFilename(effectiveUrl, fieldName, title, itemId),
-            fileType: this.getFileType(effectiveUrl, ext),
-          })
-          break // first mode: 找到第一个就停止
-        }
-      }
-    } else {
-      // 未指定字段：扫描所有 URL 字段（含 URL 转换）
-      for (const [fieldName, fieldValue] of Object.entries(extraData)) {
-        if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue
-        const valStr = String(fieldValue)
-        const transform = urlTransforms.find(t => t.fieldName === fieldName)
-
-        let effectiveUrl: string
-        if (isUrl(valStr)) {
-          effectiveUrl = normalizeUrl(valStr)
-          effectiveUrl = this.applyUrlTransform(effectiveUrl, fieldName, urlTransforms, extraData)
-        } else if (transform) {
-          effectiveUrl = this.applyUrlTransform(valStr, fieldName, urlTransforms, extraData)
-        } else {
-          continue
-        }
-
-        const ext = extractExtFromUrl(effectiveUrl)
-        results.push({
-          url: effectiveUrl,
-          fieldName,
-          filename: this.getFilename(effectiveUrl, fieldName, title, itemId),
-          fileType: this.getFileType(effectiveUrl, ext),
-        })
-      }
-    }
-
-    return results
-  }
-
-  /** 如果该字段配置了 URL 转换规则，则用模板拼接；否则返回原 URL
-   *  模板支持 {任意字段名} 占位符，会从 extraData 中查找对应值替换。
-   *  例如模板 "https://v.qq.com/x/page/{videoId}?title={title}" 中，
-   *  {videoId} 替换为 videoId 字段值，{title} 替换为 title 字段值。
-   *  当 urlTemplate 为空时，直接返回原始值（字段值本身就是可下载的URL）。 */
+  /** 如果该字段配置了 URL 转换规则，则用模板拼接；否则返回原 URL */
   private applyUrlTransform(originalUrl: string, fieldName: string, transforms: UrlTransform[], extraData?: Record<string, any>): string {
     const rule = transforms.find(t => t.fieldName === fieldName)
     if (!rule) return originalUrl
-    // urlTemplate 为空 → 字段原始值即为可下载链接（如带 yt-dlp 参数下载）
     if (!rule.urlTemplate) return originalUrl
     return rule.urlTemplate.replace(/\{(\w+)\}/g, (_, key) => {
-      // 优先从 extraData 中查找任意字段的值
       if (extraData && extraData[key] != null && extraData[key] !== '') {
         return String(extraData[key])
       }
-      // 兼容：如果是当前字段名本身，用原始 URL
       if (key === fieldName) return originalUrl
-      // 未找到对应字段值，保留原占位符
       return `{${key}}`
     })
   }
 
-  /** 查找字段对应的 download_method 和 yt-dlp 配置 */
-  private resolveDownloadConfig(fieldName: string, transforms: UrlTransform[]): { dlMethod: string | null; ytDlpOptsJson: string | null } {
-    const rule = transforms.find(t => t.fieldName === fieldName)
-    if (!rule) return { dlMethod: null, ytDlpOptsJson: null }
-    const dlMethod = rule.downloadMethod || null
-    const ytDlpOptsJson = (dlMethod === 'yt-dlp' && rule.ytDlpOptions)
-      ? JSON.stringify(rule.ytDlpOptions)
-      : null
-    return { dlMethod, ytDlpOptsJson }
-  }
-
-  // ════════════════════════════════════════════════════════════════
-  // 自动下载
-  // ════════════════════════════════════════════════════════════════
-
-  private async autoDownloadItems(taskId: string, payload: CrawlPayload, autoStart = true) {
-    try {
-      const mediaSpec = payload.mediaUrlField || { fields: [], mode: 'all' }
-      const urlTransforms = payload.urlTransforms || []
-
-      const items = this.db.db.prepare(
-        "SELECT * FROM crawl_items WHERE task_id = ? AND status = 'crawled'"
-      ).all(taskId) as any[]
-
-      let createdCount = 0
-      for (const item of items) {
-        const extraData = safeJsonParse(item.extra_data)
-
-        // 先删除该采集项旧的下载记录
-        this.db.db.prepare('DELETE FROM download_queue WHERE item_id = ?').run(item.id)
-
-        const urlsToDownload = this.resolveDownloadUrls(extraData, mediaSpec, urlTransforms, item.title, item.id)
-
-        // 兜底：也检查 media_url 字段
-        if (urlsToDownload.length === 0 && item.media_url && isUrl(item.media_url)) {
-          const url = normalizeUrl(item.media_url)
-          urlsToDownload.push({
-            url: this.applyUrlTransform(url, 'media_url', urlTransforms, extraData),
-            fieldName: 'media_url',
-            filename: this.getFilename(url, 'media_url', item.title, item.id),
-            fileType: this.getFileType(url, extractExtFromUrl(url)),
-          })
-        }
-
-        if (urlsToDownload.length === 0) continue
-
-        const status = autoStart ? 'pending' : 'paused'
-        const insertStmt = this.db.db.prepare(`
-          INSERT INTO download_queue (id, item_id, url, filename, file_type, field_name, status, download_method, yt_dlp_options)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `)
-
-        for (const { url, fieldName, filename, fileType } of urlsToDownload) {
-          const dTaskId = uuid()
-          const { dlMethod, ytDlpOptsJson } = this.resolveDownloadConfig(fieldName, urlTransforms)
-          insertStmt.run(dTaskId, item.id, url, filename, fileType, fieldName, status, dlMethod, ytDlpOptsJson)
-          createdCount++
-        }
-
-        // 标记为已带入
-        this.db.db.prepare(`UPDATE crawl_items SET download_status = 'imported' WHERE id = ?`).run(item.id)
-      }
-
-      console.log(`[autoDownload] Task ${taskId}: created ${createdCount} download tasks from ${items.length} items (autoStart=${autoStart})`)
-    } catch (err: any) {
-      console.error(`[autoDownload] Task ${taskId} error:`, err.message)
-    }
-  }
 
   // ════════════════════════════════════════════════════════════════
   // 工具方法
   // ════════════════════════════════════════════════════════════════
 
-  private getFileType(url: string, ext: string): string {
-    return resolveFileType(url, ext)
-  }
-
-  private getFilename(url: string, fieldName: string, title?: string, itemId?: string): string {
-    const name = title?.replace(/[^\w一-龥]+/g, '_') || fieldName
-    const ext = extractExtFromUrl(url)           // '' for pseudo-static or no extension
-    const vid = extractVideoId(url)              // platform-native ID, or '' for non-platform
-    const fallbackId = itemId?.slice(0, 8) || ''
-    const idSuffix = (vid || fallbackId) ? `_${vid || fallbackId}` : ''
-
-    if (isVideoPlatform(url)) {
-      return `${name}${idSuffix}.${ext || 'mp4'}`
-    }
-
-    return ext ? `${name}${idSuffix}.${ext}` : `${name}${idSuffix || ''}`
-  }
 
   private async fetchWithRetry(url: string, maxRetries: number): Promise<string> {
     let lastErr: any
@@ -1764,11 +1164,9 @@ export class CrawlerController {
 
       if (!data) return { error: '未能重新提取到数据' }
 
-      // ── 协议补全基准：有详情页优先用详情页协议，否则用源页面 ──
       const normalizeSource = item.detail_url || item.source_url
       const urlTransforms = payload.urlTransforms || []
 
-      // 媒体 URL
       const mediaUrlField = payload.mediaUrlField
       let mediaUrl = ''
       if (mediaUrlField?.fields?.length) {
@@ -1838,9 +1236,7 @@ export class CrawlerController {
         }
       }
 
-      // ── 聚合来源：URL转写优先 → 原始URL兜底 → 源页面兜底 ──
       const aggregatedSource = this.aggregateMediaSources(data, mediaUrl, urlTransforms, item.source_url)
-      // type 保留向后兼容，UI 不再使用
       const { type } = this.crawler.detectMediaType(mediaUrl)
       const titleFields = payload.titleField?.fields?.length
         ? payload.titleField.fields
@@ -1863,7 +1259,6 @@ export class CrawlerController {
   private findMatchingItem(listResults: Record<string, any>[], originalItem: any, idField?: FieldSpec): Record<string, any> | null {
     const origExtra: any = safeJsonParse(originalItem.extra_data)
 
-    // 1. Match by unique ID field
     if (idField?.fields?.length) {
       for (const f of idField.fields) {
         const origId = origExtra[f] ?? originalItem[f]
@@ -1875,7 +1270,6 @@ export class CrawlerController {
       }
     }
 
-    // 2. Match by link field
     const origLink = origExtra?.link || origExtra?.url || originalItem.media_url
     if (origLink) {
       for (const r of listResults) {
@@ -1883,7 +1277,6 @@ export class CrawlerController {
       }
     }
 
-    // 3. Match by title
     if (originalItem.title) {
       for (const r of listResults) {
         if (r.title === originalItem.title || r.name === originalItem.title) return r
