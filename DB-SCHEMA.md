@@ -1,90 +1,31 @@
 # 数据库设计文档
 
-**数据库**: SQLite (`data/video-analyst.db`) | **引擎**: better-sqlite3 | **模式**: WAL + 外键开启
+**数据库**: SQLite（`data/video-analyst.db`）| **引擎**: better-sqlite3 | **模式**: WAL + 外键开启
+**说明**: 数据库不提交 Git，服务启动时自动 `CREATE TABLE IF NOT EXISTS` 并写入一个示例采集任务。
 
 ---
 
-## 实体关系图
-
-```
-┌──────────────┐        ┌─────────────────┐
-│   settings   │        │  ai_providers   │    ai_prompts
-│  (键值配置)   │        │  (AI模型配置)    │    (提示词模板)
-└──────────────┘        └─────────────────┘   ┌────────────────────┐
-                                               │ id (PK)            │
-                                               │ name               │
-                                               │ content (含{{...}}) │
-                                               │ is_default (0/1)   │
-                                               └────────────────────┘
-                                                       │
-                                                       │ 被 AI 分析页引用
-                                                       ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                         tasks (任务队列)                          │
-│  id | type | status | payload(JSON) | result(JSON) | progress    │
-│                       ▲ 统一调度入口                              │
-└──────────────────────────────────────────────────────────────────┘
-          │                    │                    │
-   type=crawler          type=transcode      type=whisper/ai
-          │                    │                    │
-          ▼                    ▼                    ▼
-┌────────────────┐   (转码文件→WAV)    ┌──────────────────┐
-│  crawl_items   │          │          │  transcriptions  │
-│────────────────│          │          │──────────────────│
-│ id (PK)        │◄─────────┘          │ id (PK)          │
-│ task_id (FK) ──┤                     │ item_id (FK) ────┤──→ crawl_items
-│ source_url     │                     │ file_path        │
-│ title          │                     │ content (识别文本) │
-│ media_url      │                     │ language/duration│
-│ media_type     │                     │ status           │
-│ media_source   │                     └────────┬─────────┘
-│ extra_data(JSON)│                             │
-└────────────────┘                               │ transcription_id (FK)
-                                                 ▼
-                                     ┌──────────────────┐
-                                     │   ai_results     │
-                                     │──────────────────│
-                                     │ id (PK)          │
-                                     │ transcription_id │──→ transcriptions
-                                     │ model            │
-                                     │ prompt           │
-                                     │ result (AI分析)   │
-                                     │ status           │
-                                     └──────────────────┘
-```
-
-## 流水线数据流
-
-```
-爬虫采集 ──→ crawl_items ──→ 转码(WAV) ──→ transcriptions ──→ AI分析 ──→ ai_results
-  │              │                │               │                │
-  ▼              ▼                ▼               ▼                ▼
-task(crawler)  (文件)       task(transcode)  task(whisper)    task(ai)
-```
-
-每次阶段操作创建一个 `tasks` 记录追踪进度，阶段产出存入对应的业务表。链式外键级联删除：删任务 → 删爬虫条目 → 删转录 → 删 AI 结果。
-
----
-
-## 表详细说明
+## 表结构
 
 ### 1. `tasks` — 通用任务队列
 
-所有耗时操作的统一调度入口。
+所有耗时操作的统一调度入口（当前仅 `crawler` 类型）。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | TEXT PK | UUID |
-| `type` | TEXT NOT NULL | `crawler` / `transcode` / `whisper` / `ai` |
+| `type` | TEXT NOT NULL | `crawler` |
 | `status` | TEXT | `pending` / `running` / `paused` / `completed` / `failed` / `cancelled` |
-| `payload` | TEXT(JSON) | 任务参数，按 type 不同结构不同 |
+| `payload` | TEXT(JSON) | 任务参数（见下方 crawler payload） |
 | `result` | TEXT(JSON) | 任务结果（完成后写入） |
 | `error` | TEXT | 失败时的错误信息 |
 | `progress` | INTEGER | 0-100 进度百分比 |
 | `retries` | INTEGER | 已重试次数 |
 | `max_retries` | INTEGER | 最大重试次数（默认 3） |
-| `started_at` | TEXT | 任务开始执行的时间（首次 status→running 时写入，暂停继续不重置） |
+| `started_at` | TEXT | 任务开始执行时间（首次 status→running 时写入，暂停继续不重置） |
 | `created_at` / `updated_at` | TEXT | 时间戳 |
+
+索引: `idx_tasks_type`, `idx_tasks_status`
 
 **状态流转**:
 ```
@@ -112,7 +53,7 @@ pending ──→ running ──→ completed                │
 | `rules` | CrawlRule[] | 提取规则 |
 | `itemSelector` | string | 列表项 CSS 选择器（list 模式） |
 | `paginationMode` | `'none'` / `'page'` / `'count'` | 翻页方式 |
-| `nextPageSelector` | string | "下一页"CSS 选择器 |
+| `nextPageSelector` | string | "下一页" CSS 选择器 |
 | `urlPattern` | string | URL 模板，`{page}` 表示页码 |
 | `pageStart` | number | URL 模式起始页码（默认 1） |
 | `maxPages` | number | 最大页数（0=无限） |
@@ -120,24 +61,15 @@ pending ──→ running ──→ completed                │
 | `loadMoreSelector` | string | "加载更多"选择器（实验性） |
 | `detailLinkField` | FieldSpec | 详情页 URL 字段指定（fields + mode） |
 | `detailRules` | CrawlRule[] | 详情页提取规则 |
-| `ytDlpOptions` | object | yt-dlp 参数（cookies、代理等），存于每个 UrlTransform 规则中 |
 | `titleField` | FieldSpec | 指定标题字段（fields + mode，留空自动查找） |
+| `mediaUrlField` | FieldSpec | 指定媒体 URL 字段 |
 | `errorMode` | `'lenient'` / `'standard'` / `'strict'` | 容错模式（默认 standard） |
 | `autoStart` | boolean | 创建后是否自动执行（默认 false） |
-| `autoDownload` | boolean | 采集完成后自动带入下载队列 |
-| `autoTranscode` | boolean | 下载完成后自动转码 |
-| `autoAI` | boolean | 识别完成后自动 AI 分析 |
-| `autoPipeline` | boolean | 一键全开上述四项 |
 
 **crawler result 结构**:
 ```json
-{
-  "itemsFound": 100,
-  "skippedPages": 1,
-  "skippedItems": 3
-}
+{ "itemsFound": 100, "skippedPages": 1, "skippedItems": 3 }
 ```
-索引: `idx_tasks_type`, `idx_tasks_status`
 
 ---
 
@@ -152,8 +84,8 @@ pending ──→ running ──→ completed                │
 | `title` | TEXT | 条目标题（优先 titleField 指定字段，否则自动查找） |
 | `media_url` | TEXT | 媒体文件链接 |
 | `media_type` | TEXT | video / audio / image / link / text |
-| `media_source` | TEXT | 平台名(bilibili/tencent/youku) / direct / 域名 |
-| `status` | TEXT | `crawled`(已采集) / `pending` / `downloaded` / `transcoded` / `error` |
+| `media_source` | TEXT | 平台名 / direct / 域名 |
+| `status` | TEXT | `crawled`(已采集) / `pending` / `error` |
 | `extra_data` | TEXT(JSON) | 完整的提取数据 |
 | `created_at` | TEXT | 采集时间 |
 
@@ -169,105 +101,14 @@ pending ──→ running ──→ completed                │
 
 ---
 
-### 3. `transcriptions` — 语音识别结果
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | TEXT PK | UUID |
-| `item_id` | TEXT FK → crawl_items(id) CASCADE | 关联爬虫条目 |
-| `file_path` | TEXT | 转码后的 WAV 文件路径 |
-| `content` | TEXT | Whisper 识别全文 |
-| `language` | TEXT | 检测/指定的语言 |
-| `duration` | REAL | 音频时长（秒） |
-| `status` | TEXT | pending / processing / completed / error |
-| `created_at` | TEXT | 创建时间 |
-
-索引: `idx_transcriptions_item`
-
----
-
-### 4. `ai_results` — AI 分析结果
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | TEXT PK | UUID |
-| `transcription_id` | TEXT FK → transcriptions(id) CASCADE | 关联转录文本 |
-| `model` | TEXT NOT NULL | 使用的模型标识（如 `deepseek-chat`） |
-| `prompt` | TEXT | 实际使用的提示词（含替换后的内容） |
-| `result` | TEXT | AI 返回的分析结果 |
-| `status` | TEXT | pending / processing / completed / error |
-| `created_at` | TEXT | 创建时间 |
-
-索引: `idx_ai_results_transcription`
-
----
-
-### 5. `settings` — 键值配置
+### 3. `settings` — 键值配置
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `key` | TEXT PK | 配置键 |
 | `value` | TEXT NOT NULL | 配置值 |
 
-预置键:
-
-| key | 默认值 | 说明 |
-|---|---|---|
-| `pipeline_auto` | `"true"` | 全自动流水线开关 |
-| `whisper_model` | 动态 | Whisper 模型选择 (tiny/base/small/medium/large) |
-
-无外键，独立于业务数据。通过 `PipelineService` / `SettingsService` 读写。
-
----
-
-### 6. `ai_providers` — AI 供应商配置
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | TEXT PK | 如 `minimax`、`deepseek` |
-| `name` | TEXT UNIQUE | 供应商显示名称 |
-| `api_key` | TEXT | API 密钥（AES-256-GCM 加密存储） |
-| `base_url` | TEXT | API 地址 |
-| `models` | TEXT(JSON) | 模型配置数组，如 `[{"name":"deepseek-chat","role":"default"},{"name":"deepseek-reasoner","role":"fallback"}]` |
-| `priority` | INTEGER | 优先级（越小越优先，失败自动 fallback） |
-| `enabled` | INTEGER | 0=禁用 1=启用 |
-| `created_at` | TEXT | 创建时间 |
-
-> 注：`default_model` 列为历史遗留，已不再使用，数据源为 `models` JSON 列。
-
-种子数据: Agnes (priority=0) + MiniMax (priority=1) + DeepSeek (priority=2)，Key 从 `.env` 导入。
-
-`/providers` 页面 CRUD + 上下调优先级。每个供应商配置默认模型（必选）和回退模型（可选），模型列表通过供应商 API 动态获取。调用时按 priority 排序，单个供应商内先尝试默认模型，失败后尝试回退模型，全部失败切换下一个供应商。
-
----
-
-### 7. `ai_prompts` — 提示词模板
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | TEXT PK | 如 `default`、`keywords` |
-| `name` | TEXT NOT NULL | 名称 |
-| `content` | TEXT | 模板内容，`{{content}}` 占位符在运行时替换为实际文本 |
-| `is_default` | INTEGER | 0/1，全局唯一默认（应用层保证互斥） |
-| `created_at` / `updated_at` | TEXT | 时间戳 |
-
-种子数据: 通用总结(默认) + 提取关键词 + 详细摘要
-
-`/prompts` 页面 CRUD，`save()` 方法在设默认前先 `UPDATE SET is_default=0` 确保互斥。
-
----
-
-## 表规模与读写频率
-
-| 表 | 增长模式 | 读频率 | 写频率 |
-|---|---|---|---|
-| `tasks` | 线性 | 高（仪表盘轮询 + SSE 推送） | 高 |
-| `crawl_items` | 批量（每页 N 条） | 中 | 中 |
-| `transcriptions` | 线性 | 中 | 低 |
-| `ai_results` | 线性 | 中 | 低 |
-| `settings` | 固定（~5行） | 高（每次流水线判断） | 极低 |
-| `ai_providers` | 固定（~5行） | 低 | 极低 |
-| `ai_prompts` | 固定（~10行） | 低 | 极低 |
+通用键值配置表，**当前未预置任何键值**（保留为扩展位）。通过 `DatabaseService` 读写。
 
 ---
 
@@ -277,8 +118,4 @@ pending ──→ running ──→ completed                │
 |---|---|---|
 | `tasks` | `server/src/common/database/database.service.ts` | `server/src/common/queue/queue.service.ts` |
 | `crawl_items` | 同上 | `server/src/crawler/crawler.service.ts` |
-| `transcriptions` | 同上 | `server/src/whisper/whisper.controller.ts` |
-| `ai_results` | 同上 | `server/src/ai/ai.controller.ts` |
-| `settings` | 同上 | `server/src/common/pipeline/pipeline.service.ts` |
-| `ai_providers` | 同上 | `server/src/ai/ai.service.ts` |
-| `ai_prompts` | 同上 | `server/src/ai/prompt.service.ts` |
+| `settings` | 同上 | `server/src/common/database/database.service.ts` |
