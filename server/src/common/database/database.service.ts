@@ -78,19 +78,35 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     `)
   }
 
-  /** 种子示例：一个通用的网页采集任务（纯爬虫，无下载 / 转码 / 识别 / AI 配置） */
+  /** 种子示例：纯爬虫采集任务（无下载 / 转码 / 识别 / AI 配置） */
   private seedDefaults() {
-    // 种子示例任务：普诺赛官网宣传册采集（英文站）
     const taskStmt = this.db.prepare(`
       INSERT OR IGNORE INTO tasks (id, type, status, payload, result, error, progress, retries, max_retries, started_at, created_at, updated_at)
       VALUES (?, ?, 'completed', ?, ?, NULL, 100, 0, 3, ?, ?, ?)
     `)
+    // 1) 普诺赛官网宣传册采集（英文站，列表抓取 PDF）
     taskStmt.run(
       '69a2e781-16af-4b7a-9ca3-f3e5d41b48b6',
       'crawl',
       JSON.stringify({ name: '普诺赛英文站宣传册采集', url: 'https://www.procellsystem.com/resources/brochure', mode: 'list', rules: [{ name: 'title', selector: '.text-left.px-4.d-block', attr: '', regex: '' }, { name: 'pdfUrl', selector: 'a.download-list', attr: 'href', regex: '' }], itemSelector: '.bg-white .row.mt-3 .col-12.col-lg-4.mb-3', paginationMode: 'none', autoStart: false, errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, mediaUrlField: { fields: ['pdfUrl'], mode: 'all' } }),
       JSON.stringify({ itemsFound: 13 }),
       '2026-06-05 11:41:47', '2026-06-05 11:41:47', '2026-06-08 09:24:22',
+    )
+    // 2) 普诺赛英文站视频采集（列表 + 详情页解析腾讯/哔哩/优酷/YouTube 视频 ID，纯抓取）
+    taskStmt.run(
+      '6ff7f96b-fe08-435c-8705-69e102e58759',
+      'crawl',
+      JSON.stringify({ name: '普诺赛英文站视频采集', url: 'https://www.procellsystem.com/resources/videos', mode: 'list', rules: [{ name: 'id', selector: '', attr: 'href', regex: '-(\\d+)(?:$|\\?|#)' }, { name: 'title', selector: '.my-2.two-lines', attr: '', regex: '' }, { name: 'link', selector: '', attr: 'href', regex: '' }], itemSelector: '.bg-white .row.mb-3 > a', paginationMode: 'page', maxPages: 0, urlPattern: 'https://www.procellsystem.com/resources/videos?page={page}', pageStart: 1, detailRules: [{ name: 'videoIframeUrl', selector: '.video-box iframe', attr: 'src', regex: '' }, { name: 'tencentVid', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/v\\.qq\\.com.*?)(?:\\?|&)vid=([^&#]+)(?:$|&|#)' }, { name: 'bilibiliBvid', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.bilibili\\.com.*?)(?:\\?|&)bvid=([^&#]+)(?:$|&|#)' }, { name: 'youtubeId', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/www\\.youtube\\.com.*?)\\/([^/\\?#]+)(?:$|\\?|#)' }, { name: 'youkuId', selector: '.video-box iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.youku\\.com.*?)\\/([^/\\?#]+)(?:$|&|#)' }], errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, detailLinkField: { fields: ['link'], mode: 'first' }, mediaUrlField: { fields: ['tencentVid', 'bilibiliBvid', 'youtubeId', 'youkuId'], mode: 'all' }, idField: { fields: ['id'], mode: 'first' } }),
+      JSON.stringify({ itemsFound: 0 }),
+      '2026-06-05 11:42:10', '2026-06-05 11:42:10', '2026-06-08 09:24:22',
+    )
+    // 3) 普诺赛中文站视频采集（列表 + 详情页解析上述视频平台 ID，纯抓取）
+    taskStmt.run(
+      '2b2b277a-1b66-4914-8ded-cc6468fd5bae',
+      'crawl',
+      JSON.stringify({ name: '普诺赛中文站视频采集', url: 'https://www.procell.com.cn/resource/video', mode: 'list', rules: [{ name: 'id', selector: 'a.px-2', attr: 'href', regex: '\\/(\\d+)(?:$|\\?|#)' }, { name: 'title', selector: 'a.px-2', attr: '', regex: '' }, { name: 'link', selector: 'a.px-2', attr: 'href', regex: '' }, { name: 'thumbnail', selector: '.video-img>img:nth-child(2)', attr: 'src', regex: '' }], itemSelector: '.col-6.col-md-4.mb-4>.huodong-list', paginationMode: 'page', maxPages: 0, urlPattern: 'https://www.procell.com.cn/resource/video?page={page}', pageStart: 1, detailRules: [{ name: 'videoIframeUrl', selector: '.vedio-content>iframe', attr: 'src', regex: '' }, { name: 'tencentVid', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/v\\.qq\\.com.*?)(?:\\?|&)vid=([^&#]+)(?:$|&|#)' }, { name: 'bilibiliBvid', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.bilibili\\.com.*?)(?:\\?|&)bvid=([^&#]+)(?:$|&|#)' }, { name: 'youtubeId', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/www\\.youtube\\.com.*?)\\/([^/\\?#]+)(?:$|\\?|#)' }, { name: 'youkuId', selector: '.vedio-content>iframe', attr: 'src', regex: '(?:^https?:\\/\\/player\\.youku\\.com.*?)\\/([^/\\?#]+)(?:$|&|#)' }], errorMode: 'standard', titleField: { fields: ['title'], mode: 'first' }, detailLinkField: { fields: ['link'], mode: 'first' }, mediaUrlField: { fields: ['tencentVid', 'bilibiliBvid', 'youtubeId', 'youkuId', 'thumbnail'], mode: 'all' }, idField: { fields: ['id'], mode: 'first' } }),
+      JSON.stringify({ itemsFound: 0 }),
+      '2026-06-05 14:20:33', '2026-06-05 14:20:33', '2026-06-08 09:24:22',
     )
   }
 }
