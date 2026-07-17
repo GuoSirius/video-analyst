@@ -438,8 +438,6 @@ function pickDisplayField(item: any): string {
   }
 }
 
-watch(selectedTaskId, () => { for (const id of selectedIds.value) delete selectedItemsMeta[id]; selectedIds.value = []; tableRef.value?.clearSelection() })
-
 // SSE real-time updates — must use full backend URL (EventSource doesn't go through axios)
 const SSE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api'}/crawler/events`
 
