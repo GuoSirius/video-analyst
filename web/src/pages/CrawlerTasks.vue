@@ -34,6 +34,8 @@ const formUrl = ref('')
 // Step 3: 执行选项
 const formErrorMode = ref<'lenient' | 'standard' | 'strict'>('standard')
 const formAutoStart = ref(false)
+/** 单请求超时(ms)：null=默认15000；0=不限制 */
+const formFetchTimeoutMs = ref<number | null>(null)
 
 // Step 4: 列表配置
 const formItemSelector = ref('')
@@ -175,6 +177,7 @@ function resetForm() {
   formUrl.value = ''
   formErrorMode.value = 'standard'
   formAutoStart.value = false
+  formFetchTimeoutMs.value = null
   formItemSelector.value = ''
   formPaginationMode.value = 'none'
   formNextPageSelector.value = ''
@@ -215,6 +218,7 @@ function openEditDialog(task: any) {
   formUrl.value = p.url || ''
   formErrorMode.value = p.errorMode || 'standard'
   formAutoStart.value = p.autoStart ?? false
+  formFetchTimeoutMs.value = (p.fetchTimeoutMs === 0 || p.fetchTimeoutMs) ? p.fetchTimeoutMs : null
 
   formItemSelector.value = p.itemSelector || ''
   formPaginationMode.value = p.paginationMode || (p.nextPageSelector ? 'page' : 'none')
@@ -304,6 +308,7 @@ async function submitForm() {
 
     autoStart: editingTaskId.value ? undefined : formAutoStart.value,
     errorMode: formErrorMode.value,
+    fetchTimeoutMs: formFetchTimeoutMs.value ?? undefined,
 
     titleField: formTitleField.value.length
       ? { fields: formTitleField.value, mode: formTitleFieldAll.value ? 'all' : 'first' }
@@ -760,6 +765,19 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
                 <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px] ml-0.5"></i>
               </el-tooltip>
             </el-checkbox>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-gray-400 flex-shrink-0">请求超时(ms)</span>
+            <el-input-number
+              v-model="formFetchTimeoutMs"
+              :min="0" :max="600000" :step="1000" size="small"
+              controls-position="right" placeholder="默认 15000"
+              class="w-40" />
+            <el-tooltip content="单页请求超时毫秒数。0 = 不限制；留空 = 默认 15000。负数/小数等非法值会回退为默认。" placement="top">
+              <i class="fas fa-circle-question text-gray-600 cursor-help text-[11px]"></i>
+            </el-tooltip>
+            <span class="text-[11px] text-gray-500">{{ formFetchTimeoutMs === null ? '默认 15000' : formFetchTimeoutMs === 0 ? '不限制' : formFetchTimeoutMs + ' ms' }}</span>
           </div>
         </div>
 

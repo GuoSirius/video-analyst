@@ -37,6 +37,7 @@ export class CrawlerController {
 
   @Post('crawl')
   async startCrawl(@Body() payload: CrawlPayload) {
+    payload.fetchTimeoutMs = this.resolveFetchTimeout(payload)
     const task = this.queue.createTask('crawl', payload)
     if (payload.autoStart) {
       this.processCrawlTask(task.id, payload)
@@ -431,6 +432,7 @@ export class CrawlerController {
     const task = this.queue.getTask(id)
     if (!task) return { error: 'Task not found' }
     if (task.status === 'running') return { error: 'Cannot edit a running task' }
+    payload.fetchTimeoutMs = this.resolveFetchTimeout(payload)
     this.queue.updateTaskPayload(id, payload)
     return { ok: true }
   }
@@ -766,6 +768,8 @@ export class CrawlerController {
       urlTransforms = [],
     } = payload
 
+    const timeoutMs = this.resolveFetchTimeout(payload)
+
     const resolvedPaginationMode = paginationMode
       || (mode === 'single' ? 'none' : (nextPageSelector || urlPattern ? 'page' : 'none'))
 
@@ -808,7 +812,7 @@ export class CrawlerController {
         // Fetch list page with retry
         let html: string
         try {
-          html = await this.fetchWithRetry(currentUrl, errorMode === 'standard' ? 2 : 0)
+          html = await this.fetchWithRetry(currentUrl, errorMode === 'standard' ? 2 : 0, timeoutMs)
         } catch (fetchErr: any) {
           if (this.isEndOfPages(fetchErr, pageIndex, pageStart, !!urlPattern, isUnlimited)) {
             console.log(`[crawler] Page ${pageIndex} ended (end of data): ${fetchErr.message}`)
@@ -847,7 +851,7 @@ export class CrawlerController {
 
             if (detailUrl) {
               try {
-                const detailHtml = await this.fetchWithRetry(detailUrl, errorMode === 'strict' ? 0 : 1)
+                const detailHtml = await this.fetchWithRetry(detailUrl, errorMode === 'strict' ? 0 : 1, timeoutMs)
                 const detailData = this.crawler.parseHtml(detailHtml, detailRules, undefined, detailUrl)
                 if (detailData.length > 0) {
                   Object.assign(items[i], detailData[0])
@@ -1069,11 +1073,21 @@ export class CrawlerController {
   // ════════════════════════════════════════════════════════════════
 
 
-  private async fetchWithRetry(url: string, maxRetries: number): Promise<string> {
+  /** 归一化 fetch 超时：省略→15000；0→不限制；>0 整数→原值；非法(负数/小数/非数字)→回退默认 15000 */
+  private resolveFetchTimeout(payload: CrawlPayload): number {
+    const v = (payload as any).fetchTimeoutMs
+    if (v === undefined || v === null) return 15000
+    if (v === 0) return 0
+    if (typeof v === 'number' && Number.isInteger(v) && v > 0) return v
+    console.warn(`[crawler] fetchTimeoutMs 非法(${v})，回退默认 15000ms`)
+    return 15000
+  }
+
+  private async fetchWithRetry(url: string, maxRetries: number, timeoutMs = 15000): Promise<string> {
     let lastErr: any
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        return await this.crawler.fetchHtml(url)
+        return await this.crawler.fetchHtml(url, timeoutMs)
       } catch (err) {
         lastErr = err
         if (attempt < maxRetries) {
@@ -1125,6 +1139,7 @@ export class CrawlerController {
     const task = this.queue.getTask(item.task_id)
     if (!task) return { error: 'Parent task not found' }
     const payload: CrawlPayload = task.payload
+    const timeoutMs = this.resolveFetchTimeout(payload)
 
     try {
       let data: Record<string, any> | null = null
@@ -1132,7 +1147,7 @@ export class CrawlerController {
       if (item.detail_url) {
         let detailHtml: string
         try {
-          detailHtml = await this.crawler.fetchHtml(item.detail_url)
+          detailHtml = await this.crawler.fetchHtml(item.detail_url, timeoutMs)
         } catch (err: any) {
           this.db.db.prepare(`UPDATE crawl_items SET status = 'error' WHERE id = ?`).run(itemId)
           return { error: `详情页不可访问，该项可能已下架: ${err.message}` }
@@ -1142,7 +1157,7 @@ export class CrawlerController {
           data = detailResults[0]
           if (item.source_url && item.source_url !== item.detail_url) {
             try {
-              const listHtml = await this.crawler.fetchHtml(item.source_url)
+              const listHtml = await this.crawler.fetchHtml(item.source_url, timeoutMs)
               const listResults = this.crawler.parseHtml(listHtml, payload.rules, payload.itemSelector, item.source_url)
               const matched = this.findMatchingItem(listResults, item, payload.idField)
               if (matched) {
@@ -1155,7 +1170,7 @@ export class CrawlerController {
       } else {
         let listHtml: string
         try {
-          listHtml = await this.crawler.fetchHtml(item.source_url)
+          listHtml = await this.crawler.fetchHtml(item.source_url, timeoutMs)
         } catch (err: any) {
           this.db.db.prepare(`UPDATE crawl_items SET status = 'error' WHERE id = ?`).run(itemId)
           return { error: `列表页不可访问: ${err.message}` }

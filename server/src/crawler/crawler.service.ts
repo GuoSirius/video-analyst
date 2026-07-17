@@ -66,6 +66,10 @@ export interface CrawlPayload {
   // ── URL 转换 ──
   /** 需要拼接转换的字段规则 */
   urlTransforms?: UrlTransform[]
+
+  // ── 超时控制 ──
+  /** 单请求超时(ms)：0 = 不限制；省略 = 默认 15000 */
+  fetchTimeoutMs?: number
 }
 
 @Injectable()
@@ -84,7 +88,11 @@ export class CrawlerService {
       throw new Error(`Blocked target host (SSRF guard): ${parsed.hostname}`)
     }
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // timeoutMs <= 0 视为不限制：不挂定时器、不设 signal，避免被立即 abort
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => controller.abort(), timeoutMs)
+    }
     try {
       const resp = await fetch(url, {
         headers: {
@@ -97,7 +105,7 @@ export class CrawlerService {
       }
       return resp.text()
     } finally {
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
     }
   }
 
