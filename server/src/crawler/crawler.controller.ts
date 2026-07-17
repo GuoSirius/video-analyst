@@ -674,10 +674,11 @@ export class CrawlerController {
       itemIds: string[]
       format: 'json' | 'yaml' | 'csv' | 'excel'
       fields: { key: string; alias: string }[]
+      multiFile?: boolean
     },
     @Res() res: Response,
   ) {
-    const { itemIds, format, fields } = body
+    const { itemIds, format, fields, multiFile } = body
     if (!itemIds?.length) return res.status(400).json({ error: 'itemIds is required' })
     if (!fields?.length) return res.status(400).json({ error: 'fields is required' })
 
@@ -704,51 +705,123 @@ export class CrawlerController {
 
     const headers = fields.map(f => f.alias || f.key)
 
-    const generateContent = () => {
-      switch (format) {
-        case 'json':
-          return { type: 'application/json', ext: 'json', body: JSON.stringify(data, null, 2) }
-        case 'yaml':
-          return { type: 'text/yaml', ext: 'yaml', body: yaml.dump(data, { lineWidth: -1, noRefs: true }) }
-        case 'csv': {
-          const csvLines = [headers.map(h => `"${String(h).replace(/"/g, '""')}"`).join(',')]
-          for (const row of data) {
-            const values = headers.map(h => {
-              const val = row[h] != null ? String(row[h]) : ''
-              return `"${val.replace(/"/g, '""')}"`
-            })
-            csvLines.push(values.join(','))
-          }
-          return { type: 'text/csv; charset=utf-8', ext: 'csv', body: '﻿' + csvLines.join('\n') }
-        }
-        case 'excel':
-        default:
-          return null
-      }
-    }
+    // Group selected rows by task so cross-task exports stay organized.
+    // Only the explicitly selected itemIds are exported (never the whole task).
+    const taskIds = [...new Set(rows.map(r => r.task_id || '__unknown__'))] as string[]
+    const byTask = new Map<string, any[]>()
+    rows.forEach((r, i) => {
+      const tid = r.task_id || '__unknown__'
+      if (!byTask.has(tid)) byTask.set(tid, [])
+      byTask.get(tid)!.push(data[i])
+    })
+    const distinctTasks = taskIds.length
+    const isMulti = !!multiFile && distinctTasks > 1
 
-    if (format === 'excel') {
-      const workbook = new ExcelJS.Workbook()
-      const sheet = workbook.addWorksheet('采集数据')
+    const styleHeader = (sheet: any) => {
+      const hr = sheet.getRow(1)
+      hr.font = { bold: true }
+      hr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } }
+    }
+    const taskLabelFor = (tid: string, forSheet = false) => {
+      const task = this.queue.getTask(tid)
+      const raw = task?.payload?.name || task?.payload?.url || tid.slice(0, 8)
+      return forSheet
+        ? raw.slice(0, 31).replace(/[<>:"/\\|?*[\]]/g, '_')
+        : raw.replace(/[<>:"/\\|?*]/g, '_')
+    }
+    const genExcelBuffer = async (sheetRows: any[]): Promise<Buffer> => {
+      const wb = new ExcelJS.Workbook()
+      const sheet = wb.addWorksheet('采集数据')
       sheet.columns = headers.map(h => ({ header: h, key: h, width: 22 }))
-      for (const row of data) sheet.addRow(row)
-      const headerRow = sheet.getRow(1)
-      headerRow.font = { bold: true }
-      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } }
+      for (const row of sheetRows) sheet.addRow(row)
+      styleHeader(sheet)
+      const buf = await wb.xlsx.writeBuffer()
+      return Buffer.from(buf as ArrayBuffer)
+    }
+    const genCsv = (sheetRows: any[]): string => {
+      const lines = [headers.map(h => `"${String(h).replace(/"/g, '""')}"`).join(',')]
+      for (const row of sheetRows) {
+        const values = headers.map(h => {
+          const val = row[h] != null ? String(row[h]) : ''
+          return `"${val.replace(/"/g, '""')}"`
+        })
+        lines.push(values.join(','))
+      }
+      return '﻿' + lines.join('\n')
+    }
+    const writeExcelFile = async (buffer: Buffer) => {
       const exportDir = path.resolve(process.cwd(), '..', 'data', 'exports')
       if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true })
       const filePath = path.join(exportDir, `export_${timestamp}.xlsx`)
-      await workbook.xlsx.writeFile(filePath)
+      fs.writeFileSync(filePath, buffer)
       return res.download(filePath, (err) => {
         if (err) console.warn('[export] download failed:', err.message)
         fs.unlink(filePath, () => {})
       })
     }
 
-    const content = generateContent()!
-    res.setHeader('Content-Type', content.type)
-    res.setHeader('Content-Disposition', `attachment; filename="export_${timestamp}.${content.ext}"`)
-    return res.send(content.body)
+    // ── Excel ──
+    if (format === 'excel') {
+      if (distinctTasks > 1 && isMulti) {
+        const zip = new AdmZip()
+        for (const tid of taskIds) {
+          zip.addFile(`${taskLabelFor(tid)}.xlsx`, await genExcelBuffer(byTask.get(tid) || []))
+        }
+        const zipBuffer = zip.toBuffer()
+        res.setHeader('Content-Type', 'application/zip')
+        res.setHeader('Content-Disposition', `attachment; filename="export_${timestamp}.zip"`)
+        return res.send(zipBuffer)
+      }
+      if (distinctTasks > 1) {
+        const workbook = new ExcelJS.Workbook()
+        for (const tid of taskIds) {
+          const sheet = workbook.addWorksheet(taskLabelFor(tid, true))
+          sheet.columns = headers.map(h => ({ header: h, key: h, width: 22 }))
+          for (const row of (byTask.get(tid) || [])) sheet.addRow(row)
+          styleHeader(sheet)
+        }
+        const exportDir = path.resolve(process.cwd(), '..', 'data', 'exports')
+        if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true })
+        const filePath = path.join(exportDir, `export_${timestamp}.xlsx`)
+        await workbook.xlsx.writeFile(filePath)
+        return res.download(filePath, (err) => {
+          if (err) console.warn('[export] download failed:', err.message)
+          fs.unlink(filePath, () => {})
+        })
+      }
+      return writeExcelFile(await genExcelBuffer(data))
+    }
+
+    // ── JSON / YAML (grouped object when cross-task) ──
+    if (format === 'json' || format === 'yaml') {
+      const body = distinctTasks > 1
+        ? Object.fromEntries(taskIds.map(tid => [taskLabelFor(tid), byTask.get(tid) || []]))
+        : data
+      if (format === 'json') {
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('Content-Disposition', `attachment; filename="export_${timestamp}.json"`)
+        return res.send(JSON.stringify(body, null, 2))
+      }
+      res.setHeader('Content-Type', 'text/yaml')
+      res.setHeader('Content-Disposition', `attachment; filename="export_${timestamp}.yaml"`)
+      return res.send(yaml.dump(body, { lineWidth: -1, noRefs: true }))
+    }
+
+    // ── CSV (cross-task always zipped per task) ──
+    if (distinctTasks > 1) {
+      const zip = new AdmZip()
+      for (const tid of taskIds) {
+        zip.addFile(`${taskLabelFor(tid)}.csv`, Buffer.from(genCsv(byTask.get(tid) || []), 'utf-8'))
+      }
+      const zipBuffer = zip.toBuffer()
+      res.setHeader('Content-Type', 'application/zip')
+      res.setHeader('Content-Disposition', `attachment; filename="export_${timestamp}.zip"`)
+      return res.send(zipBuffer)
+    }
+    const csvStr = genCsv(data)
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="export_${timestamp}.csv"`)
+    return res.send(csvStr)
   }
 
   // ════════════════════════════════════════════════════════════════

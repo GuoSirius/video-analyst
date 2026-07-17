@@ -45,5 +45,6 @@ export const crawlerAPI = {
     itemIds: string[]
     format: 'json' | 'yaml' | 'csv' | 'excel'
     fields: { key: string; alias: string }[]
+    multiFile?: boolean
   }) => api.post('/crawler/export-items', params, { responseType: 'blob' }),
 }

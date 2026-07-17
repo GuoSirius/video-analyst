@@ -116,6 +116,7 @@ function findSelected(id: string) { return items.value.find((x: any) => x.id ===
 const deletableItemIds = computed(() => selectedIds.value)
 const crawlableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && item.status === 'pending' }))
 const recrawlableItemIds = computed(() => selectedIds.value.filter(id => { const item = findSelected(id); return item && (item.status === 'crawled' || item.status === 'error') }))
+const selectedTaskCount = computed(() => new Set(Object.values(selectedItemsMeta).map((m: any) => m.task_id).filter(Boolean)).size)
 
 async function batchDeleteItems() {
   const ids = deletableItemIds.value
@@ -163,12 +164,14 @@ const exportFormat = ref<'json' | 'yaml' | 'csv' | 'excel'>('excel')
 const exportFields = ref<{ key: string; alias: string; selected: boolean }[]>([])
 const exportFieldGroups = ref<{ dbFields: any[]; extraFields: any[] }>({ dbFields: [], extraFields: [] })
 const exportLoading = ref(false)
+const exportMultiFile = ref(false)
 
 function openExportDialog() {
   const ids = selectedIds.value
   if (!ids.length) { ElMessage.warning('请先勾选要导出的采集项'); return }
   exportDialogVisible.value = true
   exportFormat.value = 'excel'
+  exportMultiFile.value = false
   loadExportFields()
 }
 
@@ -176,6 +179,11 @@ async function loadExportFields() {
   try {
     const itemTasks = new Set<string>()
     items.value.filter((i: any) => selectedIds.value.includes(i.id)).forEach((i: any) => { if (i.task_id) itemTasks.add(i.task_id) })
+    // Also include tasks of selected items that are not on the current page (cross-task selection)
+    for (const id of selectedIds.value) {
+      const meta = selectedItemsMeta[id]
+      if (meta?.task_id) itemTasks.add(meta.task_id)
+    }
     const taskIds = Array.from(itemTasks)
     if (!taskIds.length) return
     const { data } = await crawlerAPI.getExportFields(taskIds)
@@ -205,6 +213,7 @@ async function doExport() {
       itemIds,
       format: exportFormat.value,
       fields: selectedFields.map(f => ({ key: f.key, alias: f.alias || f.key })),
+      multiFile: exportMultiFile.value,
     })
     const blob = res.data
     const url = window.URL.createObjectURL(blob)
@@ -365,7 +374,7 @@ function handleSelectionChange(rows: any[]) {
     if (!selectedIds.value.includes(id)) {
       selectedIds.value.push(id)
     }
-    selectedItemsMeta[id] = { id, status: row.status }
+    selectedItemsMeta[id] = { id, status: row.status, task_id: row.task_id }
   }
 }
 async function clearAllSelections() {
@@ -798,6 +807,17 @@ onUnmounted(teardownSSE)
             <el-radio-button value="json">JSON</el-radio-button>
             <el-radio-button value="yaml">YAML</el-radio-button>
           </el-radio-group>
+        </div>
+
+        <div v-if="selectedTaskCount > 1 && exportFormat !== 'csv'">
+          <div class="text-xs text-gray-400 mb-2">跨任务导出（已选 {{ selectedTaskCount }} 个任务）</div>
+          <el-radio-group v-model="exportMultiFile" size="small">
+            <el-radio-button :value="false">单文件 {{ exportFormat === 'excel' ? '(多Sheet)' : '(分组)' }}</el-radio-button>
+            <el-radio-button :value="true">多文件 (ZIP)</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div v-else-if="selectedTaskCount > 1 && exportFormat === 'csv'" class="text-[11px] text-gray-500">
+          跨任务 CSV 将自动按任务打包为 ZIP（每个任务一个文件）。
         </div>
 
         <div>
