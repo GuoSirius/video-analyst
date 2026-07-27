@@ -947,6 +947,16 @@ onUnmounted(() => { teardownSSE(); if (durationTimer) { clearInterval(durationTi
         <div v-if="formMode === 'site'" class="section">
           <div class="text-[13px] font-semibold text-gray-300 mb-2.5">整站配置</div>
 
+          <div class="text-[12px] text-gray-400 bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2.5 mb-3 leading-relaxed">
+            🌐 <b class="text-blue-300">怎么操作？</b> 只需在上方「基本配置」填好<b class="text-gray-200">页面地址</b>（站点入口 URL），点「创建任务」即可开始爬取。下方均为可选：
+            <ul class="list-disc pl-5 mt-1.5 space-y-0.5">
+              <li><b class="text-gray-200">范围</b>：默认只爬同域名、不限制深度与页数（深度/页数填 <code class="text-amber-400 bg-amber-500/10 px-1 rounded">0</code> = 不限制）；</li>
+              <li><b class="text-gray-200">提取规则</b>（下方第⑤节）：默认抓取 title / content，可按需增删字段；</li>
+              <li><b class="text-gray-200">列表项选择器</b>（可选）：填写后，匹配的页面会按「多条」列表提取；留空则每个被访问页面只提取一条。</li>
+            </ul>
+            建议新手先只用入口 URL 跑一次，再按需加范围限制。
+          </div>
+
           <div class="flex items-center gap-4 mb-3">
             <span class="text-xs text-gray-400 flex-shrink-0">同域名限制</span>
             <el-checkbox v-model="formSameDomain" size="small">只爬同域名（含子域，防爬到外站）</el-checkbox>
