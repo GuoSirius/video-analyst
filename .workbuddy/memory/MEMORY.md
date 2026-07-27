@@ -1,7 +1,7 @@
 # 项目长期记忆 — video-analyst
 
 ## 仓库与 Git 约定
-- 远程：origin = `https://gitee.com/siriussupreme/video-analyst.git`（另有 github remote）。推送需 gitee 凭据；本沙箱无存储 token，`git push` 会失败，需用户补凭据或手动 push。
+- 远程：origin = `https://gitee.com/siriussupreme/video-analyst.git`（另有 github remote）。**用户本机已配 GCM/SSH 凭据，可直接 `git push` / `git push github` 推送**（2026-07-27 用户亲测成功）。仅本沙箱执行环境无凭据会失败；我不应在沙箱反复尝试 push，有 push 需求直接提示用户在其终端执行即可。
 - 用户硬规则：每次代码改动完成必须 commit 并 push（不必等确认），但不自动发布（npm publish/release）。
 - main 与 origin/main 长期不同步风险：main 曾停留在早期提交 ed717c5，项目主体文件此前只在暂存区从未提交。新建功能分支前先确认基线。
 
@@ -15,3 +15,8 @@
 - `crawl_frontier` 表必须有 `UNIQUE(task_id, url)`，否则 `INSERT OR IGNORE` 去重失效（曾导致重复入队/访问/提取）。
 - 测试 mock 站点用 127.0.0.1 会被生产 SSRF 防护拦截，测试需覆盖 `fetchHtml` 绕过 host 校验（不改生产代码）。
 - 测试位置：`server/src/crawler/__tests__/site-crawl.test.ts`，24 项全绿。
+
+## 运行环境（重要，Node 版本硬约束）
+- **项目必须用 Node 22 运行**：better-sqlite3@12.10.0 原生模块按 Node 22 ABI 编译，且无 Node 24/26 预编译可下载、沙箱无法本地编译。用 Node 26 启动后端必报 `ERR_DLOPEN_FAILED`（NODE_MODULE_VERSION 127 vs 147）。
+- 已加 `.nvmrc`(22) 锁定；README 环境要求明确「Node.js 22，勿用 24/26」。WorkBuddy Bash 默认 node 即 22.22.2，可直接 `pnpm dev`。
+- 用户机器若 `node -v` 是 26，需先切到 22（nvm use 22 / 显式用 managed node）再启动，否则崩溃。
