@@ -1,7 +1,7 @@
 # 数据库设计文档
 
 **数据库**: SQLite（`data/video-analyst.db`）| **引擎**: better-sqlite3 | **模式**: WAL + 外键开启
-**说明**: 数据库不提交 Git，服务启动时自动 `CREATE TABLE IF NOT EXISTS` 并写入一个示例采集任务。
+**说明**: 数据库已随仓库提交（`data/.gitignore` 强制跟踪）。服务启动时 `CREATE TABLE IF NOT EXISTS` 自动建表；`tasks` 表为空时 `seedDefaults()` 写入示例采集任务。
 
 ---
 

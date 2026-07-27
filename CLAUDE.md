@@ -10,7 +10,7 @@
 | 后端 | NestJS 11 + SWC 编译 + better-sqlite3 |
 | 前端 | Vue 3 + Element Plus（暗黑模式）+ UnoCSS（presetUno）+ Vite + FontAwesome 6（CSS） |
 | 包管理 | pnpm workspace（server + web） |
-| 数据库 | SQLite（`data/video-analyst.db`，启动时自动建表 / 重建，已 gitignore） |
+| 数据库 | SQLite（`data/video-analyst.db`，由 data/.gitignore 强制跟踪、随仓库提交；启动时建表，tasks 为空时写入示例任务） |
 
 ## 启动
 
@@ -23,7 +23,7 @@ pnpm build && pnpm start  # 生产模式（后端托管前端）
 
 - 前端: http://localhost:5173 ｜ 后端: http://localhost:3000
 - 前端 API 直连后端（`VITE_API_BASE_URL`），不走 Vite proxy
-- `data/video-analyst.db` 不提交 Git，首次启动自动重建并写入一个示例采集任务
+- `data/video-analyst.db` 已随仓库提交（data/.gitignore 强制跟踪），首次启动自动建表；tasks 为空时写入示例任务
 
 ## 项目结构
 
@@ -53,6 +53,7 @@ web/src/
 - 状态流转: pending → running → completed / failed（失败自动重试，retries < max_retries）
 - SSE 实时推送进度到前端
 - 当前仅 `crawler` 一种任务类型
+- 整站爬取（site 模式）使用 `crawl_frontier` 表作为 BFS 待访问队列，按范围规则（同域 / 路径黑白名单 / URL 正则黑白名单）过滤并去重，复用同一套提取与入库逻辑
 
 ### 2. 前端规范
 - 使用 UnoCSS class（不是内联 style），presetUno 已配置 preflight: false
@@ -72,5 +73,5 @@ web/src/
 
 ## 注意事项
 - `.env.example` 不含真实 Key，`.env` 由用户自行配置
-- `data/video-analyst.db` 不提交 Git（gitignore），启动自动重建
+- `data/video-analyst.db` 已随仓库提交（data/.gitignore 强制跟踪），启动自动建表，tasks 为空时写入示例任务
 - 换电脑后: git clone → pnpm install → cp .env.example .env → pnpm dev
