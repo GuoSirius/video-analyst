@@ -1,0 +1,18 @@
+.DS_Store
+Thumbs.db
+
+.env
+*.log
+*.tsbuildinfo
+
+node_modules/
+dist/
+dist-test/
+
+.turbo/
+.cache/
+
+# local runtime sqlite database (rebuilt on server boot)
+data/video-analyst.db
+data/video-analyst.db-shm
+data/video-analyst.db-wal
