@@ -25,7 +25,7 @@
 ## 快速开始
 
 ```bash
-# 环境要求: Node.js >= 20, pnpm >= 9
+# 环境要求: Node.js 22（better-sqlite3 是原生模块，已按 Node 22 ABI 编译；请勿用 Node 24/26 启动，否则报 ERR_DLOPEN_FAILED）, pnpm >= 9
 
 # 1. 安装依赖
 pnpm install
