@@ -17,6 +17,6 @@
 - 测试位置：`server/src/crawler/__tests__/site-crawl.test.ts`，24 项全绿。
 
 ## 运行环境（重要，Node 版本硬约束）
-- **项目必须用 Node 22 运行**：better-sqlite3@12.10.0 原生模块按 Node 22 ABI 编译，且无 Node 24/26 预编译可下载、沙箱无法本地编译。用 Node 26 启动后端必报 `ERR_DLOPEN_FAILED`（NODE_MODULE_VERSION 127 vs 147）。
-- 已加 `.nvmrc`(22) 锁定；README 环境要求明确「Node.js 22，勿用 24/26」。WorkBuddy Bash 默认 node 即 22.22.2，可直接 `pnpm dev`。
-- 用户机器若 `node -v` 是 26，需先切到 22（nvm use 22 / 显式用 managed node）再启动，否则崩溃。
+- **项目最低要求 Node 24**：better-sqlite3@12.10.0 当前二进制按 Node 22 ABI 编译，但它是 NAPI 模块、向前兼容，在 Node 24 下已验证可正常加载运行（用户亲测）。**Node 26 不可用**：该版本无 Node 26 预编译（`No prebuilt binaries found (target=26)`），启动必报 `ERR_DLOPEN_FAILED`（NODE_MODULE_VERSION 127 vs 147）。
+- 已加 `.nvmrc`(24) 锁定；README 环境要求明确「Node.js >= 24，勿用 Node 26」。用户机器 `node -v` 若是 26 需先切到 24（nvm use 24）再启动。
+- 若未来需支持 Node 26，需升级 better-sqlite3 到带 Node 26 预编译的版本并在 Node 26 下重装依赖。
